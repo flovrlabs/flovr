@@ -154,7 +154,7 @@ steps:
 				`1: name is required`,
 				`1: trigger: needs exactly one of webhook, cron, manual`,
 				`2: trigger: webhook must be a path starting with /`,
-				`3: trigger: cron must have five fields (minute hour day month weekday)`,
+				`3: trigger: cron "every day" is not a schedule of five fields (minute hour day month weekday)`,
 				`5: step 1: id is required`,
 				`5: step 1: ai.model is required`,
 				`5: step 1: ai.prompt is required`,
@@ -358,4 +358,44 @@ func join(lines []string) string {
 		out += "  " + l + "\n"
 	}
 	return out
+}
+
+func TestDiscover(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"billing/refunds", "support", ".git/hooks", "support/testdata/case"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "name: " + filepath.Base(dir) + "\nsteps:\n  - id: a\n    http: {method: GET, url: \"http://x\"}\n"
+		if err := os.WriteFile(filepath.Join(root, dir, FileName), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func(ws []*Workflow) (out []string) {
+		for _, w := range ws {
+			out = append(out, w.Name)
+		}
+		return out
+	}
+
+	found, err := Discover(root)
+	if got, want := names(found), []string{"refunds", "support"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Discover(root) = %v, %v; want %v, skipping hidden and testdata directories", got, err, want)
+	}
+	found, err = Discover(filepath.Join(root, "support", FileName), filepath.Join(root, "billing"))
+	if got, want := names(found), []string{"support", "refunds"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Discover(file, dir) = %v, %v; want %v", got, err, want)
+	}
+
+	empty := t.TempDir()
+	if _, err := Discover(empty); err == nil || err.Error() != "no workflow.yaml found in "+empty {
+		t.Errorf("Discover(empty dir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "support", FileName), []byte("name: broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var problems *Problems
+	if _, err := Discover(root); !errors.As(err, &problems) {
+		t.Errorf("Discover with an invalid workflow: error = %v, want its problems", err)
+	}
 }

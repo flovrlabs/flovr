@@ -6,6 +6,7 @@ require (
 	cel.dev/cel-go v0.32.0
 	github.com/anthropics/anthropic-sdk-go v1.80.0
 	github.com/openai/openai-go/v3 v3.76.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2
 	go.yaml.in/yaml/v3 v3.0.5
