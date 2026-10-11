@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "category": {
+      "type": "string",
+      "enum": ["refund", "billing", "outage", "bug", "account", "other"]
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "summary": {
+      "type": "string"
+    }
+  },
+  "required": ["category", "priority", "summary"],
+  "additionalProperties": false
+}

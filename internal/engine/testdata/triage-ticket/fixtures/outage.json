@@ -1,0 +1,7 @@
+{
+  "body": {
+    "subject": "Dashboard returns 502 for our whole team",
+    "message": "Since about 09:10 nobody at our company can load the dashboard. Every page returns a 502. We have a client demo in an hour and cannot log in at all.",
+    "customer": "ops@example.org"
+  }
+}

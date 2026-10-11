@@ -1,0 +1,123 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"time"
+
+	"aia/internal/ai"
+	"aia/internal/expr"
+	"aia/internal/workflow"
+)
+
+// TestResult is the outcome of one of a workflow's tests.
+type TestResult struct {
+	Name     string
+	Failures []string // why the test failed; empty if it passed
+	Steps    []StepResult
+	Duration time.Duration
+}
+
+// Test runs the workflow with t's fixture as the trigger and compares the
+// result with what t expects. ai steps call the model; http steps are not
+// sent. Environment variables the workflow reads but that are not set get a
+// placeholder value, so a test needs no configuration for requests it will
+// not make.
+//
+// The error is for a test that could not be run at all, which says nothing
+// about the workflow.
+func (e *Engine) Test(ctx context.Context, w *workflow.Workflow, t workflow.Test) (TestResult, error) {
+	res := TestResult{Name: t.Name}
+	if res.Name == "" {
+		res.Name = t.Fixture
+	}
+	trigger, err := w.Fixture(t.Fixture)
+	if err != nil {
+		return res, err
+	}
+
+	env := map[string]string{}
+	maps.Copy(env, e.Env)
+	for _, name := range w.EnvVars() {
+		if _, ok := env[name]; !ok {
+			env[name] = "env." + name
+		}
+	}
+	sandbox := &Engine{
+		Model:    e.Model,
+		Env:      env,
+		StubHTTP: true,
+		OnStep:   func(r StepResult) { res.Steps = append(res.Steps, r) },
+	}
+
+	start := time.Now()
+	vars, err := sandbox.run(ctx, w, trigger)
+	res.Duration = time.Since(start)
+
+	var unavailable *ai.UnavailableError
+	if errors.As(err, &unavailable) {
+		return res, err
+	}
+	if err != nil {
+		res.Failures = []string{err.Error()}
+		return res, nil
+	}
+	res.Failures, err = unmet(t.Expect, res.Steps, vars)
+	return res, err
+}
+
+// unmet lists the expectations that the finished run does not meet.
+func unmet(expect map[string]any, steps []StepResult, vars map[string]any) ([]string, error) {
+	status := map[string]Status{}
+	var ids []string
+	for _, s := range steps {
+		status[s.ID] = s.Status
+		ids = append(ids, s.ID)
+	}
+	env, err := expr.NewEnv(ids)
+	if err != nil {
+		return nil, err
+	}
+
+	var failures []string
+	for _, key := range slices.Sorted(maps.Keys(expect)) {
+		want := expect[key]
+
+		if st, isStep := status[key]; isStep {
+			got := workflow.Called
+			if st == Skipped {
+				got = workflow.Skipped
+			}
+			if got != want {
+				failures = append(failures, fmt.Sprintf("%s: expected %v, but it was %s", key, want, got))
+			}
+			continue
+		}
+
+		got, err := env.EvalExpr(key, vars)
+		if err != nil {
+			if id, _, _ := strings.Cut(key, "."); status[id] == Skipped {
+				err = fmt.Errorf("step %q was skipped", id)
+			}
+			failures = append(failures, fmt.Sprintf("%s: %v", key, err))
+		} else if g, w := jsonText(got), jsonText(want); g != w {
+			failures = append(failures, fmt.Sprintf("%s: expected %s, got %s", key, w, g))
+		}
+	}
+	return failures, nil
+}
+
+// jsonText renders v as JSON, which gives values that came from YAML and
+// values that came from JSON one form to be compared in.
+func jsonText(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(b)
+}

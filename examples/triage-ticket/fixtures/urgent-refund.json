@@ -1,0 +1,7 @@
+{
+  "body": {
+    "subject": "Charged $4,800 instead of $48 - need this reversed today",
+    "message": "Your system charged my card $4,800 for a $48 plan this morning. My bank account is now overdrawn and my rent payment bounced. I need this refunded today.",
+    "customer": "sam@example.net"
+  }
+}

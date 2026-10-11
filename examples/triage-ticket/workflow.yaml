@@ -1,0 +1,86 @@
+name: triage-ticket
+
+trigger:
+  webhook: /tickets
+
+steps:
+  # A decision model answers typed questions with probabilities. It is fast and
+  # cheap, but writes no text.
+  - id: classify
+    decide:
+      model: openrouter/cloudflare/clef
+      input: ${trigger.body}
+      questions:
+        category:
+          ask: What does the customer need?
+          choice:
+            refund: They want money back for a charge.
+            billing: An invoice, plan, or payment question that is not a refund.
+            outage: The product is down or unusable for them.
+            bug: Something behaves incorrectly but the product is still usable.
+            account: Login, access, or profile changes.
+            other: Anything else.
+        priority:
+          ask: How urgent is this ticket? Judge by impact, not by tone.
+          score:
+            - low: Questions, feedback, and requests with no time pressure.
+            - medium: The customer is blocked on one task but has a workaround or can wait a day.
+            - high: The customer cannot use the product, or data or money is at risk right now.
+
+  # Only tickets that will page someone need a written summary.
+  - id: summarize
+    when: classify.priority.value == "high"
+    ai:
+      model: openrouter/deepseek/deepseek-v4.1-flash
+      prompt: prompts/summarize.md
+      input: ${trigger.body}
+      output: schemas/summary.json
+
+  # Money problems go to the billing team: an engineer cannot refund a charge.
+  - id: alert_billing
+    when: classify.priority.value == "high" && classify.category.value in ["refund", "billing"]
+    http:
+      method: POST
+      url: ${env.BILLING_URL}
+      body:
+        summary: ${summarize.summary}
+        category: ${classify.category.value}
+
+  # Every other urgent ticket pages the on-call engineer.
+  - id: page_oncall
+    when: classify.priority.value == "high" && !(classify.category.value in ["refund", "billing"])
+    http:
+      method: POST
+      url: ${env.PAGER_URL}
+      body:
+        summary: ${summarize.summary}
+        category: ${classify.category.value}
+
+# In tests, http steps are stubbed: nothing is sent, the call is only recorded.
+tests:
+  - name: refund request is not escalated
+    fixture: fixtures/refund.json
+    expect:
+      classify.category.value: refund
+      classify.priority.probabilities.high < 0.3: true
+      summarize: skipped
+      alert_billing: skipped
+      page_oncall: skipped
+
+  - name: outage report pages on-call
+    fixture: fixtures/outage.json
+    expect:
+      classify.category.value: outage
+      classify.priority.value: high
+      summarize: called
+      alert_billing: skipped
+      page_oncall: called
+
+  - name: urgent refund goes to billing, not on-call
+    fixture: fixtures/urgent-refund.json
+    expect:
+      classify.category.value: refund
+      classify.priority.value: high
+      summarize: called
+      alert_billing: called
+      page_oncall: skipped

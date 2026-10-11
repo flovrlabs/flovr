@@ -1,0 +1,36 @@
+name: triage-ticket
+
+trigger:
+  webhook: /tickets
+
+steps:
+  - id: classify
+    ai:
+      model: anthropic/claude-haiku-5-5
+      prompt: prompts/classify.md
+      input: ${trigger.body}
+      output: schemas/ticket.json
+
+  - id: escalate
+    when: classify.priority == "high"
+    http:
+      method: POST
+      url: ${env.PAGER_URL}
+      body:
+        summary: ${classify.summary}
+        category: ${classify.category}
+
+# In tests, http steps are stubbed: nothing is sent, the call is only recorded.
+tests:
+  - name: refund request is not escalated
+    fixture: fixtures/refund.json
+    expect:
+      classify.category: refund
+      escalate: skipped
+
+  - name: outage report pages on-call
+    fixture: fixtures/outage.json
+    expect:
+      classify.category: outage
+      classify.priority: high
+      escalate: called

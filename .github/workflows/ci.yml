@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code:
+    name: Go code
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test ./...
+
+  workflows:
+    name: Example workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Not available to pull requests from forks, which skip the model tests.
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build aia
+        run: go build -o "$RUNNER_TEMP/aia" ./cmd/aia
+      - name: Validate workflows
+        run: |
+          failed=0
+          for dir in examples/*/; do
+            "$RUNNER_TEMP/aia" validate "$dir" || failed=1
+          done
+          exit $failed
+      # ai and decide steps call their models for real; http steps are not sent.
+      - name: Test workflows
+        if: env.OPENROUTER_API_KEY != ''
+        run: |
+          failed=0
+          for dir in examples/*/; do
+            "$RUNNER_TEMP/aia" test "$dir" || failed=1
+          done
+          exit $failed
+      - name: Report skipped tests
+        if: env.OPENROUTER_API_KEY == ''
+        run: echo "::notice::Workflow tests were skipped because the OPENROUTER_API_KEY secret is not available to this run."

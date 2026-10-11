@@ -1,0 +1,133 @@
+package expr
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func testEnv(t *testing.T) (*Env, map[string]any) {
+	t.Helper()
+	env, err := NewEnv([]string{"classify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env, map[string]any{
+		"trigger":  map[string]any{"body": map[string]any{"subject": "Hi", "n": 3.0}},
+		"env":      map[string]string{"URL": "http://x"},
+		"classify": map[string]any{"priority": "high"},
+	}
+}
+
+func TestEval(t *testing.T) {
+	env, vars := testEnv(t)
+	tests := []struct {
+		in, want any
+	}{
+		{"plain", "plain"},
+		{"", ""},
+		{"${trigger.body.subject}", "Hi"},
+		{"${trigger.body}", map[string]any{"subject": "Hi", "n": 3.0}},
+		{"${env.URL}/v1?n=${trigger.body.n}", "http://x/v1?n=3"},
+		{"cost: $${amount}", "cost: ${amount}"},
+		{`${classify.priority + "}"}`, "high}"},
+		{`${ {"a": 1}.a }`, 1.0},
+		{
+			map[string]any{"k": []any{"${classify.priority}", 7}},
+			map[string]any{"k": []any{"high", 7}},
+		},
+	}
+	for _, tt := range tests {
+		got, err := env.Eval(tt.in, vars)
+		if err != nil {
+			t.Errorf("Eval(%v): %v", tt.in, err)
+		} else if !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("Eval(%v) = %#v, want %#v", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestEvalErrors(t *testing.T) {
+	env, vars := testEnv(t)
+	tests := []struct {
+		in, want string
+	}{
+		{"${trigger.body", "unclosed ${"},
+		{"${ }", "empty ${}"},
+		{"${later.summary}", "undeclared reference to 'later'"},
+		{"${classify.missing}", "no such key: missing"},
+	}
+	for _, tt := range tests {
+		_, err := env.Eval(tt.in, vars)
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("Eval(%q) error = %v, want one containing %q", tt.in, err, tt.want)
+		}
+	}
+}
+
+func TestCheckFindsErrorsWithoutValues(t *testing.T) {
+	env, _ := testEnv(t)
+	if err := env.Check(map[string]any{"a": []any{"${later.x}"}}); err == nil {
+		t.Error("Check accepted a reference to an undeclared step")
+	}
+	// Whether a key exists is only known at run time.
+	if err := env.Check("${classify.missing}"); err != nil {
+		t.Errorf("Check: %v", err)
+	}
+}
+
+func TestEvalExpr(t *testing.T) {
+	env, vars := testEnv(t)
+	got, err := env.EvalExpr(`[classify.priority, trigger.body.n + 1.0]`, vars)
+	if want := []any{"high", 4.0}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("EvalExpr = %#v, %v, want %#v", got, err, want)
+	}
+	if err := env.CheckExpr(`classify.priority ==`); err == nil {
+		t.Error("CheckExpr accepted an incomplete expression")
+	}
+}
+
+func TestEnvVars(t *testing.T) {
+	for src, want := range map[string][]string{
+		`env.A == "x" || trigger.env.B == env.C`: {"A", "C"},
+		`has(env.A) ? env.A : "none"`:            {"A", "A"},
+		`classify.priority == "high"`:            nil,
+		`env.A ==`:                               nil,
+	} {
+		if got := EnvVars(src); !reflect.DeepEqual(got, want) {
+			t.Errorf("EnvVars(%s) = %v, want %v", src, got, want)
+		}
+	}
+
+	v := map[string]any{"url": "${env.URL}/x", "plain": "env.NOT_AN_EXPRESSION", "n": 3}
+	if got, want := TemplateEnvVars(v), []string{"URL"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("TemplateEnvVars = %v, want %v", got, want)
+	}
+}
+
+func TestCondition(t *testing.T) {
+	env, vars := testEnv(t)
+	for src, want := range map[string]bool{
+		`classify.priority == "high"`:                   true,
+		`classify.priority == "low"`:                    false,
+		`trigger.body.n > 2 && env.URL.startsWith("h")`: true,
+	} {
+		if err := env.CheckCondition(src); err != nil {
+			t.Errorf("CheckCondition(%s): %v", src, err)
+		}
+		got, err := env.EvalCondition(src, vars)
+		if err != nil || got != want {
+			t.Errorf("EvalCondition(%s) = %v, %v, want %v", src, got, err, want)
+		}
+	}
+
+	if err := env.CheckCondition(`"high"`); err == nil {
+		t.Error("CheckCondition accepted a string")
+	}
+	if err := env.CheckCondition(`clasify.priority == "high"`); err == nil {
+		t.Error("CheckCondition accepted an undeclared name")
+	}
+	if _, err := env.EvalCondition(`classify.priority`, vars); err == nil {
+		t.Error("EvalCondition accepted a non-bool result")
+	}
+}

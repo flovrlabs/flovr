@@ -1,0 +1,7 @@
+{
+  "body": {
+    "subject": "Charged twice for October",
+    "message": "Hi, I see two charges of $49 on my card for this month. Can you refund the duplicate? No rush, just want it sorted before my next statement.",
+    "customer": "dana@example.com"
+  }
+}
