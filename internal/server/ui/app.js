@@ -41,9 +41,14 @@ const ICONS = {
   minus: ["M5 12h14"],
   response: ["M10 5 4 11l6 6", "M4 11h9a7 7 0 0 1 7 7v1"],
   fit: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"],
+  // A component's two ends: an arrow into a bar, and an arrow out of one.
+  input: ["M4 12h10", "M10.5 7.5 15 12l-4.5 4.5", "M19.5 5v14"],
+  output: ["M4.5 5v14", "M9 12h10.5", "M15.5 7.5 20 12l-4.5 4.5"],
+  component: ["M12 3 4 7.5v9L12 21l8-4.5v-9z", "M4 7.5 12 12l8-4.5", "M12 12v9"],
+  open: ["M8 16 16 8", "M9.5 8H16v6.5"],
 };
 
-const KIND_LABEL = { trigger: "Trigger", decide: "Decide", ai: "AI", http: "HTTP", flow: "Flow", response: "Response" };
+const KIND_LABEL = { trigger: "Trigger", decide: "Decide", ai: "AI", http: "HTTP", flow: "Flow", response: "Response", input: "Input", output: "Output" };
 const KIND_NAMES = {
   trigger: "Trigger: starts the workflow",
   decide: "Decision step: a model answers typed questions",
@@ -51,7 +56,28 @@ const KIND_NAMES = {
   http: "HTTP step: sends a request",
   flow: "Flow step: runs a component made of steps",
   response: "Response: answers the caller",
+  input: "Component input: what a step gives the component",
+  output: "Component output: what it gives back to the step",
 };
+
+// A component is drawn like a workflow, with its own two ends. Their ids start
+// with @, which no step id can, so they never meet a step called input.
+const IN = "@input";
+const OUT = "@output";
+const isComp = (w) => !!w && !!w.component;
+const START = (w) => (isComp(w) ? IN : "trigger");
+const nodeName = (id) => (id === IN ? "input" : id === OUT ? "output" : id);
+// What a step's reads name, as a node of the drawing.
+const readNode = (w, name) => (isComp(w) && name === "input" ? IN : name);
+const compTitle = (w) => (w && (w.title || w.name)) || "";
+// The kind a component is drawn as: flow when it is made of steps, else its one step's kind.
+const compKind = (c) => (c.gives ? "flow" : (c.steps[0] && c.steps[0].kind) || "flow");
+const compKindWord = (c) => (c.gives ? "Made of " + plural(c.steps.length, "step") : (KIND_LABEL[compKind(c)] || compKind(c)) + " step");
+const inputNames = (w) => (w.inputs || []).map((i) => i.name);
+// The names of what a component gives back.
+const givenNames = (w) => (w.gives ? w.gives.fields || [] : (w.steps[0] && w.steps[0].outputs) || []);
+const usesOf = (w) => (w.usedBy || []).length;
+const entryOf = (name) => state.workflows.find((x) => x.name === name) || null;
 const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", running: "Running", pending: "Not reached" };
 
 // Which inner steps of a flow step the person has opened in the details, by run, step and inner step.
@@ -179,7 +205,9 @@ async function refresh() {
 // if the run has not reached it.
 function progress(run, id) {
   if (!run) return null;
-  if (id === "trigger") return "ok";
+  if (id === "trigger" || id === IN) return "ok";
+  // A component's way out: what it gave back. A test that ended well always did.
+  if (id === OUT) return run.gave !== undefined ? "ok" : run.status === "ok" ? "skipped" : "pending";
   // The way out: answered, or not (yet). A run that ended well without a caller
   // waiting never answered, which is neither a success nor a failure.
   if (id === "response") return run.response ? "ok" : run.status === "ok" ? "skipped" : "pending";
@@ -208,12 +236,15 @@ const latestRun = (name) => state.runs.find((r) => r.workflow === name && r.sour
 
 function render() {
   if (!state.workflows.some((w) => w.name === selected.workflow)) {
-    selected = { workflow: state.workflows.length ? state.workflows[0].name : null, run: null, node: null, changes: false, add: null };
+    const first = state.workflows.find((x) => !x.component) || state.workflows[0];
+    selected = { workflow: first ? first.name : null, run: null, node: null, changes: false, add: null };
     detail = null;
   }
   // Rebuilding the page drops the reader's focus and text selection, so it is
   // only done when there is something new to show.
   const wanted = state.workflows.find((x) => x.name === selected.workflow);
+  // The server has no changes view for a component.
+  if (selected.changes && isComp(wanted)) selected = { ...selected, changes: false };
   if (selected.changes && state.editable && wanted) ensureChanges(wanted);
   const next = JSON.stringify([state, selected, detail, uiTick, selected.changes ? changesCache[selected.workflow] : null]);
   if (next === shown) return;
@@ -253,13 +284,24 @@ function render() {
 function renderTop(w) {
   $("commit").replaceChildren(...(state.commit ? [icon("branch", 13), el("span", {}, state.commit)] : []));
 
-  $("changes").replaceChildren(...(state.editable && w ? [changesChip()] : []));
+  $("changes").replaceChildren(...(state.editable && w && !isComp(w) ? [changesChip()] : []));
 
-  const last = w ? latestRun(w.name) : null;
+  const last = w && !isComp(w) ? latestRun(w.name) : null;
   const anyFailed = state.runs.some((r) => r.status === "failed" && latestRun(r.workflow) === r);
   document.title = anyFailed ? "aia (a run failed)" : "aia";
   if (!w) {
     $("crumb").replaceChildren();
+    $("latest").replaceChildren();
+    return;
+  }
+  if (isComp(w)) {
+    $("crumb").replaceChildren(
+      el("span", { class: "sep", "aria-hidden": "true" }, "/"),
+      el("span", { class: "crumbkind" }, icon("component", 14), "Component"),
+      el("span", { class: "sep", "aria-hidden": "true" }, "/"),
+      el("strong", { title: w.name }, compTitle(w)),
+      el("span", { class: "pill" }, compKindWord(w)));
+    $("latest").className = "latest none";
     $("latest").replaceChildren();
     return;
   }
@@ -292,7 +334,7 @@ function statusMark(status, size) {
 // ---- left: workflows and runs ----
 
 function renderSide(w) {
-  const workflows = state.workflows.map((x) => {
+  const row = (x) => {
     const last = latestRun(x.name);
     return el("button", {
         class: "row wf", type: "button", "aria-current": x.name === w.name ? "true" : null,
@@ -303,7 +345,10 @@ function renderSide(w) {
       flagFor(x),
       el("span", { class: "sub mono" }, x.trigger || "no trigger"),
       el("span", { class: "aside" }, x.steps.length + (x.steps.length === 1 ? " step" : " steps")));
-  });
+  };
+  const workflows = state.workflows.filter((x) => !x.component).map(row);
+  const components = state.workflows.filter((x) => x.component).map((x) => componentRow(x, w));
+  const comp = isComp(w);
 
   const runs = state.runs.filter((r) => r.workflow === w.name);
   const rows = runs.map((r) => isTestRun(r) ? testRunRow(w, r) : el("button", {
@@ -317,17 +362,39 @@ function renderSide(w) {
     el("span", { class: "seg", "aria-hidden": "true" }, w.steps.map((s) => el("i", { class: progress(r, s.id) }))),
     el("span", { class: "sub" }, outcome(r))));
 
+  // A component is never started by a trigger: all it has are test runs.
+  const none = comp
+    ? (state.editable ? "None yet. Run its tests and each one appears here." : "None. Tests of a component run with aia test.")
+    : w.trigger ? "None yet. A run appears here each time the trigger fires." : "The server does not run this workflow: it has no webhook or cron trigger.";
+
   $("side").replaceChildren(
     el("h2", {}, "Workflows"),
     el("div", { class: "list" }, workflows),
+    components.length ? el("h2", {}, "Components", el("span", { class: "count" }, components.length)) : null,
+    components.length ? el("div", { class: "list comps" }, components) : null,
     ...testsBlock(w),
-    el("h2", {}, "Runs", runs.length ? el("span", { class: "count" }, runs.length) : null),
-    runs.length
-      ? el("div", { class: "list runs" }, rows)
-      : el("p", { class: "empty" }, w.trigger ? "None yet. A run appears here each time the trigger fires." : "The server does not run this workflow: it has no webhook or cron trigger."),
+    el("h2", {}, comp ? "Test runs" : "Runs", runs.length ? el("span", { class: "count" }, runs.length) : null),
+    runs.length ? el("div", { class: "list runs" }, rows) : el("p", { class: "empty" }, none),
     el("p", { class: "note" }, state.editable
-      ? "Edits are written to the workflow's YAML file. Committing stays in git."
-      : "Read-only. Workflows are files in git: edit the YAML, commit it, restart the server."));
+      ? "Edits are written to the YAML file. Committing stays in git."
+      : "Read-only. Workflows and components are files in git: edit the YAML, commit it, restart the server."));
+}
+
+// componentRow is a component in the list on the left: the silhouette of its
+// kind, its own name, what kind it is and how many steps use it.
+function componentRow(x, w) {
+  const kind = compKind(x), uses = usesOf(x);
+  const test = state.runs.find((r) => r.workflow === x.name && isTestRun(r));
+  return el("button", {
+      class: "row comp kind-" + kind, type: "button", "aria-current": x.name === w.name ? "true" : null,
+      title: x.name + (test ? " · latest test: " + VERDICT[verdictOf(test)].word.toLowerCase() : ""),
+      onclick: () => go({ workflow: x.name, run: null, node: null }),
+    },
+    kindTile(kind, 28),
+    el("span", { class: "name" }, compTitle(x)),
+    flagFor(x),
+    el("span", { class: "sub" }, compKindWord(x)),
+    el("span", { class: "aside" }, uses ? "used by " + uses : "unused"));
 }
 
 // outcome says in a few words what a run did.
@@ -380,6 +447,21 @@ function silhouette(kind, w, h) {
     const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
     const tipAt = (p - m) * ((h - m - cut) / (h / 2 - m));
     return { d: roundedPath([[m, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [m, h - m]], [r, 9, 12, 9, r]), sep: [inset + 2, w - p + tipAt - 3] };
+  }
+  if (kind === "input") {
+    // The way into a component: a notch on the left where a value arrives, the
+    // trigger's rounded end on the right.
+    const p = h * 0.2, r = h / 2 - m, dy = cut - h / 2;
+    const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
+    const left = m + (p - m) * ((h - m - cut) / (h / 2 - m));
+    return { d: roundedPath([[m, m], [w - m, m], [w - m, h - m], [m, h - m], [p, h / 2]], [9, r, r, 9, 6]), sep: [left + 3, w - inset - 2] };
+  }
+  if (kind === "output") {
+    // The way out of a component: the response's point on the right, square
+    // corners on the left, so that the two are never mistaken for each other.
+    const p = h * 0.3;
+    const tipAt = (p - m) * ((h - m - cut) / (h / 2 - m));
+    return { d: roundedPath([[m, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [m, h - m]], [9, 9, 12, 9, 9]), sep: [1, w - p + tipAt - 3] };
   }
   if (kind === "decide") {
     const p = h / 4;
@@ -437,17 +519,21 @@ function kindTile(kind, size) {
 // the latest thing it reads from, so steps that depend on the same earlier
 // step sit next to each other as branches.
 function layout(w, width) {
-  const nodes = [{
-    id: "trigger", kind: "trigger", depth: 0,
-    title: isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Manual",
-    subtitle: w.trigger || "started by hand",
-  }];
-  const byId = { trigger: nodes[0] };
+  const comp = isComp(w);
+  const nodes = [comp
+    ? { id: IN, kind: "input", depth: 0, eyebrow: "Component input", title: "Input", subtitle: inputNames(w).join(", ") || "takes no input" }
+    : {
+      id: "trigger", kind: "trigger", depth: 0,
+      title: isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Manual",
+      subtitle: w.trigger || "started by hand",
+    }];
+  const byId = { [nodes[0].id]: nodes[0] };
   w.steps.forEach((step, i) => {
-    let parent = i === 0 ? "trigger" : w.steps[i - 1].id;
-    if (step.reads.length) {
-      parent = step.reads[0];
-      for (const name of step.reads) if (byId[name].depth >= byId[parent].depth) parent = name;
+    let parent = i === 0 ? nodes[0].id : w.steps[i - 1].id;
+    const reads = step.reads.map((name) => readNode(w, name)).filter((name) => byId[name]);
+    if (reads.length) {
+      parent = reads[0];
+      for (const name of reads) if (byId[name].depth >= byId[parent].depth) parent = name;
     }
     const node = { id: step.id, kind: step.kind, title: step.id, subtitle: step.subtitle, order: i + 1, parent, sources: [parent], depth: byId[parent].depth + 1, step };
     nodes.push(node);
@@ -455,16 +541,19 @@ function layout(w, width) {
   });
 
   nodes[0].sources = [];
-  // The response comes after every step, in a row of its own. Its lines come
-  // from the latest steps it reads, or from the last row if it reads none.
-  if (w.respond) {
+  // The way out comes after every step, in a row of its own. Its lines come
+  // from the latest steps it reads, or from the last row if it reads none. A
+  // component of one kind of work gives back what that one step puts out.
+  const out = comp ? { id: OUT, kind: "output", eyebrow: "Component output", title: "Output", subtitle: givenNames(w).join(", ") || "gives back nothing", reads: w.gives ? w.gives.reads || [] : w.steps.map((s) => s.id) }
+    : w.respond ? { id: "response", kind: "response", title: "Response", subtitle: isWebhook(w) ? "Answers " + w.trigger.slice(5) : "Answers the caller", reads: w.respond.reads || [] } : null;
+  if (out) {
     const last = Math.max(...nodes.map((n) => n.depth));
-    const reads = (w.respond.reads || []).filter((name) => byId[name]);
+    const reads = out.reads.map((name) => readNode(w, name)).filter((name) => byId[name]);
     const deepest = Math.max(...reads.map((name) => byId[name].depth));
     const sources = reads.length ? reads.filter((name) => byId[name].depth === deepest) : nodes.filter((n) => n.depth === last).map((n) => n.id);
-    const node = { id: "response", kind: "response", title: "Response", subtitle: isWebhook(w) ? "Answers " + w.trigger.slice(5) : "Answers the caller", sources, depth: last + 1 };
+    const node = { id: out.id, kind: out.kind, eyebrow: out.eyebrow, title: out.title, subtitle: out.subtitle, sources, depth: last + 1 };
     nodes.push(node);
-    byId.response = node;
+    byId[out.id] = node;
   }
 
   const rows = [];
@@ -487,7 +576,7 @@ function layout(w, width) {
 function renderCanvas(moved) {
   const canvas = $("canvas");
   const { w, run } = view;
-  if (selected.changes && state.editable) return renderChanges(w);
+  if (selected.changes && state.editable && !isComp(w)) return renderChanges(w);
   const edited = editedNodes(w);
   const old = canvas.querySelector(".scroller");
   const keep = old && !moved ? [old.scrollLeft, old.scrollTop] : null;
@@ -517,6 +606,8 @@ function renderCanvas(moved) {
     const cond = node.step && node.step.when;
     let took = "";
     if (node.id === "trigger") took = run ? when(run.started) : "";
+    else if (node.id === IN) took = "";
+    else if (node.id === OUT) took = run ? (run.gave !== undefined ? "gave back" : run.status === "running" ? "waiting" : "not reached") : "";
     else if (node.id === "response") took = run ? (run.response ? String(run.response.status) : answerWait(run)) : String(w.respond.status);
     else if (done && done.status === "ok") took = duration(done.ms);
     else if (done && couldNotRun(run)) took = "could not run";
@@ -525,7 +616,7 @@ function renderCanvas(moved) {
     // A flow step holds steps of its own: how many, what they are, and in a run how each went.
     const inside = node.kind === "flow" && node.step ? innerRun(node.step, done, status) : null;
     const brokeAt = inside && status === "failed" ? failedInside(inside) : null;
-    const label = node.title + ", " + KIND_LABEL[node.kind] + (inside ? ", " + plural(inside.length, "step") + " inside" : "") + (node.order ? ", step " + node.order : "") + (status ? ", " + (node.id === "response" && run.response ? "answered " + run.response.status : (STATUS_TEXT[status] || status).toLowerCase()) : "") + (brokeAt ? ", failed at " + brokeAt.s.id : "");
+    const label = (node.eyebrow ? node.eyebrow + ", " : "") + node.title + ", " + KIND_LABEL[node.kind] + (inside ? ", " + plural(inside.length, "step") + " inside" : "") + (node.order ? ", step " + node.order : "") + (status ? ", " + (node.id === "response" && run.response ? "answered " + run.response.status : node.id === OUT && run.gave !== undefined ? "gave back" : (STATUS_TEXT[status] || status).toLowerCase()) : "") + (brokeAt ? ", failed at " + brokeAt.s.id : "");
     const isEdited = edited.has(node.id);
     return el("div", {
         class: "slot" + (animate ? " enter" : ""),
@@ -541,13 +632,16 @@ function renderCanvas(moved) {
         el("span", { class: "head" },
           el("span", { class: "tile" }, icon(node.kind, 20), node.order ? el("i", { class: "num", title: "Runs " + ordinal(node.order) }, node.order) : null),
           el("span", { class: "text" },
-            el("span", { class: "eyebrow" }, KIND_LABEL[node.kind] + (inside ? " · " + plural(inside.length, "step") : "")),
+            el("span", { class: "eyebrow" }, (node.eyebrow || KIND_LABEL[node.kind]) + (inside ? " · " + plural(inside.length, "step") : "")),
             el("span", { class: "title" }, node.title),
             el("span", { class: "sub mono" }, brokeAt ? "failed at " + brokeAt.s.id : node.subtitle)),
-          status && node.id !== "trigger" ? statusMark(status, 12) : null),
+          status && node.id !== "trigger" && node.id !== IN ? statusMark(status, 12) : null),
         el("span", { class: "foot", title: cond || (inside ? "Steps inside: " + inside.map((r) => r.s.id).join(", ") : null) || (node.id === "trigger" && w.input ? "The body must match " + w.input : null) },
           cond ? [el("b", {}, "IF"), el("span", { class: "cond mono" }, cond)] : inside ? pips(inside, !!run) : el("span", { class: "always" },
-            node.id === "trigger" ? (w.input ? "Body: " + w.input.split("/").pop() : "Entry point") : node.id === "response" ? "Exit point" : "Always runs"),
+            node.id === "trigger" ? (w.input ? "Body: " + w.input.split("/").pop() : "Entry point")
+              : node.id === IN ? (inputNames(w).length ? "Takes " + plural(inputNames(w).length, "value") : "Takes nothing")
+              : node.id === OUT ? "Gives back " + plural(givenNames(w).length, "field")
+              : node.id === "response" ? "Exit point" : isComp(w) && w.steps.length === 1 ? "The component's work" : "Always runs"),
           took ? el("span", { class: "took" }, took) : null)),
       // The place to put a step: right after this one in the file.
       adding && node.id !== "response" ? addButton(node, plan, mid) : null);
@@ -564,8 +658,10 @@ function renderCanvas(moved) {
   canvas.replaceChildren(...[
     problemBanner(w),
     run ? runBar(run) : el("div", { class: "hint" },
-      el("span", {}, "Steps run top to bottom in the order numbered."),
-      el("span", {}, state.editable && !w.problem ? "Select a step to edit it, or a run on the left to see what happened." : "Pick a run on the left to see what happened."),
+      el("span", {}, isComp(w) ? "A step that uses this component fills the input; the output is what it gets back." : "Steps run top to bottom in the order numbered."),
+      el("span", {}, state.editable && !w.problem
+        ? (isComp(w) ? "Select a step or the output to edit it, or a test run on the left to see what happened." : "Select a step to edit it, or a run on the left to see what happened.")
+        : (isComp(w) ? "Pick a test run on the left to see what happened." : "Pick a run on the left to see what happened.")),
       adding ? el("button", { type: "button", class: "ghost addstep", "data-focus": "add-hint", onclick: () => openAdd() }, icon("plus", 13), "Add a step", el("kbd", {}, "A")) : null),
     scroller,
     el("div", { class: "tools", role: "group", "aria-label": "Zoom" },
@@ -597,8 +693,9 @@ function pips(rows, ran) {
   return el("span", { class: "pips", "aria-hidden": "true" }, out);
 }
 
-// canAdd: steps can only be added when the server edits files and the file is sound.
-const canAdd = (w) => !!w && state.editable && !w.problem;
+// canAdd: steps can only be added to a workflow, when the server edits files and the file is sound.
+// A component's steps are fixed on this page: it never adds or removes one.
+const canAdd = (w) => !!w && state.editable && !w.problem && !w.component;
 
 // addButton is the round plus under a box, where a step can be put after it.
 function addButton(node, plan, mid) {
@@ -728,18 +825,21 @@ function answerNote(w) {
 function renderInspector(w, run, moved) {
   ensureInspector();
   const step = w.steps.find((s) => s.id === selected.node);
+  const comp = isComp(w);
   const canEdit = state.editable && !w.problem;
-  const onResponse = selected.node === "response" && !!w.respond;
-  const fields = !canEdit ? null : selected.node === "trigger" ? w.edit : onResponse ? w.respond.edit : step ? step.edit : null;
+  const onStart = selected.node === START(w);
+  const onEnd = comp ? selected.node === OUT : selected.node === "response" && !!w.respond;
+  const endEdit = comp ? (w.gives ? w.gives.edit : null) : w.respond ? w.respond.edit : null;
+  const fields = !canEdit ? null : onStart ? (comp ? null : w.edit) : onEnd ? endEdit : step ? step.edit : null;
   const hasForm = !!(fields && fields.length);
   const adding = addMode(w);
   let parts;
   if (adding) parts = [header("workflow", "plus", "Add a step", "to " + w.name, true)];
-  else if (selected.node === "trigger") parts = triggerDetails(w, run);
-  else if (onResponse) parts = responseDetails(w, run);
+  else if (onStart) parts = comp ? inputDetails(w, run) : triggerDetails(w, run);
+  else if (onEnd) parts = comp ? outputDetails(w, run) : responseDetails(w, run);
   else if (step) parts = stepDetails(w, step, run, hasForm);
   else if (run) parts = runDetails(w, run);
-  else parts = workflowDetails(w);
+  else parts = comp ? componentDetails(w) : workflowDetails(w);
   const [head, ...sections] = parts.flat(Infinity).filter(Boolean);
   const box = $("inspector");
   const top = box.scrollTop;
@@ -794,6 +894,103 @@ function workflowDetails(w) {
     testsSection(w),
     isWebhook(w) ? section("Try it", example(w), el("p", { class: "muted small" }, answerNote(w))) : null,
   ];
+}
+
+// ---- a component, from the outside in ----
+
+// inputsView lists what a component takes, with the type of each.
+function inputsView(w) {
+  const inputs = w.inputs || [];
+  if (!inputs.length) return el("p", { class: "muted" }, "It takes no input.");
+  return el("ul", { class: "io", "aria-label": "Inputs" }, inputs.map((i) =>
+    el("li", {}, el("span", { class: "ioname mono" }, i.name), el("span", { class: "iotype" }, i.type))));
+}
+
+// usedByView lists the steps that use a component, each a way to that step.
+function usedByView(w) {
+  const uses = w.usedBy || [];
+  if (!uses.length) return el("p", { class: "muted" }, "No step uses it yet. A step uses a component by naming its folder.");
+  return el("ul", { class: "usedby", "aria-label": "Steps that use " + compTitle(w) }, uses.map((u) => {
+    const x = entryOf(u.workflow), label = x ? (x.component ? compTitle(x) : x.name) : u.workflow;
+    return el("li", {}, el("button", {
+        type: "button", class: "use", title: "Open step " + u.step + " of " + label,
+        onclick: () => go({ workflow: u.workflow, run: null, node: u.step }),
+      },
+      icon(x && x.component ? "component" : "workflow", 15),
+      el("span", { class: "uwho" }, label),
+      el("span", { class: "usep", "aria-hidden": "true" }, "›"),
+      el("span", { class: "ustep mono" }, u.step),
+      x && x.component ? el("span", { class: "utag" }, "component") : null));
+  }));
+}
+
+// readsChips are links to what a step or an end node reads from.
+function readsChips(w, names) {
+  return names.length ? section("Reads from", el("div", { class: "chips" }, names.map((name) =>
+    el("button", { type: "button", class: "pill link mono", title: "Show " + name, onclick: () => go({ node: readNode(w, name) }) }, name)))) : null;
+}
+
+function componentDetails(w) {
+  const kind = compKind(w);
+  const out = el("button", { type: "button", class: "linkbtn", onclick: () => go({ node: OUT }) }, "Show the output");
+  const inn = el("button", { type: "button", class: "linkbtn", onclick: () => go({ node: IN }) }, "Show the input");
+  return [
+    header(kind, kind, compTitle(w), "Component · " + compKindWord(w)),
+    w.description ? section("", el("p", { class: "lede" }, w.description)) : null,
+    section("Definition", pairs([
+      ["File", mono(w.path)],
+      ["Made of", w.gives ? plural(w.steps.length, "step") + " of its own" : "One piece of work: " + (KIND_NAMES[kind] || kind).toLowerCase()],
+      ["Tests", w.tests + (w.tests && !state.editable ? ", run with aia test" : "")],
+      state.commit ? ["Version", mono(state.commit)] : null,
+    ])),
+    section("Takes", inputsView(w), el("p", { class: "muted small" }, "A step that uses this component fills each in. ", inn)),
+    section("Gives back",
+      givenNames(w).length ? el("ul", { class: "io", "aria-label": "Gives back" }, givenNames(w).map((n) => el("li", {}, el("span", { class: "ioname mono" }, n)))) : el("p", { class: "muted" }, "Nothing."),
+      el("p", { class: "muted small" }, w.gives ? "What the component says it gives back. " : "A component of one kind of work gives back what that work puts out. ", out)),
+    section("Used by", usedByView(w),
+      el("p", { class: "muted small" }, usesOf(w) ? (state.editable ? "A change here applies to every one of these steps." : "These steps all get what the component does.") : "Nothing depends on it yet, so a change here affects no workflow.")),
+    section(w.gives ? "Steps" : "The work", outline(w),
+      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the input, a step or the output to edit it. Saved changes are written to " + w.path + ".")
+        : el("p", { class: "muted small" }, "Components are files in git: edit the YAML and commit it.")),
+    testsSection(w),
+  ];
+}
+
+function inputDetails(w, run) {
+  const given = run && run.trigger && run.trigger.input !== undefined ? run.trigger.input : undefined;
+  const readers = w.steps.filter((s) => s.reads.includes("input")).map((s) => s.id);
+  return [
+    header("input", "input", "input", KIND_NAMES.input, true),
+    given !== undefined ? section("Given in this test run", jsonView(given), el("p", { class: "muted small" }, "What the test handed to the component.")) : null,
+    section("Takes", inputsView(w),
+      el("p", { class: "muted small" }, "Each is filled in by the step that uses the component. Inside, a step reads one as ", mono("input.<name>"), ".")),
+    readers.length ? section("Read by", el("div", { class: "chips" }, readers.map((id) =>
+      el("button", { type: "button", class: "pill link mono", title: "Show " + id, onclick: () => go({ node: id }) }, id)))) : null,
+  ];
+}
+
+function outputDetails(w, run) {
+  const head = header("output", "output", "output", KIND_NAMES.output, true);
+  const reads = w.gives ? w.gives.reads || [] : w.steps.map((s) => s.id);
+  const chips = readsChips(w, reads);
+  const written = w.gives
+    ? section("Gives back, as written", jsonView(w.gives.body), el("p", { class: "muted small" }, "Each ${...} is filled in from the steps when they have run."))
+    : section("Gives back", el("ul", { class: "io", "aria-label": "Gives back" }, givenNames(w).map((n) => el("li", {}, el("span", { class: "ioname mono" }, n)))),
+        el("p", { class: "muted small" }, "A component of one kind of work gives back exactly what its work puts out, so there is nothing separate to write."));
+  const about = checksAbout(w, run, OUT);
+  if (!run) return [head, written, chips];
+  if (run.gave === undefined) {
+    const note = run.status === "running" ? "The test has not got this far yet."
+      : couldNotRun(run) ? "The test could not run, so nothing was given back."
+      : run.status === "failed" ? "A step failed first, so nothing was given back."
+      : "This run has no record of what was given back.";
+    return [head, section("In this test run", panelTitled(run.status === "ok" ? "skipped" : "pending", run.status === "ok" ? "Not recorded" : "Not reached", el("div", { class: "muted" }, note))), about, chips];
+  }
+  return [head,
+    section("In this test run", panelTitled("ok", "Gave back", el("div", { class: "muted" }, "Handed to the step that uses it when the steps had finished."))),
+    about,
+    section("What it gave back", jsonView(run.gave)),
+    chips];
 }
 
 // waterfall draws each step of a run on a shared time axis.
@@ -916,8 +1113,11 @@ function insideSection(step, run, done, status) {
   });
   return section("Steps inside",
     el("ol", { class: "inside" }, items),
-    el("p", { class: "muted small" }, "These steps are written in " + step.uses + ", the component's file, and are changed there."
-      + (rows.some((r) => r.rec && r.rec.output !== undefined) ? " Open a step to read what it produced." : "")));
+    el("p", { class: "muted small" }, "These steps are written in " + step.uses + ", the component's file. ",
+      step.target && entryOf(step.target)
+        ? [el("button", { type: "button", class: "linkbtn", onclick: () => go({ workflow: step.target, run: null, node: null }) }, "Open " + compTitle(entryOf(step.target))), " to see how they are built and to change them."]
+        : "They are changed there.",
+      rows.some((r) => r.rec && r.rec.output !== undefined) ? " Open a step below to read what it produced." : ""));
 }
 
 function stepDetails(w, step, run, hasForm) {
@@ -937,23 +1137,39 @@ function stepDetails(w, step, run, hasForm) {
       done && done.detail ? el("p", { class: "detail mono" }, done.detail) : null,
       done && done.error ? el("pre", { class: couldNotRun(run) ? "plain" : "error" }, done.error) : null) : null,
     checksAbout(w, run, step.id),
+    step.component ? componentLink(step) : null,
     step.kind === "flow" ? insideSection(step, run, done, status) : null,
     step.questions && output ? section("Answers", step.questions.map((q) => question(q, output[q.name]))) : null,
     step.questions && !output && !hasForm ? section("Questions", step.questions.map((q) => question(q, null))) : null,
     output !== null && !step.questions ? section(step.kind === "flow" ? "Gives back" : "Output", jsonView(output),
       step.kind === "flow" ? el("p", { class: "muted small" }, "Only what the component gives back. What each step inside produced is under Steps inside.") : null) : null,
     hasForm ? null : section("Runs when",
-      step.when ? el("pre", { class: "cond-pre" }, step.when) : el("p", { class: "muted" }, "Always, once the steps before it have finished."),
+      step.when ? el("pre", { class: "cond-pre" }, step.when)
+        : el("p", { class: "muted" }, isComp(w) && w.steps.length === 1 ? "Always: this is the work the component does." : "Always, once the steps before it have finished."),
       el("p", { class: "muted small" }, "Step " + order + " of " + w.steps.length + " in file order.")),
     // What a component does is set in its own file, so it is shown, not edited.
     step.component ? section("Component",
       pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)])),
-      step.kind === "flow" ? null : el("p", { class: "muted small" }, "Written once in " + step.uses + " and shared by every step that uses it. This step only chooses its input.")) : null,
+      step.kind === "flow" ? null : el("p", { class: "muted small" }, "Written once in " + step.uses + " and shared by every step that uses it. This step only chooses its input. Change what it does in the component.")) : null,
     step.fields.length && !hasForm && !step.component ? section("Settings", pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)]))) : null,
-    step.reads.length ? section("Reads from", el("div", { class: "chips" }, step.reads.map((name) =>
-      el("button", { type: "button", class: "pill link mono", title: "Show " + name, onclick: () => go({ node: name }) }, name)))) : null,
+    readsChips(w, step.reads),
     canAdd(w) ? structureSection(w, step) : null,
   ];
+}
+
+// componentLink is the way from a step to the component it uses: its name, what
+// it does and a button that opens it.
+function componentLink(step) {
+  const x = step.target ? entryOf(step.target) : null;
+  if (!x) return null;
+  return section("Uses component",
+    el("button", { type: "button", class: "compcard kind-" + compKind(x), "data-focus": "open-component", title: "Open the component " + compTitle(x), onclick: () => go({ workflow: x.name, run: null, node: null }) },
+      kindTile(compKind(x), 34),
+      el("span", { class: "ctext" },
+        el("span", { class: "cname mono" }, compTitle(x)),
+        el("span", { class: "cdesc" }, x.description || compKindWord(x)),
+        el("span", { class: "cmeta" }, compKindWord(x) + " · used by " + plural(usesOf(x), "step"))),
+      el("span", { class: "copen" }, "Open", icon("open", 13))));
 }
 
 // structureSection is where a step is added after this one, or removed.
@@ -1110,10 +1326,22 @@ async function request(method, path, body) {
 // the node (the trigger or a step) it belongs to.
 function fieldIndex(w) {
   const map = new Map();
-  (w.edit || []).forEach((f) => map.set(pathKey(f.path), { field: f, node: "trigger" }));
-  if (w.respond) (w.respond.edit || []).forEach((f) => map.set(pathKey(f.path), { field: f, node: "response" }));
-  w.steps.forEach((s) => (s.edit || []).forEach((f) => map.set(pathKey(f.path), { field: f, node: s.id })));
+  for (const [node, fields] of editSets(w)) fields.forEach((f) => map.set(pathKey(f.path), { field: f, node }));
   return map;
+}
+
+// editSets lists the editable fields of a workflow or component by the node
+// they belong to: the trigger and the response, or the output of a component,
+// and each step.
+function editSets(w) {
+  const sets = [];
+  if (isComp(w)) { if (w.gives) sets.push([OUT, w.gives.edit || []]); }
+  else {
+    sets.push(["trigger", w.edit || []]);
+    if (w.respond) sets.push(["response", w.respond.edit || []]);
+  }
+  w.steps.forEach((s) => sets.push([s.id, s.edit || []]));
+  return sets;
 }
 
 // pruneDrafts forgets drafts that now say what the file says, and drafts for
@@ -1181,9 +1409,7 @@ function identities(w) {
     byKey.set(key, id);
     byId.set(id, { field: f, key, node });
   };
-  (w.edit || []).forEach((f) => add("trigger", f));
-  if (w.respond) (w.respond.edit || []).forEach((f) => add("response", f));
-  w.steps.forEach((s) => (s.edit || []).forEach((f) => add(s.id, f)));
+  for (const [node, fields] of editSets(w)) fields.forEach((f) => add(node, f));
   return { byKey, byId };
 }
 
@@ -1342,7 +1568,7 @@ function buildForm(w, nodeId, fields, key) {
       body.push(c.row);
     }
   }
-  f.root = el("section", { class: "editform" }, el("h2", {}, "Settings"), body);
+  f.root = el("section", { class: "editform" }, el("h2", {}, nodeId === OUT ? "Gives back" : "Settings"), body);
   return f;
 }
 
@@ -1449,7 +1675,7 @@ function draftChanged(name, force) {
   }
   for (const node of document.querySelectorAll("#inspector [data-node]")) node.classList.toggle("edited", edited.has(node.dataset.node));
   renderSide(w);
-  $("changes").replaceChildren(...(state.editable ? [changesChip()] : []));
+  $("changes").replaceChildren(...(state.editable && !isComp(w) ? [changesChip()] : []));
 }
 
 // flagFor marks a workflow in the list on the left: a file problem, or unsaved changes.
@@ -1504,7 +1730,9 @@ function buildBar() {
   b.status = el("span", { class: "barstatus", role: "status" });
   b.discard = el("button", { type: "button", class: "btn" }, "Discard");
   b.save = el("button", { type: "button", class: "btn primary" }, "Save", el("kbd", {}, isMac ? "⌘S" : "Ctrl+S"));
-  b.root = el("div", { class: "savebar", hidden: true }, b.slot, el("div", { class: "barrow" }, b.status, b.discard, b.save));
+  // Said once, for a component: what a save here reaches.
+  b.shared = el("p", { class: "shared", hidden: true });
+  b.root = el("div", { class: "savebar", hidden: true }, b.slot, b.shared, el("div", { class: "barrow" }, b.status, b.discard, b.save));
   b.shownNotice = null;
   b.discard.addEventListener("click", () => discardCurrent());
   b.save.addEventListener("click", () => saveCurrent());
@@ -1526,6 +1754,15 @@ function updateBar() {
   const on = state.editable && !w.problem && (adding || form || n > 0 || st.notice);
   b.root.hidden = !on;
   if (!on) return;
+  const share = isComp(w) && !adding;
+  b.shared.hidden = !share;
+  if (share) {
+    const uses = usesOf(w);
+    b.shared.replaceChildren(icon("component", 13), el("span", {}, uses
+      ? ["A change here applies to every step that uses ", el("strong", {}, compTitle(w)), ": ", el("strong", {}, plural(uses, "step")), "."]
+      : ["No step uses ", el("strong", {}, compTitle(w)), " yet, so a change here reaches no workflow."]));
+    b.shared.title = (w.usedBy || []).map((u) => (entryOf(u.workflow) ? compTitle(entryOf(u.workflow)) : u.workflow) + " › " + u.step).join("\n");
+  }
   const key = isMac ? "⌘S" : "Ctrl+S";
   if (adding) {
     // The same bar serves the form for a new step: Cancel and Add step.
@@ -1544,7 +1781,7 @@ function updateBar() {
     return;
   }
   if (b.save.dataset.mode !== "save") { b.save.dataset.mode = "save"; b.save.replaceChildren("Save", el("kbd", {}, key)); }
-  const names = dirtyNodes(w.name);
+  const names = dirtyNodes(w.name).map(nodeName);
   const where = names.length > 3 ? names.slice(0, 3).join(", ") + " and " + (names.length - 3) + " more" : names.join(", ");
   b.status.replaceChildren(...(st.saving ? ["Saving…"]
     : n ? [plural(n, "unsaved change"), " in ", el("span", { class: "mono" }, where)]
@@ -1574,16 +1811,29 @@ function noticeView(n, w) {
   const isAdd = n.did === "add", isRemove = n.did === "remove";
   if (n.kind === "saved") {
     title = n.title || "Saved";
+    // A component has no changes view of its own: its file is part of the workflow that uses it.
+    const home = changesHome(w);
     text.push(el("p", {}, "Written to ", n.files.map((f, i) => [i ? ", " : "", el("span", { class: "mono" }, f)])), el("p", {},
       "These changes are saved in the file but not committed. ",
-      el("button", { type: "button", class: "linkbtn", onclick: () => go({ changes: true }) }, "See what changed")),
+      !isComp(w) ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ changes: true }) }, "See what changed")
+        : home ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ workflow: home.name, run: null, node: null, changes: true }) }, "See what changed in " + home.name) : null),
+      isComp(w) && usesOf(w) ? el("p", {}, "It now applies to ", plural(usesOf(w), "step"), " that use" + (usesOf(w) === 1 ? "s" : ""), " ", compTitle(w), ".") : null,
       droppedView(n));
   } else if (n.kind === "invalid") {
-    title = isAdd ? "Not added. The file was left as it was." : isRemove ? "Not removed. The file was left as it was." : "Not saved. The file was left as it was.";
+    title = isAdd ? "Not added. The file was left as it was." : isRemove ? "Not removed. The file was left as it was."
+      : isComp(w) ? "Not saved. The component was left as it was." : "Not saved. The file was left as it was.";
     if (n.saved && n.saved.length) text.push(el("p", {}, "Already written: ", n.saved.join(", "), "."));
     if (n.problems && n.problems.length) {
       const users = isRemove ? usersOf(n.problems) : [];
       if (isRemove) text.push(el("p", {}, users.length ? [n.id + " is still used by ", users.join(", "), ". Change those first, then remove it again."] : "Something still depends on " + n.id + ". Change it first, then remove it again."));
+      // A component is checked together with everything that uses it.
+      if (isComp(w) && !isAdd && !isRemove) {
+        text.push(el("p", {}, n.error || "The server did not accept the change."),
+          el("p", { class: "muted" }, !usesOf(w) ? "Nothing was written."
+            : n.problems.every((p) => /^component "/.test(p.message || ""))
+              ? "Nothing was written, so the " + plural(usesOf(w), "step") + " that use" + (usesOf(w) === 1 ? "s" : "") + " " + compTitle(w) + " still work as before."
+              : compTitle(w) + " is shared by " + plural(usesOf(w), "step") + ", and the server checks them with it, so a change that breaks one of them is refused. Nothing was written."));
+      }
       text.push(el("p", {}, isRemove ? "What the server found:" : isAdd ? "Fix this and try again:" : "Fix this and save again:"),
         el("ul", { class: "problems" }, n.problems.map((p) => problemItem(p, w, isAdd ? n.id : null))));
     } else text.push(el("p", {}, n.error || "The server did not accept the change."));
@@ -1622,8 +1872,22 @@ function noticeView(n, w) {
 function droppedView(n) {
   if (!n.dropped || !n.dropped.length) return null;
   return el("p", {}, plural(n.dropped.length, "unsaved edit was", "unsaved edits were"), " dropped, because the step or field they were for is gone: ",
-    n.dropped.slice(0, 6).map((x, i) => [i ? ", " : "", el("span", { class: "mono" }, x.node + " · " + x.label)]),
+    n.dropped.slice(0, 6).map((x, i) => [i ? ", " : "", el("span", { class: "mono" }, nodeName(x.node) + " · " + x.label)]),
     n.dropped.length > 6 ? " and " + (n.dropped.length - 6) + " more" : "", ".");
+}
+
+// changesHome is the workflow whose changes view shows a component's file: the
+// first workflow that uses it, directly or through another component.
+function changesHome(w) {
+  const seen = new Set(), queue = [w];
+  while (queue.length) {
+    const x = queue.shift();
+    if (!isComp(x)) return x;
+    if (seen.has(x.name)) continue;
+    seen.add(x.name);
+    for (const u of x.usedBy || []) { const y = entryOf(u.workflow); if (y) queue.push(y); }
+  }
+  return null;
 }
 
 // usersOf lists the steps and tests a refusal names, once each.
@@ -1672,7 +1936,8 @@ async function saveCurrent() {
   const w = workflowByName(name);
   if (st.saving || !w || w.problem) return;
   const d = draftsOf(name);
-  const fields = Object.values(d.fields).map((e) => ({ path: e.path, value: e.value, node: e.node }));
+  // The server calls a component's way out "output"; here its id cannot be a step's.
+  const fields = Object.values(d.fields).map((e) => ({ path: e.path, value: e.value, node: e.node === OUT ? "output" : e.node }));
   const texts = Object.entries(d.prompts).map(([step, text]) => ({ step, text }));
   if (!fields.length && !texts.length) return;
 
@@ -2415,11 +2680,13 @@ function roundBox(w, v) {
 // stepOfKey names the step (or the trigger or response) a check is about: its
 // key is that id, or starts with it and a dot.
 function stepOfKey(w, key) {
-  const ids = ["trigger", ...w.steps.map((s) => s.id)];
-  if (w.respond) ids.push("response");
+  // [the name a key uses, the node it is about]
+  const names = isComp(w) ? [["input", IN], ["output", OUT]] : [["trigger", "trigger"]];
+  w.steps.forEach((s) => names.push([s.id, s.id]));
+  if (w.respond) names.push(["response", "response"]);
   let best = null;
-  for (const id of ids) if ((key === id || key.startsWith(id + ".")) && (!best || id.length > best.length)) best = id;
-  return best;
+  for (const [name, id] of names) if ((key === name || key.startsWith(name + ".")) && (!best || name.length > best[0].length)) best = [name, id];
+  return best ? best[1] : null;
 }
 
 const mono = (text) => el("span", { class: "mono" }, text);
@@ -2427,7 +2694,7 @@ const mono = (text) => el("span", { class: "mono" }, text);
 function checkRow(w, c, jump) {
   const ok = !c.failure;
   const id = stepOfKey(w, c.key);
-  const isStep = id === c.key;
+  const isStep = id !== null && nodeName(id) === c.key && id !== IN && id !== OUT;
   const want = isStep && typeof c.want === "string" ? c.want : JSON.stringify(c.want);
   // The failure starts with the key it is about: it is not said twice.
   const failure = c.failure && c.failure.startsWith(c.key + ": ") ? c.failure.slice(c.key.length + 2) : c.failure;
@@ -2436,7 +2703,7 @@ function checkRow(w, c, jump) {
     el("div", { class: "cbody" },
       el("div", { class: "ckey mono" }, el("span", { class: "sr" }, ok ? "Met: " : "Not met: "), c.key),
       ok ? el("div", { class: "cwant" }, isStep ? "Expected it to be " : "Expected ", mono(want)) : el("div", { class: "cfail mono" }, failure)),
-    jump && id ? el("button", { type: "button", class: "pill link", title: "Show " + id + " in this run", onclick: () => go({ node: id }) }, "Show " + id) : null);
+    jump && id ? el("button", { type: "button", class: "pill link", title: "Show " + nodeName(id) + " in this run", onclick: () => go({ node: id }) }, "Show " + nodeName(id)) : null);
 }
 
 function checkList(w, checks, jump) {
@@ -2472,21 +2739,23 @@ function testRunDetails(w, run) {
   const failedStep = run.steps.find((s) => s.status === "failed");
   const idx = (w.cases || []).findIndex((c) => c.name === run.test);
   const spec = idx >= 0 ? w.cases[idx] : null;
+  const comp = isComp(w);
+  const given = comp && run.trigger && run.trigger.input !== undefined ? run.trigger.input : undefined;
   let panel;
   if (v === "passed") panel = panelTitled("ok", "Passed", el("div", { class: "muted" }, (checks.length ? (checks.length === 1 ? "The expectation was met." : "All " + checks.length + " expectations were met.") : "Every step ran.") + " Took " + duration(run.ms) + "."));
   else if (v === "unmet") panel = panelTitled("failed", "Expectation not met", el("div", { class: "muted" },
     unmet.length + " of " + checks.length + (checks.length === 1 ? " expectation was" : " expectations were") + " not met. "
-    + (failedStep ? "" : "Every step ran without failing: the workflow did what it does, but not what the test expects.")));
+    + (failedStep ? "" : "Every step ran without failing: the " + (comp ? "component" : "workflow") + " did what it does, but not what the test expects.")));
   else if (v === "broke") panel = panelTitled("failed", "A step failed", el("div", { class: "muted" },
-    (failedStep ? "Step " + failedStep.id + " failed, so " : "The workflow failed, so ") + "the expectations were not checked."));
+    (failedStep ? "Step " + failedStep.id + " failed, so " : "The " + (comp ? "component" : "workflow") + " failed, so ") + "the expectations were not checked."));
   else if (v === "unrun") {
-    panel = panelTitled("skipped", "Could not run", el("div", { class: "muted" }, "This says nothing about the workflow or the test: nothing was checked, and nothing here failed."));
+    panel = panelTitled("skipped", "Could not run", el("div", { class: "muted" }, "This says nothing about the " + (comp ? "component" : "workflow") + " or the test: nothing was checked, and nothing here failed."));
     panel.classList.add("unrun");
   } else panel = panelTitled("running", "Running", el("div", { class: "muted" }, plural(run.steps.filter((s) => s.status === "ok").length, "step") + " done"));
 
   const again = spec && canTest(w) ? startButton(w, idx, "Run this test again", "insp:test-again", { small: true }) : null;
   return [
-    header("workflow", "run", run.test, "Test run of " + run.workflow),
+    header("workflow", "run", run.test, "Test run of " + (comp ? "component " + compTitle(w) : run.workflow)),
     section("Result", panel,
       run.error ? el("pre", { class: v === "unrun" ? "plain" : "error" }, run.error) : null,
       again ? el("div", { class: "againrow" }, again) : null,
@@ -2496,15 +2765,30 @@ function testRunDetails(w, run) {
         v === "running" ? "The models are called for real. HTTP steps are not sent." : "The models were called for real. HTTP steps were not sent.")),
     checks.length ? section("Expectations" + (checks.length ? " (" + checks.length + ")" : ""), checkList(w, checks, true),
       el("p", { class: "muted small" }, "Select Show to see the step a check is about.")) : null,
+    // A component's test is a call: what it was given, and what it gave back.
+    given !== undefined ? section("What the test gave it", jsonView(given),
+      spec && typeof spec.input === "string" ? el("p", { class: "muted small" }, "Read from ", mono(spec.input), ".") : el("p", { class: "muted small" }, "As written in the test. ",
+        el("button", { type: "button", class: "linkbtn", onclick: () => go({ node: IN }) }, "Show the input"))) : null,
+    comp && run.gave !== undefined ? section("What it gave back", jsonView(run.gave),
+      el("button", { type: "button", class: "linkbtn", onclick: () => go({ node: OUT }) }, "Show the output")) : null,
     section("Steps", waterfall(w, run), el("p", { class: "muted small" }, "Select a step, here or on the drawing, to see what it produced.")),
-    run.trigger !== undefined ? section("Trigger payload", jsonView(run.trigger), spec ? el("p", { class: "muted small" }, "From the fixture ", mono(spec.fixture), ".") : null) : null,
+    !comp && run.trigger !== undefined ? section("Trigger payload", jsonView(run.trigger), spec ? el("p", { class: "muted small" }, "From the fixture ", mono(spec.fixture), ".") : null) : null,
     section("About this run", pairs([
       ["Run", mono(run.run)],
       ["Test", run.test],
-      spec ? ["Fixture", mono(spec.fixture)] : null,
+      !comp && spec ? ["Fixture", mono(spec.fixture)] : null,
       run.commit ? ["Version", mono(run.commit)] : null,
     ])),
   ];
+}
+
+// caseInput says in a few words what a test gives. A workflow's test names a
+// fixture; a component's gives its input, written in the test or in a file.
+function caseInput(w, c) {
+  if (!isComp(w)) return c.fixture;
+  if (typeof c.input === "string") return "input from " + c.input;
+  const keys = c.input && typeof c.input === "object" ? Object.keys(c.input) : [];
+  return keys.length ? "gives " + keys.join(", ") : "gives no input";
 }
 
 // ---- right: the tests of a workflow, without running anything ----
@@ -2521,7 +2805,9 @@ function testsSection(w) {
   if (!cases.length) {
     return section("Tests", el("div", { class: "emptystate" },
       el("div", { class: "etitle" }, "No tests yet"),
-      el("p", {}, "Tests are written under ", mono("tests:"), " in ", mono(w.path), ". Each names a fixture, a sample request, and what to expect of the steps and what they put out."),
+      el("p", {}, "Tests are written under ", mono("tests:"), " in ", mono(w.path), ". " + (isComp(w)
+        ? "Each gives the component an input, written there or in a file, and says what to expect of its steps and of what it gives back."
+        : "Each names a fixture, a sample request, and what to expect of the steps and what they put out.")),
       el("p", { class: "muted small" }, "Write them in your editor and commit. This page notices by itself, and they appear here.")));
   }
   const v = roundView(w.name);
@@ -2553,7 +2839,7 @@ function testCase(w, c, i, v) {
   const checks = finished ? finished.checks || [] : [];
   return el("li", { class: "tcase " + (verdict ? rowTone(verdict) : "") },
     el("div", { class: "thead" }, statusMark(V ? V.mark : "pending", 12), el("span", { class: "tname" }, c.name), run),
-    el("div", { class: "tfix mono" }, c.fixture),
+    el("div", { class: "tfix mono" }, caseInput(w, c)),
     el("div", { class: "tlast" }, line, open ? [" · ", open] : null),
     finished && verdict === "unmet" ? el("div", { class: "tlast bad" }, "Not met: " + unmetOf(finished).map((x) => x.key).join(", ")) : null,
     el("ul", { class: "expects", "aria-label": "Expectations of " + c.name }, (c.expect || []).map((e) => {

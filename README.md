@@ -245,7 +245,8 @@ With `--edit` the page becomes a place to work on the workflows:
 
 - Select a step, the trigger or the response and change its values in the form. Saving writes only the lines of those values, so comments, blank lines and order in the file stay as they were.
 - Add a step from one of the components in the workflow's folder, or remove a step.
-- Run the workflow's tests and see, for each, which expectations were met.
+- Open a component, which is drawn like a workflow with what it takes at the top and what it gives back at the bottom, and change its values the same way. The change is refused if it would break a workflow that uses the component.
+- Run the tests of a workflow or of a component and see, for each, which expectations were met.
 - See under **Changes** what git says has changed since the last commit.
 
 Nothing is written unless the result is a workflow the server can go on serving; otherwise the page says what is wrong and the file stays as it was. The server also follows the files: what an editor or git changes is taken up without a restart, and a file that is no longer valid keeps being served as it was while the page says why.
@@ -284,5 +285,5 @@ Both exit with a status other than 0 when something is wrong, and print what.
 - It does not retry a step that failed or queue runs; a run is one pass through the steps in one process.
 - It has no steps for databases or message brokers. A workflow reaches other systems through `http`.
 - It does not check signatures of webhooks from providers such as Stripe or GitHub.
-- The page adds steps only from components, and does not reorder steps or change component files.
+- The page adds steps only from components, does not reorder steps, and does not add or remove the steps of a component.
 - A webhook is always a POST to a fixed path.

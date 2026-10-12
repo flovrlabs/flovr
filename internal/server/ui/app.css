@@ -402,6 +402,7 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .kind-flow { --kind: var(--flow); --kind-soft: var(--flow-soft); }
 .kind-response { --kind: var(--response); --kind-soft: var(--response-soft); }
 .kind-workflow { --kind: var(--accent); --kind-soft: var(--accent-soft); }
+.kind-input, .kind-output { --kind: var(--text); --kind-soft: var(--sunken); }
 
 /* A node's body is an SVG outline (see shapeSVG), so the border, the rings for
    selection and focus, and the shadow all follow its shape. The button itself
@@ -474,6 +475,11 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .card.shape-ai .head { padding: 0 14px 0 12px; }
 .card.shape-response .head { padding: 0 34px 0 21px; }
 .card.shape-response .foot { padding: 0 30px 0 24px; }
+/* A component's ends: a notch to leave room for on the left of the input, a point on the right of the output. */
+.card.shape-input .head { padding: 0 22px 0 30px; }
+.card.shape-input .foot { padding: 0 24px 0 28px; }
+.card.shape-output .head { padding: 0 34px 0 14px; }
+.card.shape-output .foot { padding: 0 30px 0 12px; }
 .card.shape-flow .head { padding: 0 22px 0 22px; }
 .card.shape-flow .foot { padding: 0 20px; }
 .card.shape-http .head { padding: 0 26px 0 22px; }
@@ -1135,3 +1141,83 @@ pre.plain { margin-top: 8px; }
 .expects .ew { max-width: 14em; color: var(--muted); text-align: right; overflow-wrap: anywhere; }
 .row.tr .name { white-space: normal; overflow-wrap: anywhere; }
 .row.run .who > span.tn { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+
+/* ---- Components: drawn like workflows, with an input and an output for ends. ---- */
+
+.crumbkind { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+
+/* The list of components on the left: the silhouette of each one's kind. */
+.row.comp { grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 10px; }
+.row.comp .tile.kt { grid-row: 1 / span 2; width: 28px; height: 28px; }
+.row.comp .sub { grid-column: 2; }
+.row.comp .aside { grid-column: 3; grid-row: 2; }
+.row.comp .flag, .row.comp .flags { grid-column: 3; grid-row: 1; }
+
+.inspector .lede { margin: 0; font-size: 14px; line-height: 1.5; }
+
+/* What a component takes and gives back: a name and a type per row. */
+.io { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: 10px; background: var(--raised); overflow: hidden; }
+.io li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 11px; }
+.io li + li { border-top: 1px solid var(--border); }
+.ioname { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.iotype { flex: none; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+
+/* The steps that use a component: each opens that step. */
+.usedby { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.use {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--raised);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+.use:hover { border-color: var(--accent); }
+.use .uwho { min-width: 0; overflow: hidden; color: var(--text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.use .usep { color: var(--faint); }
+.use .ustep { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.use .utag { flex: none; margin-left: auto; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.use svg { flex: none; }
+
+/* From a step to the component it uses. */
+.compcard {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--raised);
+  text-align: left;
+  cursor: pointer;
+}
+.compcard:hover { border-color: var(--accent); }
+.compcard .tile.kt { width: 34px; height: 34px; }
+.compcard .ctext { display: block; min-width: 0; }
+.compcard .ctext > span { display: block; overflow-wrap: anywhere; }
+.compcard .cname { font-size: 13px; font-weight: 650; }
+.compcard .cdesc { margin-top: 1px; color: var(--muted); font-size: 12.5px; }
+.compcard .cmeta { margin-top: 2px; color: var(--faint); font-size: 11.5px; }
+.compcard .copen { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 12px; font-weight: 650; }
+
+/* Over the save bar of a component: what a save reaches. */
+.savebar .shared {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 9px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 12px;
+}
+.savebar .shared svg { flex: none; margin-top: 2px; color: var(--accent); }
