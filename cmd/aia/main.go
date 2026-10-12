@@ -7,17 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"aia/internal/ai"
 	"aia/internal/engine"
+	"aia/internal/server"
 	"aia/internal/workflow"
 )
 
@@ -32,7 +36,7 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(validateCmd(), runCmd(), testCmd())
+	root.AddCommand(validateCmd(), runCmd(), testCmd(), serveCmd())
 	err := loadDotEnv(".env")
 	if err == nil {
 		err = root.Execute()
@@ -191,6 +195,96 @@ func testCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show what every step did in each test")
 	return cmd
+}
+
+func serveCmd() *cobra.Command {
+	var addr string
+	cmd := &cobra.Command{
+		Use:   "serve [path...]",
+		Short: "Stay running and run workflows when their triggers fire",
+		Long: "Stay running and run workflows when their triggers fire: a POST request to a\n" +
+			"workflow's webhook path, or its cron schedule. Steps run for real, as with run.\n\n" +
+			"Each path is a workflow file, or a directory that is searched for workflow.yaml\n" +
+			"files (default: the current directory). Restart the server to pick up changes.\n\n" +
+			"A webhook request's JSON body becomes trigger.body. The server answers 202 at\n" +
+			"once and runs the workflow in the background; add ?wait=true to get the finished\n" +
+			"run back instead.\n\n" +
+			"If AIA_TOKEN is set, every webhook request must carry it as a bearer token. The\n" +
+			"server only listens beyond this machine when that token is set.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				args = []string{"."}
+			}
+			workflows, err := workflow.Discover(args...)
+			if err != nil {
+				return err
+			}
+			token := os.Getenv("AIA_TOKEN")
+			if token == "" && !loopback(addr) {
+				return fmt.Errorf("refusing to listen on %s without AIA_TOKEN: anyone who can reach it could run these workflows.\n"+
+					"Set AIA_TOKEN, or listen on 127.0.0.1", addr)
+			}
+
+			logger := log.New(os.Stdout, "", log.Ltime)
+			srv, err := server.New(workflows, server.Options{
+				Model: ai.NewRouter(),
+				HTTP:  &http.Client{Timeout: 30 * time.Second},
+				Env:   environ(),
+				Token: token,
+				Log:   logger.Printf,
+			})
+			if err != nil {
+				return err
+			}
+
+			listener, err := net.Listen("tcp", addr)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("aia is serving on http://%s\n", listener.Addr())
+			for _, route := range srv.Routes() {
+				fmt.Println("  " + route)
+			}
+			if token == "" {
+				fmt.Println("  no AIA_TOKEN set: requests from this machine are accepted without one")
+			}
+
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			httpSrv := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second}
+			stopSchedule := srv.Start()
+			go func() {
+				<-ctx.Done()
+				logger.Printf("stopping: waiting for runs in progress")
+				grace, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				httpSrv.Shutdown(grace)
+			}()
+
+			err = httpSrv.Serve(listener)
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
+			}
+			stopSchedule()
+			srv.Wait()
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "address to listen on")
+	return cmd
+}
+
+// loopback reports whether addr can only be reached from this machine.
+func loopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func target(args []string) string {

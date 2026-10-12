@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/robfig/cron/v3"
+
 	"aia/internal/ai"
 	"aia/internal/expr"
 )
@@ -108,8 +110,8 @@ func (c *checker) trigger() {
 	}
 	if t.Cron != "" {
 		set++
-		if len(strings.Fields(t.Cron)) != 5 {
-			c.addf(c.w.line("trigger", "cron"), "trigger: cron must have five fields (minute hour day month weekday)")
+		if _, err := cron.ParseStandard(t.Cron); err != nil {
+			c.addf(c.w.line("trigger", "cron"), "trigger: cron %q is not a schedule of five fields (minute hour day month weekday)", t.Cron)
 		}
 	}
 	if t.Manual {
