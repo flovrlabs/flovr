@@ -249,9 +249,13 @@ func remove(lines []line, parent, k, v *yaml.Node) ([]line, error) {
 		}
 		start--
 	}
-	// Where the entry stood between two blank lines, one of them goes too.
+	// Where the entry stood between two blank lines, one of them goes too,
+	// and where it ended the file, so do the blank lines that set it apart.
 	if start > 0 && blank(lines[start-1].text) && end < len(lines) && blank(lines[end].text) {
 		end++
+	}
+	for end == len(lines) && start > 0 && blank(lines[start-1].text) {
+		start--
 	}
 	return splice(lines, start, end, nil), nil
 }

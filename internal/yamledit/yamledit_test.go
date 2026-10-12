@@ -580,3 +580,10 @@ with:
 		t.Error("a value that cannot be written was accepted")
 	}
 }
+
+func TestRemovingTheLastKeyOfAFileTakesTheBlankLineBeforeIt(t *testing.T) {
+	out, err := Apply([]byte("a: 1\n\n# about b\nb:\n  - x\n"), Edit{Path: []any{"b"}, Remove: true})
+	if err != nil || string(out) != "a: 1\n" {
+		t.Errorf("got %q, %v", out, err)
+	}
+}
