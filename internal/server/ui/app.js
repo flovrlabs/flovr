@@ -184,6 +184,8 @@ function progress(run, id) {
   // waiting never answered, which is neither a success nor a failure.
   if (id === "response") return run.response ? "ok" : run.status === "ok" ? "skipped" : "pending";
   const done = run.steps.find((s) => s.id === id);
+  // A test that could not run did not run the step: the drawing does not blame it.
+  if (done && done.status === "failed" && couldNotRun(run)) return "pending";
   return done ? done.status : "pending";
 }
 
@@ -200,7 +202,9 @@ function innerRun(step, done, status) {
 
 const failedInside = (rows) => rows.find((r) => r.status === "failed") || null;
 
-const latestRun = (name) => state.runs.find((r) => r.workflow === name);
+// The latest run is the latest real one: a test is a run too, but it says
+// nothing about what the trigger last did.
+const latestRun = (name) => state.runs.find((r) => r.workflow === name && r.source !== "test");
 
 function render() {
   if (!state.workflows.some((w) => w.name === selected.workflow)) {
@@ -302,7 +306,7 @@ function renderSide(w) {
   });
 
   const runs = state.runs.filter((r) => r.workflow === w.name);
-  const rows = runs.map((r) => el("button", {
+  const rows = runs.map((r) => isTestRun(r) ? testRunRow(w, r) : el("button", {
       class: "row run " + r.status, type: "button", "aria-current": r.run === selected.run ? "true" : null,
       "aria-label": "Run at " + when(r.started) + ", " + r.status,
       onclick: () => go({ run: r.run === selected.run ? null : r.run, node: null }),
@@ -316,6 +320,7 @@ function renderSide(w) {
   $("side").replaceChildren(
     el("h2", {}, "Workflows"),
     el("div", { class: "list" }, workflows),
+    ...testsBlock(w),
     el("h2", {}, "Runs", runs.length ? el("span", { class: "count" }, runs.length) : null),
     runs.length
       ? el("div", { class: "list runs" }, rows)
@@ -514,6 +519,7 @@ function renderCanvas(moved) {
     if (node.id === "trigger") took = run ? when(run.started) : "";
     else if (node.id === "response") took = run ? (run.response ? String(run.response.status) : answerWait(run)) : String(w.respond.status);
     else if (done && done.status === "ok") took = duration(done.ms);
+    else if (done && couldNotRun(run)) took = "could not run";
     else if (done) took = done.status === "failed" ? "failed" : done.status;
     else if (run) took = run.status === "running" ? "waiting" : run.status === "ok" ? "no record" : "not reached";
     // A flow step holds steps of its own: how many, what they are, and in a run how each went.
@@ -630,6 +636,7 @@ function setZoom(value) {
 }
 
 function runBar(run) {
+  if (isTestRun(run)) return testBar(run);
   return el("div", { class: "runbar " + run.status },
     el("span", { class: "state " + run.status }, statusMark(run.status, 12), STATUS_TEXT[run.status] || run.status),
     el("span", { class: "mono id" }, run.run),
@@ -778,12 +785,13 @@ function workflowDetails(w) {
       w.input ? ["Takes", el("span", { class: "mono" }, w.input)] : null,
       w.respond ? ["Answers", [el("span", { class: "mono" }, w.respond.status), " ", showResponse()]] : null,
       ["Steps", w.steps.length],
-      ["Tests", w.tests + (w.tests ? ", run with aia test" : "")],
+      ["Tests", w.tests + (w.tests && !state.editable ? ", run with aia test" : "")],
       state.commit ? ["Version", el("span", { class: "mono" }, state.commit)] : null,
     ])),
     section("Steps", outline(w), el("p", { class: "muted small" }, "A step with an IF condition is skipped when the condition is false."),
       state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger, a step" + (w.respond ? " or the response" : "") + " to edit it. Saved changes are written to " + w.path + ".") : null,
       canAdd(w) ? el("button", { type: "button", class: "btn addstep", "data-focus": "add-outline", onclick: () => openAdd("-") }, icon("plus", 14), "Add a step", el("kbd", {}, "A")) : null),
+    testsSection(w),
     isWebhook(w) ? section("Try it", example(w), el("p", { class: "muted small" }, answerNote(w))) : null,
   ];
 }
@@ -794,7 +802,7 @@ function waterfall(w, run) {
   const total = Math.max(1, run.steps.reduce((sum, s) => sum + s.ms, 0));
   return el("ol", { class: "waterfall" }, w.steps.map((step, i) => {
     const done = run.steps.find((s) => s.id === step.id);
-    const status = done ? done.status : "pending";
+    const status = progress(run, step.id);
     const start = offset;
     if (done) offset += done.ms;
     const ran = done && (status === "ok" || status === "failed" || status === "running");
@@ -824,6 +832,7 @@ function waterfall(w, run) {
 }
 
 function runDetails(w, run) {
+  if (isTestRun(run)) return testRunDetails(w, run);
   return [
     header("workflow", "run", run.run, "Run of " + run.workflow),
     section("Result",
@@ -924,9 +933,10 @@ function stepDetails(w, step, run, hasForm) {
         done && done.status === "failed" && done.ms > 0 ? el("div", { class: "muted" }, "failed after " + duration(done.ms)) : null,
         done && done.status === "running" ? el("div", { class: "muted" }, "in progress") : null,
         status === "skipped" ? el("div", { class: "muted" }, "Its IF condition was false.") : null,
-        status === "pending" ? el("div", { class: "muted" }, run.status === "failed" ? "An earlier step failed first." : run.status === "ok" ? "This run has no record of this step: it was recorded before the step was added." : "The run did not get this far.") : null),
+        status === "pending" ? el("div", { class: "muted" }, couldNotRun(run) ? "The test could not run, so this step was not run." : run.status === "failed" ? "An earlier step failed first." : run.status === "ok" ? "This run has no record of this step: it was recorded before the step was added." : "The run did not get this far.") : null),
       done && done.detail ? el("p", { class: "detail mono" }, done.detail) : null,
-      done && done.error ? el("pre", { class: "error" }, done.error) : null) : null,
+      done && done.error ? el("pre", { class: couldNotRun(run) ? "plain" : "error" }, done.error) : null) : null,
+    checksAbout(w, run, step.id),
     step.kind === "flow" ? insideSection(step, run, done, status) : null,
     step.questions && output ? section("Answers", step.questions.map((q) => question(q, output[q.name]))) : null,
     step.questions && !output && !hasForm ? section("Questions", step.questions.map((q) => question(q, null))) : null,
@@ -994,6 +1004,7 @@ function responseDetails(w, run) {
   const chips = r.reads && r.reads.length ? section("Reads from", el("div", { class: "chips" }, r.reads.map((name) =>
     el("button", { type: "button", class: "pill link mono", title: "Show " + name, onclick: () => go({ node: name }) }, name)))) : null;
   const head = header("response", "response", "response", KIND_NAMES.response, true);
+  const about = checksAbout(w, run, "response");
   if (!run) {
     return [head,
       section("Answers with", pairs([["Status", el("span", { class: "mono" }, r.status)]]),
@@ -1009,13 +1020,14 @@ function responseDetails(w, run) {
       : "This run was not started by a request, so nobody was waiting for an answer.";
     return [head,
       section("In this run", panelTitled(run.status === "ok" ? "skipped" : "pending", run.status === "ok" ? "No caller" : "Not reached", el("div", { class: "muted" }, note))),
-      chips];
+      about, chips];
   }
   const headers = got.headers ? Object.entries(got.headers) : [];
   return [head,
     section("In this run", panelTitled("ok", "Answered " + got.status,
       got.status >= 400 ? el("div", { class: "muted" }, "A status the workflow chose itself, not a failure.") : el("div", { class: "muted" }, "Sent to the caller when the steps had finished."))),
     headers.length ? section("Headers", pairs(headers.map(([k, v]) => [k, el("span", { class: "mono" }, String(v))]))) : null,
+    about,
     section("Body", got.body !== undefined && got.body !== null ? jsonView(got.body) : el("p", { class: "muted" }, "No body.")),
     chips];
 }
@@ -1151,6 +1163,7 @@ function adopt(fresh) {
     pruneDrafts(w);
   }
   flagSig = "";
+  syncRounds();
 }
 
 // A field is known by the step it belongs to, its group and its label, not by
@@ -1444,7 +1457,11 @@ function flagFor(x) {
   if (!state.editable) return null;
   if (x.problem) return el("span", { class: "flag problem", title: "The file has a problem: " + x.problem, role: "img", "aria-label": "The file has a problem" }, "!");
   const n = dirtyCount(x.name);
-  return n ? el("span", { class: "flag edit", title: plural(n, "unsaved change"), role: "img", "aria-label": plural(n, "unsaved change") }) : null;
+  const testing = roundActive(x.name);
+  if (!n && !testing) return null;
+  return el("span", { class: "flags" },
+    testing ? el("span", { class: "flag testing", title: "Tests are running", role: "img", "aria-label": "Tests are running" }) : null,
+    n ? el("span", { class: "flag edit", title: plural(n, "unsaved change"), role: "img", "aria-label": plural(n, "unsaved change") }) : null);
 }
 
 function changesChip() {
@@ -2129,6 +2146,425 @@ async function removeStep(name, id) {
   uiTick++;
   shown = "";
   render();
+}
+
+// ---- tests ----
+//
+// A test is shown as a run (source "test", with the test's name and its
+// checks). What this page adds is the round: the tests one press of a button
+// started, followed until each has finished. A round lives here, by workflow,
+// not in the page, so the poll, a trip to another run or step, or another
+// workflow does not lose it. Each test of a round is told apart from the
+// others by the run id the server answered with; a run that is not in the
+// list of runs yet is still waiting for its turn.
+
+const rounds = {};      // workflow -> { items: [{ run, test, index, last }], rev, unsaved, told }
+const testState = {};   // workflow -> { starting, error }
+
+const testsOf = (name) => testState[name] || (testState[name] = { starting: false, error: null });
+const isTestRun = (r) => !!r && r.source === "test";
+const couldNotRun = (r) => isTestRun(r) && verdictOf(r) === "unrun";
+const canTest = (w) => !!w && state.editable && !w.problem && (w.cases || []).length > 0;
+const COULD_NOT_RUN = "The test could not run";
+
+// How a test ended is more than ok or failed. A failed test either did not
+// get what it expected from steps that all worked, or a step failed, or it
+// could not run at all, which says nothing about the workflow or the test.
+const VERDICT = {
+  waiting: { mark: "pending", word: "Waiting for its turn", short: "waiting" },
+  running: { mark: "running", word: "Running", short: "running" },
+  passed: { mark: "ok", word: "Passed", short: "passed" },
+  unmet: { mark: "failed", word: "Expectation not met", short: "not met" },
+  broke: { mark: "failed", word: "A step failed", short: "step failed" },
+  unrun: { mark: "skipped", word: "Could not run", short: "could not run" },
+};
+
+function verdictOf(run) {
+  if (!run) return "waiting";
+  if (run.status === "running") return "running";
+  if (run.status === "ok") return "passed";
+  const checks = run.checks || [];
+  if (!checks.length && (run.error || "").startsWith(COULD_NOT_RUN)) return "unrun";
+  if (!checks.length || run.steps.some((s) => s.status === "failed")) return "broke";
+  return "unmet";
+}
+
+const unmetOf = (run) => (run.checks || []).filter((c) => c.failure);
+const rowTone = (v) => ({ passed: "ok", unmet: "failed", broke: "failed", unrun: "unrun", running: "running", waiting: "pending" }[v]);
+
+// testOutcome says in a few words what a test run came to.
+function testOutcome(r) {
+  const v = verdictOf(r), n = (r.checks || []).length;
+  if (v === "passed") return n ? (n === 1 ? "The expectation was met" : "All " + n + " expectations met") : "Ran without failing";
+  if (v === "unmet") return "Not met: " + unmetOf(r).map((c) => c.key).join(", ");
+  if (v === "unrun") return "Could not run";
+  return outcome(r);
+}
+
+function testRunRow(w, r) {
+  const v = verdictOf(r), V = VERDICT[v];
+  return el("button", {
+      class: "row run test " + rowTone(v), type: "button", "aria-current": r.run === selected.run ? "true" : null,
+      "aria-label": "Test " + r.test + ", " + V.word + ", " + when(r.started),
+      title: r.test,
+      onclick: () => go({ run: r.run === selected.run ? null : r.run, node: null }),
+    },
+    statusMark(V.mark, 11),
+    el("span", { class: "name who" }, el("span", { class: "eyebrow" }, el("b", {}, "Test"), " · " + when(r.started)), el("span", { class: "tn" }, r.test)),
+    el("span", { class: "aside" }, v === "running" ? "running" : v === "unrun" ? "" : duration(r.ms)),
+    el("span", { class: "seg", "aria-hidden": "true" }, w.steps.map((s) => el("i", { class: progress(r, s.id) }))),
+    el("span", { class: "sub" }, testOutcome(r)));
+}
+
+// ---- the round ----
+
+function syncRounds() {
+  for (const [name, round] of Object.entries(rounds)) {
+    for (const it of round.items) {
+      const run = state.runs.find((r) => r.run === it.run);
+      if (run && run.status !== "running") it.last = { verdict: verdictOf(run), ms: run.ms };
+    }
+    const v = roundView(name);
+    if (v && !v.active && !round.told) {
+      round.told = true;
+      announce(name + ": " + roundSummary(v).spoken);
+    }
+  }
+}
+
+// roundView pairs each test of the round with its run, once there is one.
+function roundView(name) {
+  const round = rounds[name];
+  if (!round) return null;
+  const rows = round.items.map((it) => {
+    const run = state.runs.find((r) => r.run === it.run) || null;
+    return { it, run, verdict: run ? verdictOf(run) : it.last ? it.last.verdict : "waiting" };
+  });
+  return { round, rows, active: rows.some((r) => r.verdict === "waiting" || r.verdict === "running") };
+}
+
+const roundActive = (name) => { const v = roundView(name); return !!v && v.active; };
+
+function roundSummary(v) {
+  const count = (k) => v.rows.filter((r) => r.verdict === k).length;
+  const total = v.rows.length, passed = count("passed"), unmet = count("unmet"), broke = count("broke"), unrun = count("unrun");
+  const done = total - count("running") - count("waiting");
+  if (v.active) {
+    const sub = done + " of " + total + " done" + (passed ? ", " + passed + " passed" : "");
+    return { title: "Running tests", sub, mark: "running", tone: "running", spoken: sub };
+  }
+  if (total === 1) {
+    const V = VERDICT[v.rows[0].verdict];
+    return { title: V.word, sub: "", mark: V.mark, tone: rowTone(v.rows[0].verdict), spoken: V.word };
+  }
+  const bits = [];
+  if (unmet) bits.push(unmet + (unmet === 1 ? " expectation" : " expectations") + " not met");
+  if (broke) bits.push(plural(broke, "step failure"));
+  if (unrun) bits.push(unrun + " could not run");
+  const title = passed === total ? "All " + total + " passed" : passed + " of " + total + " passed";
+  const failed = unmet + broke > 0;
+  return { title, sub: bits.join(", "), mark: failed ? "failed" : passed === total ? "ok" : "skipped", tone: failed ? "failed" : passed === total ? "ok" : "unrun", spoken: title + (bits.length ? ", " + bits.join(", ") : "") };
+}
+
+// A quiet announcement for screen readers, so that a round finishing is not
+// only seen.
+let announcer = null;
+let announced = "";
+function announce(text) {
+  if (!announcer) {
+    announcer = el("div", { class: "sr", role: "status", "aria-live": "polite" });
+    document.body.append(announcer);
+  }
+  if (text === announced) return;
+  announced = text;
+  announcer.textContent = text;
+}
+
+async function startTests(name, index) {
+  const w = workflowByName(name), st = testsOf(name);
+  if (!canTest(w) || st.starting || roundActive(name)) return;
+  st.starting = true;
+  st.error = null;
+  uiTick++;
+  render();
+  let r = null;
+  try {
+    r = await request("POST", "/api/test", index == null ? { workflow: name } : { workflow: name, test: index });
+  } catch (err) {
+    r = null;
+  }
+  st.starting = false;
+  if (r && r.ok && Array.isArray(r.body.runs)) {
+    rounds[name] = {
+      items: r.body.runs.map((x, j) => ({ run: x.run, test: x.test, index: index == null ? j : index, last: null })),
+      rev: w.rev, unsaved: dirtyCount(name), told: false,
+    };
+    // Whoever pressed the button lands on the results.
+    afterRender = () => { const box = document.querySelector('[data-focus="round"]'); if (box) box.focus({ preventScroll: true }); };
+  } else {
+    st.error = r ? r.body.error || "The server answered " + r.status + "." : "Could not reach the server. Nothing was started.";
+  }
+  uiTick++;
+  render();
+  refresh();
+}
+
+function clearRound(name) {
+  delete rounds[name];
+  uiTick++;
+  afterRender = () => { const b = document.querySelector('[data-focus="side:test-all"]'); if (b) b.focus({ preventScroll: true }); };
+  render();
+}
+
+// Tests run the saved file. A person with unsaved changes may well want that
+// (to compare), so nothing is blocked: it is said plainly, with the choice to
+// save first.
+async function saveThenRun(name) {
+  if (!view || view.w.name !== name) return;
+  await saveCurrent();
+  const st = uiOf(name);
+  if (dirtyCount(name) > 0 || (st.notice && st.notice.kind !== "saved")) return;
+  startTests(name);
+}
+
+function startButton(w, index, label, focus, opts) {
+  const o = opts || {};
+  const busy = testsOf(w.name).starting || roundActive(w.name);
+  const b = el("button", {
+      type: "button", class: "btn" + (o.primary ? " primary" : "") + (o.block ? " block" : "") + (o.small ? " small" : ""), "data-focus": focus,
+      "aria-disabled": busy ? "true" : "false",
+      title: busy ? "Tests are running" : "Runs the saved file. Calls the models for real and sends no requests.",
+    }, icon("run", 12), label);
+  b.addEventListener("click", () => { if (!busy) startTests(w.name, index); });
+  return b;
+}
+
+function unsavedNote(w) {
+  const n = dirtyCount(w.name);
+  if (!n || !canTest(w)) return null;
+  const save = el("button", { type: "button", class: "btn small", "data-focus": "unsaved:" + w.name }, "Save, then run all tests");
+  save.addEventListener("click", () => saveThenRun(w.name));
+  return el("div", { class: "notice warn" },
+    el("div", { class: "nhead" }, el("strong", {}, "Unsaved changes are not tested")),
+    el("p", {}, "Tests run the saved file, " + w.path + ". Your " + plural(n, "unsaved change") + (n === 1 ? " is" : " are") + " not in it."),
+    // While a step is being added the save bar adds it, so Save is not offered here; nor while tests run.
+    selected.add || testsOf(w.name).starting || roundActive(w.name) ? null : save);
+}
+
+function testErrorNotice(w) {
+  const st = testsOf(w.name);
+  if (!st.error) return null;
+  const close = el("button", { type: "button", class: "x small", "aria-label": "Dismiss this message", title: "Dismiss" }, icon("close", 13));
+  close.addEventListener("click", () => { st.error = null; uiTick++; render(); });
+  return el("div", { class: "notice bad", role: "alert" }, el("div", { class: "nhead" }, el("strong", {}, "The tests did not start"), close), el("p", {}, st.error));
+}
+
+// ---- left: the round ----
+
+function testsBlock(w) {
+  const cases = w.cases || [];
+  if (!state.editable || !cases.length) return [];
+  const v = roundView(w.name);
+  return [
+    el("h2", {}, "Tests", el("span", { class: "count" }, cases.length)),
+    el("div", { class: "testbox" },
+      unsavedNote(w),
+      testErrorNotice(w),
+      v ? roundBox(w, v) : canTest(w)
+        ? el("div", { class: "idle" }, startButton(w, null, "Run all tests", "side:test-all", { block: true }),
+            el("p", { class: "tnote" }, "Calls the models for real. Sends no requests."))
+        : el("p", { class: "tnote" }, "Tests cannot run while the file has a problem.")),
+  ];
+}
+
+function roundBox(w, v) {
+  const s = roundSummary(v);
+  const clear = el("button", { type: "button", class: "x small", "aria-label": "Clear these results", title: "Clear these results", "data-focus": "round-clear" }, icon("close", 13));
+  clear.addEventListener("click", () => clearRound(w.name));
+  const list = v.rows.map((r) => {
+    const V = VERDICT[r.verdict], tone = rowTone(r.verdict);
+    const b = el("button", {
+        type: "button", class: "row tr " + tone, "data-focus": "round:" + r.it.run,
+        "aria-current": r.run && r.run.run === selected.run ? "true" : null,
+        "aria-disabled": r.run ? null : "true",
+        "aria-label": r.it.test + ", " + V.word,
+        title: r.run ? "Open this test's run" : "Waiting for its turn",
+      },
+      statusMark(V.mark, 11),
+      el("span", { class: "name" }, r.it.test),
+      // A test that did not pass says why, in a line of its own, which makes the word beside the name unnecessary.
+      r.run && (r.verdict === "unmet" || r.verdict === "broke" || r.verdict === "unrun") ? el("span", { class: "sub" }, testOutcome(r.run)) : el("span", { class: "aside" }, V.short));
+    b.addEventListener("click", () => { if (r.run) go({ run: r.run.run, node: null }); });
+    return b;
+  });
+  const stale = v.round.rev !== w.rev;
+  return el("div", { class: "roundbox " + s.tone, role: "group", tabindex: "-1", "data-focus": "round", "aria-label": "Test results: " + s.spoken },
+    el("div", { class: "rbtop" },
+      statusMark(s.mark, 13),
+      el("div", { class: "rbtext" }, el("div", { class: "rbtitle" }, s.title), s.sub ? el("div", { class: "rbsub" }, s.sub) : null),
+      clear),
+    el("span", { class: "seg", "aria-hidden": "true" }, v.rows.map((r) => el("i", { class: { passed: "ok", unmet: "failed", broke: "failed", unrun: "skipped", running: "running", waiting: "pending" }[r.verdict] }))),
+    el("div", { class: "rlist" }, list),
+    v.round.unsaved ? el("p", { class: "tnote" }, "Ran the saved file. " + plural(v.round.unsaved, "unsaved change") + (v.round.unsaved === 1 ? " was" : " were") + " not in it.") : null,
+    stale ? el("p", { class: "tnote" }, "The file was saved after this round started.") : null,
+    !v.active && canTest(w) ? startButton(w, null, "Run all again", "side:test-all", { small: true }) : null);
+}
+
+// ---- the checks ----
+
+// stepOfKey names the step (or the trigger or response) a check is about: its
+// key is that id, or starts with it and a dot.
+function stepOfKey(w, key) {
+  const ids = ["trigger", ...w.steps.map((s) => s.id)];
+  if (w.respond) ids.push("response");
+  let best = null;
+  for (const id of ids) if ((key === id || key.startsWith(id + ".")) && (!best || id.length > best.length)) best = id;
+  return best;
+}
+
+const mono = (text) => el("span", { class: "mono" }, text);
+
+function checkRow(w, c, jump) {
+  const ok = !c.failure;
+  const id = stepOfKey(w, c.key);
+  const isStep = id === c.key;
+  const want = isStep && typeof c.want === "string" ? c.want : JSON.stringify(c.want);
+  // The failure starts with the key it is about: it is not said twice.
+  const failure = c.failure && c.failure.startsWith(c.key + ": ") ? c.failure.slice(c.key.length + 2) : c.failure;
+  return el("li", { class: "check " + (ok ? "ok" : "failed") },
+    statusMark(ok ? "ok" : "failed", 10),
+    el("div", { class: "cbody" },
+      el("div", { class: "ckey mono" }, el("span", { class: "sr" }, ok ? "Met: " : "Not met: "), c.key),
+      ok ? el("div", { class: "cwant" }, isStep ? "Expected it to be " : "Expected ", mono(want)) : el("div", { class: "cfail mono" }, failure)),
+    jump && id ? el("button", { type: "button", class: "pill link", title: "Show " + id + " in this run", onclick: () => go({ node: id }) }, "Show " + id) : null);
+}
+
+function checkList(w, checks, jump) {
+  return el("ul", { class: "checks" }, checks.map((c) => checkRow(w, c, jump)));
+}
+
+// checksAbout lists, on a step in a test's run, the checks that are about it.
+function checksAbout(w, run, id) {
+  if (!isTestRun(run)) return null;
+  const mine = (run.checks || []).filter((c) => stepOfKey(w, c.key) === id);
+  if (!mine.length) return null;
+  return section("Checks on this step", checkList(w, mine, false), el("p", { class: "muted small" }, "From the test ", el("span", { class: "mono" }, run.test), "."));
+}
+
+// ---- centre and right: a test's run ----
+
+function testBar(run) {
+  const v = verdictOf(run), V = VERDICT[v];
+  const allWell = v === "unmet" && !run.steps.some((s) => s.status === "failed");
+  return el("div", { class: "runbar " + rowTone(v) },
+    el("span", { class: "state " + rowTone(v) }, statusMark(V.mark, 12), V.word),
+    el("span", { class: "ttag" }, "Test"),
+    el("span", { class: "id" }, run.test),
+    allWell ? el("span", { class: "meta" }, "every step succeeded") : null,
+    el("span", { class: "meta" }, when(run.started)),
+    v !== "running" && v !== "unrun" ? el("span", { class: "meta" }, "took " + duration(run.ms)) : null,
+    el("button", { type: "button", class: "ghost", onclick: () => go({ run: null, node: null }) }, "Close run", el("kbd", {}, "Esc")));
+}
+
+function testRunDetails(w, run) {
+  const v = verdictOf(run), V = VERDICT[v];
+  const checks = run.checks || [], unmet = unmetOf(run);
+  const failedStep = run.steps.find((s) => s.status === "failed");
+  const idx = (w.cases || []).findIndex((c) => c.name === run.test);
+  const spec = idx >= 0 ? w.cases[idx] : null;
+  let panel;
+  if (v === "passed") panel = panelTitled("ok", "Passed", el("div", { class: "muted" }, (checks.length ? (checks.length === 1 ? "The expectation was met." : "All " + checks.length + " expectations were met.") : "Every step ran.") + " Took " + duration(run.ms) + "."));
+  else if (v === "unmet") panel = panelTitled("failed", "Expectation not met", el("div", { class: "muted" },
+    unmet.length + " of " + checks.length + (checks.length === 1 ? " expectation was" : " expectations were") + " not met. "
+    + (failedStep ? "" : "Every step ran without failing: the workflow did what it does, but not what the test expects.")));
+  else if (v === "broke") panel = panelTitled("failed", "A step failed", el("div", { class: "muted" },
+    (failedStep ? "Step " + failedStep.id + " failed, so " : "The workflow failed, so ") + "the expectations were not checked."));
+  else if (v === "unrun") {
+    panel = panelTitled("skipped", "Could not run", el("div", { class: "muted" }, "This says nothing about the workflow or the test: nothing was checked, and nothing here failed."));
+    panel.classList.add("unrun");
+  } else panel = panelTitled("running", "Running", el("div", { class: "muted" }, plural(run.steps.filter((s) => s.status === "ok").length, "step") + " done"));
+
+  const again = spec && canTest(w) ? startButton(w, idx, "Run this test again", "insp:test-again", { small: true }) : null;
+  return [
+    header("workflow", "run", run.test, "Test run of " + run.workflow),
+    section("Result", panel,
+      run.error ? el("pre", { class: v === "unrun" ? "plain" : "error" }, run.error) : null,
+      again ? el("div", { class: "againrow" }, again) : null,
+      unsavedNote(w),
+      // A test that could not run called no model, and one still running has not finished calling them.
+      v === "unrun" ? null : el("p", { class: "muted small" },
+        v === "running" ? "The models are called for real. HTTP steps are not sent." : "The models were called for real. HTTP steps were not sent.")),
+    checks.length ? section("Expectations" + (checks.length ? " (" + checks.length + ")" : ""), checkList(w, checks, true),
+      el("p", { class: "muted small" }, "Select Show to see the step a check is about.")) : null,
+    section("Steps", waterfall(w, run), el("p", { class: "muted small" }, "Select a step, here or on the drawing, to see what it produced.")),
+    run.trigger !== undefined ? section("Trigger payload", jsonView(run.trigger), spec ? el("p", { class: "muted small" }, "From the fixture ", mono(spec.fixture), ".") : null) : null,
+    section("About this run", pairs([
+      ["Run", mono(run.run)],
+      ["Test", run.test],
+      spec ? ["Fixture", mono(spec.fixture)] : null,
+      run.commit ? ["Version", mono(run.commit)] : null,
+    ])),
+  ];
+}
+
+// ---- right: the tests of a workflow, without running anything ----
+
+function latestTestRun(name, test) {
+  let best = null;
+  for (const r of state.runs) if (r.workflow === name && isTestRun(r) && r.test === test && (!best || r.started > best.started)) best = r;
+  return best;
+}
+
+function testsSection(w) {
+  if (!state.editable) return null;
+  const cases = w.cases || [];
+  if (!cases.length) {
+    return section("Tests", el("div", { class: "emptystate" },
+      el("div", { class: "etitle" }, "No tests yet"),
+      el("p", {}, "Tests are written under ", mono("tests:"), " in ", mono(w.path), ". Each names a fixture, a sample request, and what to expect of the steps and what they put out."),
+      el("p", { class: "muted small" }, "Write them in your editor and commit. This page notices by itself, and they appear here.")));
+  }
+  const v = roundView(w.name);
+  return section("Tests",
+    el("p", { class: "muted" }, "Tests call the AI models for real, so they check what the model actually answers. No HTTP request is sent. They run the saved file."),
+    canTest(w) ? el("div", { class: "testrow" }, startButton(w, null, "Run all tests", "ov:test-all", { primary: true })) : el("p", { class: "muted small" }, "Tests cannot run while the file has a problem."),
+    unsavedNote(w),
+    testErrorNotice(w),
+    el("ul", { class: "tcases" }, cases.map((c, i) => testCase(w, c, i, v))));
+}
+
+function testCase(w, c, i, v) {
+  const item = v ? v.rows.find((r) => r.it.index === i && (r.verdict === "waiting" || r.verdict === "running")) : null;
+  const last = latestTestRun(w.name, c.name);
+  const verdict = item ? item.verdict : last ? verdictOf(last) : null;
+  const V = verdict ? VERDICT[verdict] : null;
+  const finished = !item && last && last.status !== "running" ? last : null;
+  let line;
+  if (!verdict) line = "Not run yet";
+  else if (item) line = V.word;
+  else line = V.word + " · " + when(last.started);
+  const open = last && !item ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ run: last.run, node: null }) }, "Open run") : null;
+  const run = canTest(w) ? el("button", {
+      type: "button", class: "btn small", "data-focus": "ov:test:" + i, "aria-label": "Run test: " + c.name,
+      "aria-disabled": testsOf(w.name).starting || roundActive(w.name) ? "true" : "false",
+      title: "Runs the saved file. Calls the models for real and sends no requests.",
+      onclick: () => { if (!(testsOf(w.name).starting || roundActive(w.name))) startTests(w.name, i); },
+    }, icon("run", 11), "Run") : null;
+  const checks = finished ? finished.checks || [] : [];
+  return el("li", { class: "tcase " + (verdict ? rowTone(verdict) : "") },
+    el("div", { class: "thead" }, statusMark(V ? V.mark : "pending", 12), el("span", { class: "tname" }, c.name), run),
+    el("div", { class: "tfix mono" }, c.fixture),
+    el("div", { class: "tlast" }, line, open ? [" · ", open] : null),
+    finished && verdict === "unmet" ? el("div", { class: "tlast bad" }, "Not met: " + unmetOf(finished).map((x) => x.key).join(", ")) : null,
+    el("ul", { class: "expects", "aria-label": "Expectations of " + c.name }, (c.expect || []).map((e) => {
+      const got = checks.find((x) => x.key === e.key);
+      const isStep = w.steps.some((s) => s.id === e.key);
+      const want = isStep && typeof e.want === "string" ? e.want : JSON.stringify(e.want);
+      return el("li", { class: got ? (got.failure ? "failed" : "ok") : "" },
+        statusMark(got ? (got.failure ? "failed" : "ok") : "pending", 9),
+        el("span", { class: "ek mono" }, got ? el("span", { class: "sr" }, got.failure ? "Not met: " : "Met: ") : null, e.key),
+        el("span", { class: "ew mono" }, want));
+    })));
 }
 
 // ---- the changes view ----

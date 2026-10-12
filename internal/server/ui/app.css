@@ -1028,3 +1028,110 @@ button.ihead:hover { background: var(--raised); }
 .waterfall .nest .bar { height: 6px; border-radius: 3px; }
 
 .addform .flownote { margin: -4px 0 12px; }
+
+/* ---- Tests: only drawn when the server runs with --edit. ---- */
+
+.sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+.flags { grid-column: 3; grid-row: 1; justify-self: end; display: inline-flex; align-items: center; gap: 6px; }
+.flags .flag { grid-column: auto; grid-row: auto; }
+.flag.testing { width: 8px; height: 8px; border-radius: 50%; background: var(--running); animation: pulse 1.3s ease-in-out infinite; }
+
+.btn.small { height: 26px; padding: 0 10px; font-size: 12.5px; }
+.btn.block { width: 100%; justify-content: center; }
+.againrow { margin-top: 10px; }
+
+/* Left: the tests of the workflow and the round just started. */
+.testbox { display: grid; gap: 8px; padding: 0 16px 6px; }
+.testbox .notice { max-height: none; }
+.testbox .notice .btn { margin-top: 8px; }
+.tnote { margin: 0; color: var(--faint); font-size: 12px; }
+.idle { display: grid; gap: 6px; }
+.roundbox { padding: 10px 10px 10px; border: 1px solid var(--border); border-radius: 11px; background: var(--raised); }
+.roundbox:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.roundbox.ok { border-color: color-mix(in srgb, var(--ok) 30%, var(--border)); background: var(--ok-soft); }
+.roundbox.failed { border-color: color-mix(in srgb, var(--failed) 40%, var(--border)); background: var(--failed-soft); }
+.roundbox.running { border-color: color-mix(in srgb, var(--running) 35%, var(--border)); background: var(--running-soft); }
+.rbtop { display: flex; align-items: flex-start; gap: 9px; }
+.rbtop .mark { width: 20px; height: 20px; margin-top: 1px; }
+.rbtop .mark svg { width: 12px; height: 12px; }
+.rbtext { flex: 1; min-width: 0; }
+.rbtitle { font-size: 14px; font-weight: 650; line-height: 1.35; }
+.roundbox.ok .rbtitle { color: var(--ok); }
+.roundbox.failed .rbtitle { color: var(--failed); }
+.roundbox.running .rbtitle { color: var(--running); }
+.rbsub { color: var(--muted); font-size: 12px; }
+.roundbox .x.small { margin: -1px -2px 0 0; }
+.roundbox .seg { margin: 9px 0 6px; }
+.roundbox .seg i { background: var(--ok); }
+.roundbox .seg i.failed { background: var(--failed); }
+.roundbox .seg i.skipped { background: var(--border-strong); }
+.roundbox .seg i.pending { background: var(--surface); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.roundbox .seg i.running { background: var(--running); }
+.roundbox .tnote { margin-top: 6px; }
+.roundbox .btn { margin-top: 8px; }
+.rlist { display: grid; gap: 1px; }
+.row.tr { margin: 0; padding: 6px 7px; grid-template-columns: auto minmax(0, 1fr) auto; }
+.row.tr .sub { grid-column: 2 / -1; }
+.row.tr.failed .sub, .row.tr.failed .aside { color: var(--failed); }
+.row.tr.ok .aside { color: var(--ok); }
+.row.tr.running .aside { color: var(--running); }
+.row.tr.pending .aside { color: var(--faint); }
+.row.tr[aria-disabled="true"] { cursor: default; }
+.roundbox .row:hover { background: var(--surface); }
+.roundbox .row[aria-current="true"] { background: var(--surface); }
+.row.tr .mark { width: 16px; height: 16px; }
+
+/* A test among the runs: its name instead of a time, and the word Test. */
+.row.run .who { display: block; min-width: 0; overflow: visible; }
+.row.run .who > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.run .who .eyebrow { color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.3; }
+.row.run .who .eyebrow b { color: var(--accent); font-weight: 700; }
+.row.run .who .tn { font-weight: 600; }
+.row.run.unrun .sub { color: var(--muted); }
+.row.run.test .seg i.pending { background: var(--sunken); }
+
+/* A test's run, in the bar over the drawing and in the details. */
+.ttag { padding: 0 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font: 700 9.5px/16px var(--sans); letter-spacing: 0.06em; text-transform: uppercase; }
+.runbar .state.unrun { color: var(--muted); }
+.status-panel.unrun { border-style: dashed; }
+.status-panel.unrun .big { color: var(--muted); }
+pre.plain { margin-top: 8px; }
+.status-panel + pre.plain { margin-top: 8px; }
+
+.checks { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.check { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 9px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--raised); }
+.check.failed { border-color: color-mix(in srgb, var(--failed) 40%, var(--border)); background: var(--failed-soft); }
+.check .mark { width: 16px; height: 16px; margin-top: 1px; }
+.check .cbody { min-width: 0; }
+.check .ckey { font-weight: 600; overflow-wrap: anywhere; }
+.check .cwant { margin-top: 1px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.check .cfail { margin-top: 3px; color: var(--failed); font-size: 12px; overflow-wrap: anywhere; }
+.check .pill { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Right: the tests of a workflow, read without running them. */
+.testrow { margin: 10px 0; }
+.testrow + .notice, .notice + .notice { margin-top: 10px; }
+.inspector .notice .btn { margin-top: 8px; }
+.tcases { display: grid; gap: 10px; margin: 12px 0 0; padding: 0; list-style: none; }
+.tcase { padding: 11px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--raised); }
+.tcase.failed { border-color: color-mix(in srgb, var(--failed) 40%, var(--border)); }
+.tcase.ok { border-color: color-mix(in srgb, var(--ok) 28%, var(--border)); }
+.thead { display: flex; align-items: center; gap: 9px; }
+.tname { flex: 1; min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
+.tfix { margin: 2px 0 0 27px; color: var(--faint); font-size: 11.5px; overflow-wrap: anywhere; }
+.tlast { margin: 6px 0 0 27px; color: var(--muted); font-size: 12px; }
+.tlast.bad, .tcase.failed .tlast { color: var(--failed); }
+.tlast.bad { margin-top: 2px; overflow-wrap: anywhere; }
+.tcase.ok .tlast { color: var(--ok); }
+.tcase.running .tlast { color: var(--running); }
+.tlast .linkbtn { font-size: 12px; }
+.expects { margin: 9px 0 0; padding: 8px 0 0; border-top: 1px solid var(--border); list-style: none; }
+.expects li { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: baseline; gap: 8px; padding: 3px 0; }
+.expects .mark { width: 14px; height: 14px; align-self: center; }
+.expects .mark svg { width: 9px; height: 9px; }
+.expects .ek { overflow-wrap: anywhere; }
+.expects li.failed .ek { color: var(--failed); }
+.expects .ew { max-width: 14em; color: var(--muted); text-align: right; overflow-wrap: anywhere; }
+.row.tr .name { white-space: normal; overflow-wrap: anywhere; }
+.row.run .who > span.tn { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
