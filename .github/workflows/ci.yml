@@ -62,6 +62,10 @@ jobs:
           for dir in examples/*/; do
             "$RUNNER_TEMP/aia" test "$dir" || failed=1
           done
+          # Components have tests of their own.
+          for file in $(find examples -name component.yaml); do
+            "$RUNNER_TEMP/aia" test "$file" || failed=1
+          done
           exit $failed
       - name: Report skipped tests
         if: env.OPENROUTER_API_KEY == ''

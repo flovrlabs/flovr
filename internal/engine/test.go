@@ -71,6 +71,71 @@ func (e *Engine) Test(ctx context.Context, w *workflow.Workflow, t workflow.Test
 	return res, err
 }
 
+// TestComponent runs the component on its own with t's input and compares
+// the result with what t expects, under the same conditions as Test.
+func (e *Engine) TestComponent(ctx context.Context, c *workflow.Component, t workflow.ComponentTest) (TestResult, error) {
+	res := TestResult{Name: t.Name}
+	if res.Name == "" {
+		res.Name = "test of " + c.Name
+	}
+	input, err := c.Values(t)
+	if err != nil {
+		return res, err
+	}
+
+	env := map[string]string{}
+	maps.Copy(env, e.Env)
+	for _, name := range c.EnvVars() {
+		if _, ok := env[name]; !ok {
+			env[name] = "env." + name
+		}
+	}
+	sandbox := &Engine{Model: e.Model, Env: env, StubHTTP: true}
+
+	start := time.Now()
+	step := StepResult{ID: c.Name, Kind: c.Kind(), Status: OK}
+	step.Output, step.Detail, step.Err = sandbox.call(ctx, c, input)
+	step.Duration = time.Since(start)
+	res.Duration = step.Duration
+
+	var unavailable *ai.UnavailableError
+	if errors.As(step.Err, &unavailable) {
+		return res, step.Err
+	}
+	if step.Err != nil {
+		step.Status = Failed
+		res.Steps = []StepResult{step}
+		res.Failures = []string{step.Err.Error()}
+		return res, nil
+	}
+	res.Steps = []StepResult{step}
+
+	results, err := expr.Vars("input", "output")
+	if err != nil {
+		return res, err
+	}
+	vars := map[string]any{"input": input, "output": step.Output, "env": env}
+	for _, key := range slices.Sorted(maps.Keys(t.Expect)) {
+		if failure := differs(results, key, t.Expect[key], vars); failure != "" {
+			res.Failures = append(res.Failures, failure)
+		}
+	}
+	return res, nil
+}
+
+// differs says how the value of the expression key differs from want, or is
+// empty if it does not.
+func differs(env *expr.Env, key string, want any, vars map[string]any) string {
+	got, err := env.EvalExpr(key, vars)
+	if err != nil {
+		return fmt.Sprintf("%s: %v", key, err)
+	}
+	if g, w := jsonText(got), jsonText(want); g != w {
+		return fmt.Sprintf("%s: expected %s, got %s", key, w, g)
+	}
+	return ""
+}
+
 // unmet lists the expectations that the finished run does not meet.
 func unmet(expect map[string]any, steps []StepResult, vars map[string]any) ([]string, error) {
 	status := map[string]Status{}

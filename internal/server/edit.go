@@ -25,10 +25,36 @@ import (
 
 // source is what the server knows of a workflow file the page may change.
 type source struct {
-	rev     string    // identifies the content being served
-	mod     time.Time // the file as it was when last read
-	size    int64
-	problem string // why what the file holds now is not being served
+	rev     string // identifies the content of the workflow file being served
+	built   string // identifies that and the content of the component files
+	files   []seen // the workflow file and the component files, as last read
+	problem string // why what the files hold now is not being served
+}
+
+// seen is a file as it was when last looked at.
+type seen struct {
+	path string
+	mod  time.Time
+	size int64
+}
+
+func look(path string) seen {
+	info, err := os.Stat(path)
+	if err != nil {
+		return seen{path: path, size: -1}
+	}
+	return seen{path, info.ModTime(), info.Size()}
+}
+
+// unchanged reports whether none of the files looks different from when it
+// was last read.
+func (s *source) unchanged() bool {
+	for _, f := range s.files {
+		if now := look(f.path); now.size != f.size || !now.mod.Equal(f.mod) {
+			return false
+		}
+	}
+	return true
 }
 
 // read loads the workflow file at path. It returns the source even if the
@@ -38,12 +64,26 @@ func read(path string) (*workflow.Workflow, *source, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, nil, err
-	}
 	w, err := workflow.Parse(path, data)
-	return w, &source{rev: revision(data), mod: info.ModTime(), size: info.Size()}, err
+	return w, sourceOf(path, data, w), err
+}
+
+// sourceOf describes the workflow file at path, which holds data, and the
+// component files that w, if it is not nil, was built from.
+func sourceOf(path string, data []byte, w *workflow.Workflow) *source {
+	src := &source{rev: revision(data), files: []seen{look(path)}}
+	all := sha256.New()
+	all.Write(data)
+	if w != nil {
+		for _, file := range w.Files() {
+			src.files = append(src.files, look(file))
+			content, _ := os.ReadFile(file)
+			fmt.Fprintf(all, "\x00%s\x00", file)
+			all.Write(content)
+		}
+	}
+	src.built = hex.EncodeToString(all.Sum(nil)[:8])
+	return src
 }
 
 func revision(data []byte) string {
@@ -51,26 +91,27 @@ func revision(data []byte) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// refresh takes up changes made to the workflow files since they were read,
-// by an editor or by git. A file that is no longer a valid workflow keeps
-// being served as it was, and the reason is kept for the page to show. The
-// caller holds s.mu.
+// refresh takes up changes made to the workflow files and the component
+// files they use since they were read, by an editor or by git. A workflow
+// whose files are no longer valid keeps being served as it was, and the
+// reason is kept for the page to show. The caller holds s.mu.
 func (s *Server) refresh() {
 	workflows := slices.Clone(s.live.Load().workflows)
 	changed := false
 	for i, w := range workflows {
 		src := s.sources[w.Path]
-		if info, err := os.Stat(w.Path); err == nil && info.ModTime().Equal(src.mod) && info.Size() == src.size {
+		// What made the files invalid may lie in a file not yet known of, so
+		// while there is a problem they are read every time.
+		if src.problem == "" && src.unchanged() {
 			continue
 		}
 		fresh, now, err := read(w.Path)
 		if now == nil {
-			src.problem, src.size = "the file cannot be read: "+err.Error(), -1
+			src.problem = "the file cannot be read: " + err.Error()
 			continue
 		}
-		src.mod, src.size = now.mod, now.size
-		if now.rev == src.rev {
-			src.problem = ""
+		if err == nil && now.built == src.built {
+			src.files, src.problem = now.files, ""
 			continue
 		}
 		if err == nil {
@@ -79,11 +120,13 @@ func (s *Server) refresh() {
 			_, err = route(next, s.opts.Env)
 		}
 		if err != nil {
+			// The times are kept, so the files are not read again for
+			// nothing once the problem is gone.
 			src.problem = err.Error()
 			continue
 		}
 		workflows[i] = fresh
-		src.rev, src.problem = now.rev, ""
+		*src = *now
 		changed = true
 		s.opts.Log("%s reloaded from %s", fresh.Name, fresh.Path)
 	}
@@ -212,7 +255,7 @@ func (s *Server) edit(req editRequest) (int, any) {
 	case revision(data) != src.rev:
 		// The file changed without its time or size showing it, so it is
 		// read again whatever they say.
-		src.size = -1
+		src.files[0].size = -1
 		return http.StatusConflict, fail(stale)
 	case req.Rev != src.rev:
 		return http.StatusConflict, fail(stale)
@@ -265,10 +308,7 @@ func (s *Server) edit(req editRequest) (int, any) {
 			if err != nil {
 				return http.StatusInternalServerError, fail("%v", err)
 			}
-			if info, err := os.Stat(w.Path); err == nil {
-				src.mod, src.size = info.ModTime(), info.Size()
-			}
-			src.rev = revision(out)
+			*src = *sourceOf(w.Path, out, fresh)
 			s.serve(next)
 			s.opts.Log("%s changed from the page: %s", fresh.Name, strings.Join(changed, ", "))
 			return http.StatusOK, map[string]any{"workflow": s.view(fresh)}

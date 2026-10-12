@@ -119,6 +119,11 @@ type stepView struct {
 	Fields    [][2]string    `json:"fields"` // label and value pairs describing it
 	Questions []questionView `json:"questions,omitempty"`
 	Edit      []fieldView    `json:"edit,omitempty"` // only when the page may change the files
+
+	// For a step that uses a component: the component's name and its path
+	// as the step gives it.
+	Component string `json:"component,omitempty"`
+	Uses      string `json:"uses,omitempty"`
 }
 
 // What a field holds, which decides how the page lets it be changed.
@@ -246,6 +251,24 @@ func describe(w *workflow.Workflow) workflowView {
 		}
 
 		edit(fieldView{Label: "Run only when", Path: at("when"), Value: s.When, Kind: kindExpression, Optional: true})
+		if c := s.Component(); c != nil {
+			// What the component does is shown but is not the workflow's to
+			// change; the input the step gives it is.
+			step.Component, step.Uses, step.Subtitle = c.Name, s.Use, c.Name
+			add("component", s.Use)
+			switch {
+			case c.AI != nil:
+				add("model", c.AI.Model)
+			case c.Decide != nil:
+				add("model", c.Decide.Model)
+				step.Questions = questions(c.Decide)
+			case c.HTTP != nil:
+				add("request", strings.ToUpper(c.HTTP.Method)+" "+c.HTTP.URL)
+			}
+			for _, p := range c.Input {
+				texts("Input", p.Name, at("with", p.Name), s.With[p.Name])
+			}
+		}
 		switch {
 		case s.AI != nil:
 			step.Subtitle = shortModel(s.AI.Model)
@@ -261,13 +284,10 @@ func describe(w *workflow.Workflow) workflowView {
 			add("model", s.Decide.Model)
 			edit(fieldView{Label: "Model", Path: at("decide", "model"), Value: s.Decide.Model})
 			texts("", "Input", at("decide", "input"), s.Decide.Input)
+			step.Questions = questions(s.Decide)
 			for _, name := range slices.Sorted(maps.Keys(s.Decide.Questions)) {
 				q := s.Decide.Questions[name]
 				spec := q.Spec()
-				step.Questions = append(step.Questions, questionView{
-					Name: name, Ask: q.Ask, Answers: answers(q),
-					Options: spec.Options, YesIf: spec.YesIf, NoIf: spec.NoIf,
-				})
 
 				in := func(path ...any) []any { return append(at("decide", "questions", name), path...) }
 				edit(fieldView{Label: "Question", Group: name, Path: in("ask"), Value: q.Ask})
@@ -307,6 +327,20 @@ func describe(w *workflow.Workflow) workflowView {
 		view.Steps = append(view.Steps, step)
 	}
 	return view
+}
+
+// questions describes what a decide step or component asks, by name.
+func questions(d *workflow.DecideStep) []questionView {
+	var views []questionView
+	for _, name := range slices.Sorted(maps.Keys(d.Questions)) {
+		q := d.Questions[name]
+		spec := q.Spec()
+		views = append(views, questionView{
+			Name: name, Ask: q.Ask, Answers: answers(q),
+			Options: spec.Options, YesIf: spec.YesIf, NoIf: spec.NoIf,
+		})
+	}
+	return views
 }
 
 // shortModel is a model's name without its provider and vendor.

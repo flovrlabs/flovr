@@ -84,11 +84,20 @@ func validateCmd() *cobra.Command {
 		Use:   "validate [workflow]",
 		Short: "Check a workflow file without running it",
 		Long: "Check a workflow file without running it: its structure, the prompt, schema and\n" +
-			"fixture files it refers to, and every expression.\n\n" +
+			"fixture files it refers to, the components it uses, and every expression.\n\n" +
 			"The argument is a workflow file or a directory containing workflow.yaml\n" +
-			"(default: the current directory).",
+			"(default: the current directory). A component is checked the same way: give\n" +
+			"its component.yaml or the directory containing it.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if workflow.IsComponent(target(args)) {
+				c, err := workflow.LoadComponent(target(args))
+				if err != nil {
+					return err
+				}
+				fmt.Printf("ok  %s  (component, %s, %s)\n", c.Path, count(len(c.Input), "input"), count(len(c.Tests), "test"))
+				return nil
+			}
 			w, err := workflow.Load(target(args))
 			if err != nil {
 				return err
@@ -110,6 +119,10 @@ func runCmd() *cobra.Command {
 			"(default: the current directory).",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if workflow.IsComponent(target(args)) {
+				return errors.New("run takes a workflow. A component runs as part of the workflows that use it; " +
+					"to try it on its own, give it tests and use: aia test " + target(args))
+			}
 			w, err := workflow.Load(target(args))
 			if err != nil {
 				return err
@@ -147,26 +160,45 @@ func testCmd() *cobra.Command {
 			"ai steps call the model for real. http steps are not sent, so the environment\n" +
 			"variables they need do not have to be set.\n\n" +
 			"The argument is a workflow file or a directory containing workflow.yaml\n" +
-			"(default: the current directory).",
+			"(default: the current directory). A component's own tests run the same way:\n" +
+			"give its component.yaml or the directory containing it.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			w, err := workflow.Load(target(args))
-			if err != nil {
-				return err
-			}
-			if len(w.Tests) == 0 {
-				fmt.Printf("%s has no tests\n", w.Name)
-				return nil
-			}
-
+			eng := &engine.Engine{Model: ai.NewRouter(), Env: environ()}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
 
-			fmt.Println(w.Name)
-			eng := &engine.Engine{Model: ai.NewRouter(), Env: environ()}
+			// tests holds one function per test, each running it.
+			var name string
+			var tests []func() (engine.TestResult, error)
+			if workflow.IsComponent(target(args)) {
+				c, err := workflow.LoadComponent(target(args))
+				if err != nil {
+					return err
+				}
+				name = c.Name
+				for _, t := range c.Tests {
+					tests = append(tests, func() (engine.TestResult, error) { return eng.TestComponent(ctx, c, t) })
+				}
+			} else {
+				w, err := workflow.Load(target(args))
+				if err != nil {
+					return err
+				}
+				name = w.Name
+				for _, t := range w.Tests {
+					tests = append(tests, func() (engine.TestResult, error) { return eng.Test(ctx, w, t) })
+				}
+			}
+			if len(tests) == 0 {
+				fmt.Printf("%s has no tests\n", name)
+				return nil
+			}
+
+			fmt.Println(name)
 			failed := 0
-			for _, t := range w.Tests {
-				res, err := eng.Test(ctx, w, t)
+			for _, run := range tests {
+				res, err := run()
 				if err != nil {
 					return fmt.Errorf("test %q could not run: %w", res.Name, err)
 				}
@@ -188,9 +220,9 @@ func testCmd() *cobra.Command {
 
 			fmt.Println()
 			if failed > 0 {
-				return fmt.Errorf("%d of %s failed", failed, count(len(w.Tests), "test"))
+				return fmt.Errorf("%d of %s failed", failed, count(len(tests), "test"))
 			}
-			fmt.Printf("%s passed\n", count(len(w.Tests), "test"))
+			fmt.Printf("%s passed\n", count(len(tests), "test"))
 			return nil
 		},
 	}

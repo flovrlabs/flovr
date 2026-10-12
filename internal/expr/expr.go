@@ -21,12 +21,17 @@ type Env struct{ cel *cel.Env }
 // NewEnv returns an environment in which expressions can refer to trigger,
 // env, and the outputs of the given steps.
 func NewEnv(steps []string) (*Env, error) {
+	return Vars(append([]string{"trigger"}, steps...)...)
+}
+
+// Vars returns an environment in which expressions can refer to env and to
+// values with the given names.
+func Vars(names ...string) (*Env, error) {
 	opts := []cel.EnvOption{
-		cel.Variable("trigger", cel.DynType),
 		cel.Variable("env", cel.MapType(cel.StringType, cel.StringType)),
 	}
-	for _, id := range steps {
-		opts = append(opts, cel.Variable(id, cel.DynType))
+	for _, name := range names {
+		opts = append(opts, cel.Variable(name, cel.DynType))
 	}
 	e, err := cel.NewEnv(opts...)
 	if err != nil {
@@ -183,14 +188,17 @@ var parser = sync.OnceValue(func() *cel.Env {
 
 // EnvVars returns the NAME of every env.NAME that the bare expression src
 // reads.
-func EnvVars(src string) []string {
+func EnvVars(src string) []string { return Fields(src, "env") }
+
+// Fields returns the NAME of every of.NAME that the bare expression src reads.
+func Fields(src, of string) []string {
 	var names []string
 	visit(src, func(e celast.Expr) {
 		if e.Kind() != celast.SelectKind {
 			return
 		}
 		sel := e.AsSelect()
-		if op := sel.Operand(); op.Kind() == celast.IdentKind && op.AsIdent() == "env" {
+		if op := sel.Operand(); op.Kind() == celast.IdentKind && op.AsIdent() == of {
 			names = append(names, sel.FieldName())
 		}
 	})
@@ -258,6 +266,13 @@ func stringify(v any) string {
 	}
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// Single reports whether src is one ${...} placeholder and nothing else. Its
+// value then keeps the type of what the placeholder yields.
+func Single(src string) bool {
+	parts, err := split(src)
+	return err == nil && len(parts) == 1 && parts[0].expr
 }
 
 type part struct {

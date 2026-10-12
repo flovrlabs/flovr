@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/robfig/cron/v3"
+	"go.yaml.in/yaml/v3"
 
 	"aia/internal/ai"
 	"aia/internal/expr"
@@ -21,29 +22,41 @@ var idRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // Methods are the request methods an http step can use.
 var Methods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
 
+// checker collects the problems of one workflow or component file.
 type checker struct {
-	w     *Workflow
+	path  string     // the file; paths written in it are relative to its directory
+	root  *yaml.Node // the parsed file, for line numbers
+	w     *Workflow  // nil for a component file
 	items []Problem
+
+	components map[string]*Component // those loaded so far, by path
 }
 
 func (c *checker) addf(line int, format string, args ...any) {
 	c.items = append(c.items, Problem{line, fmt.Sprintf(format, args...)})
 }
 
+func (c *checker) line(path ...any) int { return lineOf(c.root, path...) }
+
+// under returns the line of the value at path below the value at base.
+func (c *checker) under(base []any, path ...any) int {
+	return c.line(append(slices.Clone(base), path...)...)
+}
+
 func (c *checker) run() {
 	w := c.w
 	if w.Name == "" {
-		c.addf(w.line("name"), "name is required")
+		c.addf(c.line("name"), "name is required")
 	}
 	c.trigger()
 	if len(w.Steps) == 0 {
-		c.addf(w.line("steps"), "at least one step is required")
+		c.addf(c.line("steps"), "at least one step is required")
 	}
 
 	// ids holds the steps a later step may refer to.
 	var ids []string
 	for i, s := range w.Steps {
-		line := w.line("steps", i)
+		line := c.line("steps", i)
 		label := fmt.Sprintf("step %q", s.ID)
 		usable := false
 		switch {
@@ -67,26 +80,32 @@ func (c *checker) run() {
 		}
 		if s.When != "" {
 			if err := env.CheckCondition(s.When); err != nil {
-				c.addf(w.line("steps", i, "when"), "%s: when: %v", label, err)
+				c.addf(c.line("steps", i, "when"), "%s: when: %v", label, err)
 			}
 		}
 		kinds := 0
-		for _, present := range []bool{s.AI != nil, s.Decide != nil, s.HTTP != nil} {
+		for _, present := range []bool{s.AI != nil, s.Decide != nil, s.HTTP != nil, s.Use != ""} {
 			if present {
 				kinds++
 			}
 		}
+		base := []any{"steps", i}
 		switch {
 		case kinds > 1:
-			c.addf(line, "%s: a step can have only one of ai, decide, http", label)
+			c.addf(line, "%s: a step can have only one of ai, decide, http, use", label)
 		case s.AI != nil:
-			c.ai(i, label, s.AI, env)
+			c.ai(base, label, s.AI, env)
 		case s.Decide != nil:
-			c.decide(i, label, s.Decide, env)
+			c.decide(base, label, s.Decide, env)
 		case s.HTTP != nil:
-			c.http(i, label, s.HTTP, env)
+			c.http(base, label, s.HTTP, env)
+		case s.Use != "":
+			w.Steps[i].component = c.use(base, label, s, env)
 		default:
-			c.addf(line, "%s: needs one of ai, decide, http", label)
+			c.addf(line, "%s: needs one of ai, decide, http, use", label)
+		}
+		if s.With != nil && s.Use == "" {
+			c.addf(c.under(base, "with"), "%s: with is only for a step that has use", label)
 		}
 
 		if usable {
@@ -105,25 +124,26 @@ func (c *checker) trigger() {
 	if t.Webhook != "" {
 		set++
 		if !strings.HasPrefix(t.Webhook, "/") {
-			c.addf(c.w.line("trigger", "webhook"), "trigger: webhook must be a path starting with /")
+			c.addf(c.line("trigger", "webhook"), "trigger: webhook must be a path starting with /")
 		}
 	}
 	if t.Cron != "" {
 		set++
 		if _, err := cron.ParseStandard(t.Cron); err != nil {
-			c.addf(c.w.line("trigger", "cron"), "trigger: cron %q is not a schedule of five fields (minute hour day month weekday)", t.Cron)
+			c.addf(c.line("trigger", "cron"), "trigger: cron %q is not a schedule of five fields (minute hour day month weekday)", t.Cron)
 		}
 	}
 	if t.Manual {
 		set++
 	}
 	if set != 1 {
-		c.addf(c.w.line("trigger"), "trigger: needs exactly one of webhook, cron, manual")
+		c.addf(c.line("trigger"), "trigger: needs exactly one of webhook, cron, manual")
 	}
 }
 
-func (c *checker) ai(i int, label string, s *AIStep, env *expr.Env) {
-	at := func(field string) int { return c.w.line("steps", i, "ai", field) }
+// ai checks the ai part of the step or component at base.
+func (c *checker) ai(base []any, label string, s *AIStep, env *expr.Env) {
+	at := func(field string) int { return c.under(base, "ai", field) }
 
 	if s.Model == "" {
 		c.addf(at("model"), "%s: ai.model is required", label)
@@ -133,7 +153,7 @@ func (c *checker) ai(i int, label string, s *AIStep, env *expr.Env) {
 
 	if s.Prompt == "" {
 		c.addf(at("prompt"), "%s: ai.prompt is required", label)
-	} else if info, err := os.Stat(c.w.Resolve(s.Prompt)); err != nil || info.IsDir() {
+	} else if info, err := os.Stat(resolve(c.path, s.Prompt)); err != nil || info.IsDir() {
 		c.addf(at("prompt"), "%s: prompt file not found: %s", label, s.Prompt)
 	}
 
@@ -145,16 +165,16 @@ func (c *checker) ai(i int, label string, s *AIStep, env *expr.Env) {
 
 	if s.Output == "" {
 		c.addf(at("output"), "%s: ai.output is required", label)
-	} else if _, _, err := c.w.Schema(s.Output); errors.Is(err, fs.ErrNotExist) {
+	} else if _, _, err := loadSchema(c.path, s.Output); errors.Is(err, fs.ErrNotExist) {
 		c.addf(at("output"), "%s: schema file not found: %s", label, s.Output)
 	} else if err != nil {
 		c.addf(at("output"), "%s: %s is not a valid JSON Schema: %v", label, s.Output, err)
 	}
 }
 
-func (c *checker) decide(i int, label string, s *DecideStep, env *expr.Env) {
+func (c *checker) decide(base []any, label string, s *DecideStep, env *expr.Env) {
 	at := func(path ...any) int {
-		return c.w.line(append([]any{"steps", i, "decide"}, path...)...)
+		return c.under(base, append([]any{"decide"}, path...)...)
 	}
 
 	if s.Model == "" {
@@ -223,8 +243,8 @@ func (c *checker) options(line int, label string, opts []ai.Option) {
 	}
 }
 
-func (c *checker) http(i int, label string, s *HTTPStep, env *expr.Env) {
-	at := func(field string) int { return c.w.line("steps", i, "http", field) }
+func (c *checker) http(base []any, label string, s *HTTPStep, env *expr.Env) {
+	at := func(field string) int { return c.under(base, "http", field) }
 
 	if s.Method == "" {
 		c.addf(at("method"), "%s: http.method is required", label)
@@ -240,7 +260,7 @@ func (c *checker) http(i int, label string, s *HTTPStep, env *expr.Env) {
 
 	for name, value := range s.Headers {
 		if err := env.Check(value); err != nil {
-			c.addf(c.w.line("steps", i, "http", "headers", name), "%s: http.headers.%s: %v", label, name, err)
+			c.addf(c.under(base, "http", "headers", name), "%s: http.headers.%s: %v", label, name, err)
 		}
 	}
 	if err := env.Check(s.Body); err != nil {
@@ -251,7 +271,7 @@ func (c *checker) http(i int, label string, s *HTTPStep, env *expr.Env) {
 func (c *checker) tests(ids []string) {
 	env, err := expr.NewEnv(ids)
 	if err != nil {
-		c.addf(c.w.line("tests"), "tests: %v", err)
+		c.addf(c.line("tests"), "tests: %v", err)
 		return
 	}
 	for i, t := range c.w.Tests {
@@ -260,10 +280,10 @@ func (c *checker) tests(ids []string) {
 			label = fmt.Sprintf("test %d", i+1)
 		}
 
-		at := c.w.line("tests", i, "fixture")
+		at := c.line("tests", i, "fixture")
 		if t.Fixture == "" {
 			c.addf(at, "%s: fixture is required", label)
-		} else if _, err := c.w.Fixture(t.Fixture); errors.Is(err, fs.ErrNotExist) {
+		} else if _, err := loadJSON(c.path, t.Fixture); errors.Is(err, fs.ErrNotExist) {
 			c.addf(at, "%s: fixture file not found: %s", label, t.Fixture)
 		} else if err != nil {
 			c.addf(at, "%s: fixture %s is not valid JSON", label, t.Fixture)
@@ -272,7 +292,7 @@ func (c *checker) tests(ids []string) {
 		// A key is either a step's id, expecting it to be called or skipped,
 		// or an expression whose value is compared.
 		for key, want := range t.Expect {
-			at := c.w.line("tests", i, "expect", key)
+			at := c.line("tests", i, "expect", key)
 			if slices.Contains(ids, key) {
 				if want != Called && want != Skipped {
 					c.addf(at, "%s: expect.%s must be %s or %s", label, key, Called, Skipped)

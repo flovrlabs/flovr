@@ -708,7 +708,11 @@ function stepDetails(w, step, run, hasForm) {
     hasForm ? null : section("Runs when",
       step.when ? el("pre", { class: "cond-pre" }, step.when) : el("p", { class: "muted" }, "Always, once the steps before it have finished."),
       el("p", { class: "muted small" }, "Step " + order + " of " + w.steps.length + " in file order.")),
-    step.fields.length && !hasForm ? section("Settings", pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)]))) : null,
+    // What a component does is set in its own file, so it is shown, not edited.
+    step.component ? section("Component",
+      pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)])),
+      el("p", { class: "muted small" }, "Written once in " + step.uses + " and shared by every step that uses it. This step only chooses its input.")) : null,
+    step.fields.length && !hasForm && !step.component ? section("Settings", pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)]))) : null,
     step.reads.length ? section("Reads from", el("div", { class: "chips" }, step.reads.map((name) =>
       el("button", { type: "button", class: "pill link mono", title: "Show " + name, onclick: () => go({ node: name }) }, name)))) : null,
   ];
@@ -1420,6 +1424,15 @@ new ResizeObserver(() => {
   cancelAnimationFrame(resizing);
   resizing = requestAnimationFrame(() => view && renderCanvas(false));
 }).observe($("canvas"));
+
+// The width of the details decides how tall a text box must be to show its text.
+let formWidth = 0;
+new ResizeObserver(() => {
+  const width = $("inspector").clientWidth;
+  if (Math.abs(width - formWidth) < 2) return;
+  formWidth = width;
+  if (form) form.controls.forEach((c) => autosize(c.input));
+}).observe($("inspector"));
 
 readAddress();
 refresh();

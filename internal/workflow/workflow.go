@@ -54,9 +54,17 @@ type Step struct {
 	AI     *AIStep     `yaml:"ai"`
 	Decide *DecideStep `yaml:"decide"`
 	HTTP   *HTTPStep   `yaml:"http"`
+
+	// Use is the path of a component that the step runs, and With the input
+	// it gives the component.
+	Use  string         `yaml:"use"`
+	With map[string]any `yaml:"with"`
+
+	component *Component // what Use names, once the workflow is loaded
 }
 
-// Kind names the step's type, or is empty if the step has none.
+// Kind names the step's type, or is empty if the step has none. A step that
+// uses a component is of the component's type.
 func (s Step) Kind() string {
 	switch {
 	case s.AI != nil:
@@ -65,9 +73,14 @@ func (s Step) Kind() string {
 		return "decide"
 	case s.HTTP != nil:
 		return "http"
+	case s.component != nil:
+		return s.component.Kind()
 	}
 	return ""
 }
+
+// Component is the component the step uses, or nil if it uses none.
+func (s Step) Component() *Component { return s.component }
 
 // DecideStep asks a decision model typed questions about its input. The model
 // answers with probabilities instead of writing text.
@@ -232,7 +245,7 @@ func Parse(path string, data []byte) (*Workflow, error) {
 		w.root = doc.Content[0]
 	}
 
-	c := &checker{w: w}
+	c := &checker{path: path, root: w.root, w: w}
 	c.run()
 	if len(c.items) > 0 {
 		sort.SliceStable(c.items, func(i, j int) bool { return c.items[i].Line < c.items[j].Line })
@@ -243,17 +256,28 @@ func Parse(path string, data []byte) (*Workflow, error) {
 
 // Resolve turns a path written in the workflow file into one usable from the
 // current directory.
-func (w *Workflow) Resolve(rel string) string {
-	if filepath.IsAbs(rel) {
-		return rel
-	}
-	return filepath.Join(filepath.Dir(w.Path), rel)
-}
+func (w *Workflow) Resolve(rel string) string { return resolve(w.Path, rel) }
 
 // Schema loads the JSON Schema at rel, both compiled for validation and as the
 // plain document.
 func (w *Workflow) Schema(rel string) (*jsonschema.Schema, map[string]any, error) {
-	path := w.Resolve(rel)
+	return loadSchema(w.Path, rel)
+}
+
+// Fixture reads the JSON file at rel, as used for a trigger event.
+func (w *Workflow) Fixture(rel string) (any, error) { return loadJSON(w.Path, rel) }
+
+// resolve turns rel, a path written in file, into one usable from the current
+// directory.
+func resolve(file, rel string) string {
+	if filepath.IsAbs(rel) {
+		return rel
+	}
+	return filepath.Join(filepath.Dir(file), rel)
+}
+
+func loadSchema(file, rel string) (*jsonschema.Schema, map[string]any, error) {
+	path := resolve(file, rel)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
@@ -273,9 +297,8 @@ func (w *Workflow) Schema(rel string) (*jsonschema.Schema, map[string]any, error
 	return compiled, doc, nil
 }
 
-// Fixture reads the JSON file at rel, as used for a trigger event.
-func (w *Workflow) Fixture(rel string) (any, error) {
-	data, err := os.ReadFile(w.Resolve(rel))
+func loadJSON(file, rel string) (any, error) {
+	data, err := os.ReadFile(resolve(file, rel))
 	if err != nil {
 		return nil, err
 	}
@@ -286,17 +309,33 @@ func (w *Workflow) Fixture(rel string) (any, error) {
 	return v, nil
 }
 
-// EnvVars lists the environment variables the workflow's expressions read as
-// env.NAME.
+// EnvVars lists the environment variables read as env.NAME by the workflow's
+// expressions and by those of the components it uses.
 func (w *Workflow) EnvVars() []string {
 	var names []string
 	for _, s := range w.Steps {
 		for _, src := range s.expressions() {
 			names = append(names, expr.EnvVars(src)...)
 		}
+		if s.component != nil {
+			names = append(names, s.component.EnvVars()...)
+		}
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
+}
+
+// Files lists the files, besides the workflow file, that the workflow was
+// built from: those of the components it uses.
+func (w *Workflow) Files() []string {
+	var paths []string
+	for _, s := range w.Steps {
+		if s.component != nil {
+			paths = append(paths, s.component.Path)
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths)
 }
 
 // Reads lists what step i's expressions refer to among the trigger and the
@@ -325,18 +364,26 @@ func (s Step) expressions() []string {
 	if s.When != "" {
 		exprs = append(exprs, s.When)
 	}
+	exprs = append(exprs, placeholders(s.AI, s.Decide, s.HTTP)...)
+	return append(exprs, expr.Placeholders(s.With)...)
+}
+
+// placeholders returns the inside of each ${...} in whichever of the three
+// kinds of work is given.
+func placeholders(ai *AIStep, decide *DecideStep, http *HTTPStep) []string {
 	var templated []any
 	switch {
-	case s.AI != nil:
-		templated = []any{s.AI.Input}
-	case s.Decide != nil:
-		templated = []any{s.Decide.Input}
-	case s.HTTP != nil:
-		templated = []any{s.HTTP.URL, s.HTTP.Body}
-		for _, value := range s.HTTP.Headers {
+	case ai != nil:
+		templated = []any{ai.Input}
+	case decide != nil:
+		templated = []any{decide.Input}
+	case http != nil:
+		templated = []any{http.URL, http.Body}
+		for _, value := range http.Headers {
 			templated = append(templated, value)
 		}
 	}
+	var exprs []string
 	for _, v := range templated {
 		exprs = append(exprs, expr.Placeholders(v)...)
 	}
@@ -347,8 +394,9 @@ func (s Step) expressions() []string {
 // indexes, can be changed in the file without rewriting anything around it.
 // That takes a key of a mapping written in indented form, not inline as {...},
 // whose value is plain text or which the mapping does not have yet.
-func (w *Workflow) Writable(path ...any) bool {
-	n := w.root
+func (w *Workflow) Writable(path ...any) bool { return writable(w.root, path...) }
+
+func writable(n *yaml.Node, path ...any) bool {
 	for i, p := range path {
 		if n == nil {
 			return false
@@ -378,10 +426,11 @@ func (w *Workflow) Writable(path ...any) bool {
 	return false
 }
 
-// line returns the source line of the value at path (map keys and list
-// indexes), falling back to the nearest enclosing value that exists.
-func (w *Workflow) line(path ...any) int {
-	n, line := w.root, 1
+// lineOf returns the source line of the value at path (map keys and list
+// indexes) below root, falling back to the nearest enclosing value that
+// exists.
+func lineOf(root *yaml.Node, path ...any) int {
+	n, line := root, 1
 	for _, p := range path {
 		if n == nil {
 			break

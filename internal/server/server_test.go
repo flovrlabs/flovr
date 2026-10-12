@@ -449,11 +449,12 @@ func TestStateDescribesWorkflowsAndRuns(t *testing.T) {
 			{"prompt", "prompts/summarize.md"},
 			{"output", "schemas/summary.json"},
 		}},
-		{ID: "alert_billing", Kind: "http", Subtitle: "POST ${env.BILLING_URL}", When: `classify.priority.value == "high" && classify.category.value in ["refund", "billing"]`,
+		// It uses a component, and is described by what the component does.
+		{ID: "alert_billing", Kind: "http", Subtitle: "notify", When: `classify.priority.value == "high" && classify.category.value in ["refund", "billing"]`,
 			Reads: []string{"classify", "summarize"}, Fields: [][2]string{
-				{"request", "POST ${env.BILLING_URL}"},
-				{"sends", "category, summary"},
-			}},
+				{"component", "components/notify"},
+				{"request", "POST ${input.url}"},
+			}, Component: "notify", Uses: "components/notify"},
 	}
 	for i, step := range want {
 		if got, _ := json.Marshal(w.Steps[i]); string(got) != mustJSON(step) {

@@ -96,10 +96,12 @@ func TestPageIsToldWhatItMayChange(t *testing.T) {
 		"classify: priority / low (text)", "classify: priority / medium (text)", "classify: priority / high (text)",
 		"summarize: Run only when (expression)", "summarize: Model (text)", "summarize: Prompt (prompt)",
 		"summarize: Input (text)", "summarize: Output schema (text)",
-		"alert_billing: Run only when (expression)", "alert_billing: Method (choice)", "alert_billing: URL (text)",
-		"alert_billing: Body / category (text)", "alert_billing: Body / summary (text)",
-		"page_oncall: Run only when (expression)", "page_oncall: Method (choice)", "page_oncall: URL (text)",
-		"page_oncall: Body / category (text)", "page_oncall: Body / summary (text)",
+		// These two use a component: what they give it can be changed, in the
+		// order the component lists its inputs.
+		"alert_billing: Run only when (expression)",
+		"alert_billing: Input / url (text)", "alert_billing: Input / summary (text)", "alert_billing: Input / category (text)",
+		"page_oncall: Run only when (expression)",
+		"page_oncall: Input / url (text)", "page_oncall: Input / summary (text)", "page_oncall: Input / category (text)",
 	}
 	if strings.Join(labels, "\n") != strings.Join(want, "\n") {
 		t.Errorf("fields:\n%s\nwant:\n%s", strings.Join(labels, "\n"), strings.Join(want, "\n"))
@@ -180,12 +182,12 @@ func TestEditIsRefusedWithoutTouchingTheFile(t *testing.T) {
 			http.StatusUnprocessableEntity, `step \"classify\": when:`},
 		{"a required value left empty", rev, set("", "steps", 1, "ai", "model"),
 			http.StatusUnprocessableEntity, "ai.model is required"},
-		{"an environment variable that is not set", rev, set("${env.MISSING_URL}", "steps", 2, "http", "url"),
+		{"an environment variable that is not set", rev, set("${env.MISSING_URL}", "steps", 2, "with", "url"),
 			http.StatusUnprocessableEntity, "MISSING_URL"},
+		{"what a component does", rev, set("GET", "steps", 2, "http", "method"),
+			http.StatusUnprocessableEntity, "cannot change this value"},
 		{"a webhook path the server uses itself", rev, set("/api/state", "trigger", "webhook"),
 			http.StatusUnprocessableEntity, "used by the server itself"},
-		{"a method that does not exist", rev, set("FETCH", "steps", 2, "http", "method"),
-			http.StatusUnprocessableEntity, "Method must be one of"},
 		{"a value the page was not offered", rev, set("other", "steps", 0, "id"),
 			http.StatusUnprocessableEntity, "cannot change this value"},
 		{"a test", rev, set("skipped", "tests", 0, "expect", "summarize"),
@@ -204,8 +206,8 @@ func TestEditIsRefusedWithoutTouchingTheFile(t *testing.T) {
 			}
 		})
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 4 {
-		t.Errorf("the folder holds %d entries, want the 4 it started with", len(entries))
+	if entries, _ := os.ReadDir(dir); len(entries) != 5 {
+		t.Errorf("the folder holds %d entries, want the 5 it started with", len(entries))
 	}
 
 	// A workflow of that name must exist.
@@ -441,6 +443,21 @@ func TestEditedScheduleReplacesTheOldOne(t *testing.T) {
 	if rec := post(srv, "/api/edit", "", string(body)); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a schedule of five fields") {
 		t.Errorf("a schedule that is not one: status = %d, body %s", rec.Code, rec.Body)
 	}
+
+	// A value with a fixed set of choices takes only those.
+	method := currentState(t, srv).Workflows[0].Steps[0].Edit[1]
+	if method.Label != "Method" || method.Kind != kindChoice || method.Value != "GET" || len(method.Options) != 5 {
+		t.Fatalf("the method field = %+v", method)
+	}
+	for value, want := range map[string]int{"FETCH": http.StatusUnprocessableEntity, "POST": http.StatusOK} {
+		body, _ = json.Marshal(map[string]any{"workflow": "nightly", "rev": currentState(t, srv).Workflows[0].Rev, "edits": []any{set(value, "steps", 0, "http", "method")}})
+		if rec := post(srv, "/api/edit", "", string(body)); rec.Code != want {
+			t.Errorf("method %s: status = %d, body %s", value, rec.Code, rec.Body)
+		}
+	}
+	if !strings.Contains(readFile(t, file), "      method: POST\n") {
+		t.Errorf("the file after the change:\n%s", readFile(t, file))
+	}
 }
 
 func TestChangesShowWhatGitSees(t *testing.T) {
@@ -490,5 +507,62 @@ func TestChangesShowWhatGitSees(t *testing.T) {
 	}
 	if len(added) != 1 || added[0] != "+      model: openrouter/other/model" || len(removed) != 1 {
 		t.Errorf("diff:\n%s", view.Diff)
+	}
+}
+
+func TestWhatAStepGivesAComponentCanBeChanged(t *testing.T) {
+	srv, dir := editExample(t)
+	state := currentState(t, srv)
+	step := state.Workflows[0].Steps[3]
+	if step.Component != "notify" || step.Uses != "components/notify" || step.Kind != "http" {
+		t.Fatalf("step = %+v", step)
+	}
+	url := step.Edit[1]
+	if url.Label != "url" || url.Group != "Input" || url.Value != "${env.PAGER_URL}" || mustJSON(url.Path) != `["steps",3,"with","url"]` {
+		t.Fatalf("field = %+v", url)
+	}
+
+	rec := change(srv, state.Workflows[0].Rev, set("${env.BILLING_URL}", "steps", 3, "with", "url"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	if got := readFile(t, filepath.Join(dir, "workflow.yaml")); strings.Count(got, "      url: ${env.BILLING_URL}\n") != 2 {
+		t.Errorf("the file after the change:\n%s", got)
+	}
+	// The component file is not the page's to change.
+	if got, want := readFile(t, filepath.Join(dir, "components", "notify", "component.yaml")), readFile(t, "../../examples/triage-ticket/components/notify/component.yaml"); got != want {
+		t.Error("the component file was changed")
+	}
+}
+
+func TestChangesToAComponentFileAreTakenUp(t *testing.T) {
+	srv, dir := editExample(t)
+	file := filepath.Join(dir, "components", "notify", "component.yaml")
+	first := currentState(t, srv).Workflows[0]
+
+	rewrite(t, file, "method: POST", "method: PUT")
+	second := currentState(t, srv).Workflows[0]
+	if got := second.Steps[2].Fields[1]; got != [2]string{"request", "PUT ${input.url}"} || second.Problem != "" {
+		t.Fatalf("after the change: %v, problem %q", got, second.Problem)
+	}
+	// The workflow file itself is as it was, so the page can go on from it.
+	if second.Rev != first.Rev {
+		t.Errorf("rev changed from %s to %s", first.Rev, second.Rev)
+	}
+
+	// A component that no longer fits how it is used is a problem of the
+	// workflow, which keeps being served as it was.
+	rewrite(t, file, "  category: string\n", "")
+	third := currentState(t, srv).Workflows[0]
+	if !strings.Contains(third.Problem, "with.category is not an input of notify") && !strings.Contains(third.Problem, "reads input.category") {
+		t.Fatalf("after the mistake: problem %q", third.Problem)
+	}
+	if got := third.Steps[2].Fields[1]; got != [2]string{"request", "PUT ${input.url}"} {
+		t.Errorf("after the mistake the server serves %v", got)
+	}
+
+	rewrite(t, file, "  summary: string\n", "  summary: string\n  category: string\n")
+	if fourth := currentState(t, srv).Workflows[0]; fourth.Problem != "" {
+		t.Errorf("after the fix: problem %q", fourth.Problem)
 	}
 }

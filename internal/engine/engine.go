@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -114,11 +116,53 @@ func (e *Engine) step(ctx context.Context, w *workflow.Workflow, s workflow.Step
 		res.Output, res.Detail, res.Err = e.decide(ctx, s.Decide, env, vars)
 	case s.HTTP != nil:
 		res.Output, res.Detail, res.Err = e.http(ctx, s.HTTP, env, vars)
+	case s.Component() != nil:
+		res.Output, res.Detail, res.Err = e.use(ctx, s, env, vars)
 	}
 	return res
 }
 
-func (e *Engine) ai(ctx context.Context, w *workflow.Workflow, s *workflow.AIStep, env *expr.Env, vars map[string]any) (any, string, error) {
+// use runs the component a step names, giving it the step's with as input.
+func (e *Engine) use(ctx context.Context, s workflow.Step, env *expr.Env, vars map[string]any) (any, string, error) {
+	input := make(map[string]any, len(s.With))
+	for _, name := range slices.Sorted(maps.Keys(s.With)) {
+		v, err := env.Eval(s.With[name], vars)
+		if err != nil {
+			return nil, "", fmt.Errorf("with.%s: %w", name, err)
+		}
+		input[name] = v
+	}
+	return e.call(ctx, s.Component(), input)
+}
+
+// call runs a component. Its expressions see the input and env, and nothing
+// of what called it.
+func (e *Engine) call(ctx context.Context, c *workflow.Component, input map[string]any) (any, string, error) {
+	if err := c.Input.Check(input); err != nil {
+		return nil, "", fmt.Errorf("input of %s: %w", c.Name, err)
+	}
+	env, err := expr.Vars("input")
+	if err != nil {
+		return nil, "", err
+	}
+	vars := map[string]any{"input": input, "env": e.Env}
+	switch {
+	case c.AI != nil:
+		return e.ai(ctx, c, c.AI, env, vars)
+	case c.Decide != nil:
+		return e.decide(ctx, c.Decide, env, vars)
+	}
+	return e.http(ctx, c.HTTP, env, vars)
+}
+
+// files is a workflow or component file, as far as the paths written in it
+// are concerned.
+type files interface {
+	Resolve(rel string) string
+	Schema(rel string) (*jsonschema.Schema, map[string]any, error)
+}
+
+func (e *Engine) ai(ctx context.Context, w files, s *workflow.AIStep, env *expr.Env, vars map[string]any) (any, string, error) {
 	prompt, err := os.ReadFile(w.Resolve(s.Prompt))
 	if err != nil {
 		return nil, "", err

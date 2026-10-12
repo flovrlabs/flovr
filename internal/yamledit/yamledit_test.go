@@ -303,7 +303,7 @@ func TestApplyOnTheExample(t *testing.T) {
 	}
 	out, err := Apply(src,
 		Edit{Path: []any{"steps", 0, "decide", "questions", "category", "choice", "refund"}, Value: "They want their money back."},
-		Edit{Path: []any{"steps", 2, "http", "body", "summary"}, Value: "${summarize.summary} (urgent)"},
+		Edit{Path: []any{"steps", 2, "with", "summary"}, Value: "${summarize.summary} (urgent)"},
 		Edit{Path: []any{"steps", 3, "when"}, Value: `classify.priority.value == "high"`},
 		Edit{Path: []any{"trigger", "webhook"}, Value: "/support/tickets"},
 	)
@@ -314,7 +314,7 @@ func TestApplyOnTheExample(t *testing.T) {
 	want := []string{
 		"  webhook: /support/tickets",
 		"            refund: They want their money back.",
-		"        summary: ${summarize.summary} (urgent)",
+		"      summary: ${summarize.summary} (urgent)",
 		`    when: classify.priority.value == "high"`,
 	}
 	if strings.Join(added, "\n") != strings.Join(want, "\n") || len(removed) != 4 {
