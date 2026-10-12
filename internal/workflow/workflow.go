@@ -40,8 +40,9 @@ type Workflow struct {
 
 	// Path is the workflow file. Paths inside the file are relative to its
 	// directory.
-	Path string     `yaml:"-"`
-	root *yaml.Node // parsed document, kept for line numbers
+	Path    string              `yaml:"-"`
+	root    *yaml.Node          // parsed document, kept for line numbers
+	outputs map[string][]string // what can be read from each step, by its id
 }
 
 type Trigger struct {
@@ -257,6 +258,10 @@ func Parse(path string, data []byte) (*Workflow, error) {
 		sort.SliceStable(c.items, func(i, j int) bool { return c.items[i].Line < c.items[j].Line })
 		return nil, &Problems{Path: path, Items: c.items}
 	}
+	w.outputs = map[string][]string{}
+	for _, s := range w.Steps {
+		w.outputs[s.ID] = c.shapes[s.ID].paths()
+	}
 	return w, nil
 }
 
@@ -343,12 +348,17 @@ func (w *Workflow) Files() []string {
 	var paths []string
 	for _, s := range w.Steps {
 		if s.component != nil {
-			paths = append(paths, s.component.Path)
+			paths = append(paths, s.component.Files()...)
 		}
 	}
 	slices.Sort(paths)
 	return slices.Compact(paths)
 }
+
+// Outputs lists what can be read from the step with the given id once it has
+// run, as the fields to put behind its id, such as "category.value". It is
+// empty where nothing is known of what the step puts out.
+func (w *Workflow) Outputs(id string) []string { return w.outputs[id] }
 
 // Reads lists what step i's expressions refer to among the trigger and the
 // steps before it, in the order those are defined.

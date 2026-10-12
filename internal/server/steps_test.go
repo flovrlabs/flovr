@@ -21,7 +21,9 @@ func TestPageIsToldWhichComponentsAStepCanBeAddedFrom(t *testing.T) {
 	srv, _ := editExample(t)
 	got := mustJSON(currentState(t, srv).Workflows[0].Components)
 	want := `[{"name":"notify","description":"Tells a team about an urgent ticket by sending it a summary.","use":"components/notify","kind":"http",` +
-		`"inputs":[{"name":"url","type":"string"},{"name":"summary","type":"string"},{"name":"category","type":"string"}]}]`
+		`"inputs":[{"name":"url","type":"string"},{"name":"summary","type":"string"},{"name":"category","type":"string"}]},` +
+		`{"name":"reply","description":"Drafts a reply to the customer and sends it through a mail service.","use":"components/reply","kind":"flow",` +
+		`"inputs":[{"name":"ticket","type":"object"},{"name":"url","type":"string"}]}]`
 	if got != want {
 		t.Errorf("components = %s\nwant %s", got, want)
 	}

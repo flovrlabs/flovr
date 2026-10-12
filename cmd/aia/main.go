@@ -420,6 +420,11 @@ func printStep(indent string, r engine.StepResult) {
 	}
 	fmt.Println(line)
 
+	// What the steps of a component made of steps did comes before what
+	// the component gave back.
+	for _, inner := range r.Steps {
+		printStep(indent+"    ", inner)
+	}
 	if r.Output != nil {
 		out, _ := json.MarshalIndent(r.Output, indent+"    ", "  ")
 		fmt.Printf("%s    %s\n", indent, out)

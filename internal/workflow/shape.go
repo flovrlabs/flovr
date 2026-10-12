@@ -124,21 +124,7 @@ func outputShape(file string, ai *AIStep, decide *DecideStep, http *HTTPStep) *s
 
 // responseShape is the shape of the answer a workflow gives, as tests see it.
 func responseShape(r *Respond) *shape {
-	s := &shape{fields: map[string]*shape{"status": single(), "headers": nil, "body": nil}}
-	switch body := r.Body.(type) {
-	case string:
-		// One placeholder and nothing else keeps the type of its value.
-		if !expr.Single(body) {
-			s.fields["body"] = single()
-		}
-	case map[string]any:
-		fields := &shape{fields: map[string]*shape{}}
-		for name := range body {
-			fields.fields[name] = nil
-		}
-		s.fields["body"] = fields
-	}
-	return s
+	return &shape{fields: map[string]*shape{"status": single(), "headers": nil, "body": writtenShape(r.Body)}}
 }
 
 // inputShape is the shape of what a component is given.
@@ -171,4 +157,47 @@ func (c *checker) reads(line int, label string, exprs []string, shapes map[strin
 			}
 		}
 	}
+}
+
+// paths lists what can be read from a value of this shape, as the fields to
+// put behind its name: each field, or for a field with fields of its own the
+// one that holds its value, or else each of them.
+func (s *shape) paths() []string {
+	if s == nil {
+		return nil
+	}
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(s.fields)) {
+		child := s.fields[name]
+		switch {
+		case child == nil || len(child.fields) == 0:
+			out = append(out, name)
+		case child.fields["value"] != nil:
+			out = append(out, name+".value")
+		default:
+			for _, below := range slices.Sorted(maps.Keys(child.fields)) {
+				out = append(out, name+"."+below)
+			}
+		}
+	}
+	return out
+}
+
+// writtenShape is the shape of a value written in a file with ${...} in it,
+// once those are filled in: what is known is the keys of a mapping.
+func writtenShape(v any) *shape {
+	switch v := v.(type) {
+	case string:
+		// One placeholder and nothing else keeps the type of its value.
+		if !expr.Single(v) {
+			return single()
+		}
+	case map[string]any:
+		s := &shape{fields: map[string]*shape{}}
+		for name, value := range v {
+			s.fields[name] = writtenShape(value)
+		}
+		return s
+	}
+	return nil
 }

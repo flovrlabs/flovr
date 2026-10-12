@@ -40,6 +40,10 @@ type StepResult struct {
 	Detail   string // one-line summary for people, free of secrets
 	Duration time.Duration
 	Err      error
+
+	// Steps is what the steps of a component made of steps did, for a step
+	// that uses one.
+	Steps []StepResult
 }
 
 type Model interface {
@@ -131,7 +135,9 @@ func respond(r *workflow.Respond, ids []string, vars map[string]any) (*Response,
 	return resp, nil
 }
 
-func (e *Engine) step(ctx context.Context, w *workflow.Workflow, s workflow.Step, env *expr.Env, vars map[string]any) (res StepResult) {
+// step runs one step. f is the file the step is written in, a workflow's or
+// a component's.
+func (e *Engine) step(ctx context.Context, f files, s workflow.Step, env *expr.Env, vars map[string]any) (res StepResult) {
 	res = StepResult{ID: s.ID, Kind: s.Kind(), Status: OK}
 	start := time.Now()
 	defer func() {
@@ -154,48 +160,90 @@ func (e *Engine) step(ctx context.Context, w *workflow.Workflow, s workflow.Step
 	}
 	switch {
 	case s.AI != nil:
-		res.Output, res.Detail, res.Err = e.ai(ctx, w, s.AI, env, vars)
+		res.Output, res.Detail, res.Err = e.ai(ctx, f, s.AI, env, vars)
 	case s.Decide != nil:
 		res.Output, res.Detail, res.Err = e.decide(ctx, s.Decide, env, vars)
 	case s.HTTP != nil:
 		res.Output, res.Detail, res.Err = e.http(ctx, s.HTTP, env, vars)
 	case s.Component() != nil:
-		res.Output, res.Detail, res.Err = e.use(ctx, s, env, vars)
+		res.Output, res.Detail, res.Steps, res.Err = e.use(ctx, s, env, vars)
 	}
 	return res
 }
 
 // use runs the component a step names, giving it the step's with as input.
-func (e *Engine) use(ctx context.Context, s workflow.Step, env *expr.Env, vars map[string]any) (any, string, error) {
+func (e *Engine) use(ctx context.Context, s workflow.Step, env *expr.Env, vars map[string]any) (any, string, []StepResult, error) {
 	input := make(map[string]any, len(s.With))
 	for _, name := range slices.Sorted(maps.Keys(s.With)) {
 		v, err := env.Eval(s.With[name], vars)
 		if err != nil {
-			return nil, "", fmt.Errorf("with.%s: %w", name, err)
+			return nil, "", nil, fmt.Errorf("with.%s: %w", name, err)
 		}
 		input[name] = v
 	}
-	return e.call(ctx, s.Component(), input)
+	out, detail, inner, _, err := e.call(ctx, s.Component(), input)
+	return out, detail, inner, err
 }
 
 // call runs a component. Its expressions see the input and env, and nothing
-// of what called it.
-func (e *Engine) call(ctx context.Context, c *workflow.Component, input map[string]any) (any, string, error) {
+// of what called it. For a component made of steps it also returns what each
+// step did and everything its expressions could see by the end.
+func (e *Engine) call(ctx context.Context, c *workflow.Component, input map[string]any) (out any, detail string, inner []StepResult, vars map[string]any, err error) {
+	vars = map[string]any{"input": input, "env": e.Env}
 	if err := c.Input.Check(input); err != nil {
-		return nil, "", fmt.Errorf("input of %s: %w", c.Name, err)
+		return nil, "", nil, vars, fmt.Errorf("input of %s: %w", c.Name, err)
 	}
-	env, err := expr.Vars("input")
+	if len(c.Steps) == 0 {
+		env, err := expr.Vars("input")
+		if err != nil {
+			return nil, "", nil, vars, err
+		}
+		switch {
+		case c.AI != nil:
+			out, detail, err = e.ai(ctx, c, c.AI, env, vars)
+		case c.Decide != nil:
+			out, detail, err = e.decide(ctx, c.Decide, env, vars)
+		default:
+			out, detail, err = e.http(ctx, c.HTTP, env, vars)
+		}
+		return out, detail, nil, vars, err
+	}
+
+	names := []string{"input"}
+	var ran, skipped []string
+	for _, s := range c.Steps {
+		env, err := expr.Vars(names...)
+		if err != nil {
+			return nil, "", inner, vars, err
+		}
+		res := e.step(ctx, c, s, env, vars)
+		inner = append(inner, res)
+		if res.Err != nil {
+			return nil, "stopped at " + s.ID, inner, vars, fmt.Errorf("step %q of %s failed: %w", s.ID, c.Name, res.Err)
+		}
+		if res.Status == Skipped {
+			skipped = append(skipped, s.ID)
+		} else {
+			ran = append(ran, s.ID)
+		}
+		vars[s.ID] = res.Output
+		names = append(names, s.ID)
+	}
+	detail = "ran " + strings.Join(ran, ", ")
+	if len(ran) == 0 {
+		detail = "ran no step"
+	}
+	if len(skipped) > 0 {
+		detail += "; skipped " + strings.Join(skipped, ", ")
+	}
+	env, err := expr.Vars(names...)
 	if err != nil {
-		return nil, "", err
+		return nil, detail, inner, vars, err
 	}
-	vars := map[string]any{"input": input, "env": e.Env}
-	switch {
-	case c.AI != nil:
-		return e.ai(ctx, c, c.AI, env, vars)
-	case c.Decide != nil:
-		return e.decide(ctx, c.Decide, env, vars)
+	if out, err = env.Eval(c.Output, vars); err != nil {
+		return nil, detail, inner, vars, fmt.Errorf("output of %s: %w", c.Name, err)
 	}
-	return e.http(ctx, c.HTTP, env, vars)
+	return out, detail, inner, vars, nil
 }
 
 // files is a workflow or component file, as far as the paths written in it

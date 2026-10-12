@@ -443,18 +443,18 @@ func TestStateDescribesWorkflowsAndRuns(t *testing.T) {
 					{Name: "medium", Meaning: "The customer is blocked on one task but has a workaround or can wait a day."},
 					{Name: "high", Meaning: "The customer cannot use the product, or data or money is at risk right now."},
 				}},
-			}},
+			}, Outputs: []string{"category.value", "priority.value"}},
 		{ID: "summarize", Kind: "ai", Subtitle: "deepseek-v4.1-flash", When: `classify.priority.value == "high"`, Reads: []string{"trigger", "classify"}, Fields: [][2]string{
 			{"model", "openrouter/deepseek/deepseek-v4.1-flash"},
 			{"prompt", "prompts/summarize.md"},
 			{"output", "schemas/summary.json"},
-		}},
+		}, Outputs: []string{"summary"}},
 		// It uses a component, and is described by what the component does.
 		{ID: "alert_billing", Kind: "http", Subtitle: "notify", When: `classify.priority.value == "high" && classify.category.value in ["refund", "billing"]`,
 			Reads: []string{"classify", "summarize"}, Fields: [][2]string{
 				{"component", "components/notify"},
 				{"request", "POST ${input.url}"},
-			}, Component: "notify", Uses: "components/notify"},
+			}, Component: "notify", Uses: "components/notify", Outputs: []string{"body", "status"}},
 	}
 	for i, step := range want {
 		if got, _ := json.Marshal(w.Steps[i]); string(got) != mustJSON(step) {

@@ -25,16 +25,26 @@ const ComponentFile = "component.yaml"
 // workflows to use with different input. Its expressions see that input, as
 // input.NAME, and env. They see nothing of the workflow that uses it, so a
 // component does the same wherever it is used.
+//
+// A component does one kind of work, ai, decide or http, or is made of
+// steps of its own, which may use other components. One made of steps gives
+// back what its output says.
 type Component struct {
 	Name string `yaml:"name"`
 	// Description says in a line what the component is for, to whoever
 	// chooses among components.
-	Description string          `yaml:"description"`
-	Input       Params          `yaml:"input"`
-	AI          *AIStep         `yaml:"ai"`
-	Decide      *DecideStep     `yaml:"decide"`
-	HTTP        *HTTPStep       `yaml:"http"`
-	Tests       []ComponentTest `yaml:"tests"`
+	Description string      `yaml:"description"`
+	Input       Params      `yaml:"input"`
+	AI          *AIStep     `yaml:"ai"`
+	Decide      *DecideStep `yaml:"decide"`
+	HTTP        *HTTPStep   `yaml:"http"`
+
+	// Steps run in order, as in a workflow, and Output is what the component
+	// gives back once they have: a value that may take values from them.
+	Steps  []Step `yaml:"steps"`
+	Output any    `yaml:"output"`
+
+	Tests []ComponentTest `yaml:"tests"`
 
 	// Path is the component file. Paths inside the file are relative to its
 	// directory.
@@ -43,7 +53,9 @@ type Component struct {
 }
 
 // ComponentTest runs a component on its own. The keys of Expect are
-// expressions over input and output, whose values are compared.
+// expressions over input and output, whose values are compared. For a
+// component made of steps a key can also be a step's id, expecting it to be
+// called or skipped, and expressions can read the steps.
 type ComponentTest struct {
 	Name string `yaml:"name"`
 	// Input holds the values to give the component, or is the path of a JSON
@@ -52,9 +64,41 @@ type ComponentTest struct {
 	Expect map[string]any `yaml:"expect"`
 }
 
-// Kind names what the component does: "ai", "decide" or "http".
+// Kind names what the component does: "ai", "decide" or "http", or "flow" if
+// it is made of steps.
 func (c *Component) Kind() string {
+	if len(c.Steps) > 0 {
+		return "flow"
+	}
 	return Step{AI: c.AI, Decide: c.Decide, HTTP: c.HTTP}.Kind()
+}
+
+// Files lists the component's file and those of the components it uses.
+func (c *Component) Files() []string {
+	paths := []string{c.Path}
+	for _, s := range c.Steps {
+		if s.component != nil {
+			paths = append(paths, s.component.Files()...)
+		}
+	}
+	return paths
+}
+
+// expressions returns every expression the component contains.
+func (c *Component) expressions() []string {
+	exprs := placeholders(c.AI, c.Decide, c.HTTP)
+	for _, s := range c.Steps {
+		exprs = append(exprs, s.expressions()...)
+	}
+	return append(exprs, expr.Placeholders(c.Output)...)
+}
+
+// shape is what is known of what the component gives back.
+func (c *Component) shape() *shape {
+	if len(c.Steps) > 0 {
+		return writtenShape(c.Output)
+	}
+	return outputShape(c.Path, c.AI, c.Decide, c.HTTP)
 }
 
 // Resolve turns a path written in the component file into one usable from
@@ -67,12 +111,17 @@ func (c *Component) Schema(rel string) (*jsonschema.Schema, map[string]any, erro
 	return loadSchema(c.Path, rel)
 }
 
-// EnvVars lists the environment variables the component's expressions read as
-// env.NAME.
+// EnvVars lists the environment variables read as env.NAME by the
+// component's expressions and by those of the components it uses.
 func (c *Component) EnvVars() []string {
 	var names []string
-	for _, src := range placeholders(c.AI, c.Decide, c.HTTP) {
+	for _, src := range c.expressions() {
 		names = append(names, expr.EnvVars(src)...)
+	}
+	for _, s := range c.Steps {
+		if s.component != nil {
+			names = append(names, s.component.EnvVars()...)
+		}
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
@@ -211,7 +260,11 @@ func ComponentsIn(dir string) []*Component {
 // LoadComponent reads the component at path, which is a component file or a
 // directory containing one, and checks everything that can be checked without
 // running it. The error is a *Problems when the file itself is at fault.
-func LoadComponent(path string) (*Component, error) {
+func LoadComponent(path string) (*Component, error) { return loadComponent(path, nil) }
+
+// loadComponent is LoadComponent for a component used by those in loading,
+// each used by the one before it.
+func loadComponent(path string, loading []string) (*Component, error) {
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		path = filepath.Join(path, ComponentFile)
 	}
@@ -231,7 +284,7 @@ func LoadComponent(path string) (*Component, error) {
 		comp.root = doc.Content[0]
 	}
 
-	c := &checker{path: path, root: comp.root}
+	c := &checker{path: path, root: comp.root, loading: append(slices.Clone(loading), path)}
 	c.component(comp)
 	if len(c.items) > 0 {
 		sort.SliceStable(c.items, func(i, j int) bool { return c.items[i].Line < c.items[j].Line })
@@ -267,28 +320,53 @@ func (c *checker) component(comp *Component) {
 		c.addf(1, "%s: %v", label, err)
 		return
 	}
+	// Reading a field of an input that is a single value is a mistake. An
+	// input that is not listed at all is reported further down.
+	given := inputShape(comp.Input)
+	given.open = true
+	c.shapes = map[string]*shape{"input": given}
+
 	kinds := 0
-	for _, present := range []bool{comp.AI != nil, comp.Decide != nil, comp.HTTP != nil} {
+	for _, present := range []bool{comp.AI != nil, comp.Decide != nil, comp.HTTP != nil, comp.Steps != nil} {
 		if present {
 			kinds++
 		}
 	}
+	// where is the line of the work the component does.
+	where := 1
+	var ids []string
 	switch {
 	case kinds > 1:
-		c.addf(1, "%s: a component can have only one of ai, decide, http", label)
+		c.addf(1, "%s: a component can have only one of ai, decide, http, steps", label)
+		// Its steps are not checked, but tests may still name them.
+		for _, s := range comp.Steps {
+			ids = append(ids, s.ID)
+		}
 	case comp.AI != nil:
+		where = c.line("ai")
 		c.ai(nil, label, comp.AI, env)
 	case comp.Decide != nil:
+		where = c.line("decide")
 		c.decide(nil, label, comp.Decide, env)
 	case comp.HTTP != nil:
+		where = c.line("http")
 		c.http(nil, label, comp.HTTP, env)
+	case comp.Steps != nil:
+		where = c.line("steps")
+		ids = c.flow(comp, label)
 	default:
-		c.addf(1, "%s: needs one of ai, decide, http", label)
+		c.addf(1, "%s: needs one of ai, decide, http, steps", label)
+	}
+	if comp.Output != nil && comp.Steps == nil {
+		c.addf(c.line("output"), "%s: output is for a component made of steps; this one gives back what its %s puts out", label, comp.Kind())
+	}
+	if comp.Steps == nil {
+		c.reads(where, label, comp.expressions(), c.shapes)
 	}
 
 	// An input that is read but not declared would be missing at run time.
 	var undeclared []string
-	for _, src := range placeholders(comp.AI, comp.Decide, comp.HTTP) {
+	for _, src := range comp.expressions() {
 		for _, name := range expr.Fields(src, "input") {
 			if !seen[name] && !slices.Contains(undeclared, name) {
 				undeclared = append(undeclared, name)
@@ -296,16 +374,11 @@ func (c *checker) component(comp *Component) {
 		}
 	}
 	for _, name := range undeclared {
-		c.addf(c.line(comp.Kind()), "%s: reads input.%s, which is not listed under input", label, name)
+		c.addf(where, "%s: reads input.%s, which is not listed under input", label, name)
 	}
-	// Reading a field of an input that is a single value is a mistake too.
-	// An input that is not listed was reported just above.
-	given := inputShape(comp.Input)
-	given.open = true
-	c.shapes = map[string]*shape{"input": given, "output": outputShape(c.path, comp.AI, comp.Decide, comp.HTTP)}
-	c.reads(c.line(comp.Kind()), label, placeholders(comp.AI, comp.Decide, comp.HTTP), map[string]*shape{"input": given})
+	c.shapes["output"] = comp.shape()
 
-	results, err := expr.Vars("input", "output")
+	results, err := expr.Vars(append([]string{"input", "output"}, ids...)...)
 	if err != nil {
 		c.addf(c.line("tests"), "tests: %v", err)
 		return
@@ -325,15 +398,42 @@ func (c *checker) component(comp *Component) {
 		} else if err := comp.Input.Check(values); err != nil {
 			c.addf(at, "%s: input: %v", label, err)
 		}
-		for key := range t.Expect {
+		for key, want := range t.Expect {
 			at := c.line("tests", i, "expect", key)
-			if err := results.CheckExpr(key); err != nil {
+			if slices.Contains(ids, key) {
+				if want != Called && want != Skipped {
+					c.addf(at, "%s: expect.%s must be %s or %s", label, key, Called, Skipped)
+				}
+			} else if err := results.CheckExpr(key); err != nil {
 				c.addf(at, "%s: expect.%s: %v", label, key, err)
 			} else {
 				c.reads(at, label+": expect", []string{key}, c.shapes)
 			}
 		}
 	}
+}
+
+// flow checks a component made of steps and returns the ids of its steps.
+func (c *checker) flow(comp *Component, label string) []string {
+	if len(comp.Steps) == 0 {
+		c.addf(c.line("steps"), "%s: steps needs at least one step", label)
+	}
+	ids := c.steps(comp.Steps, "input")
+
+	at := c.line("output")
+	if comp.Output == nil {
+		c.addf(at, "%s: output is required: it is what the component gives back to the step that uses it", label)
+		return ids
+	}
+	env, err := expr.Vars(append([]string{"input"}, ids...)...)
+	if err != nil {
+		c.addf(at, "%s: output: %v", label, err)
+	} else if err := env.Check(comp.Output); err != nil {
+		c.addf(at, "%s: output: %v", label, err)
+	} else {
+		c.reads(at, label+": output", expr.Placeholders(comp.Output), c.shapes)
+	}
+	return ids
 }
 
 // use checks the step at base, which uses a component, and returns the
@@ -383,7 +483,10 @@ func (c *checker) load(use string) (*Component, error) {
 	if comp, ok := c.components[path]; ok {
 		return comp, nil
 	}
-	comp, err := LoadComponent(path)
+	if slices.Contains(c.loading, path) {
+		return nil, fmt.Errorf("the component %s would use itself, which never ends", use)
+	}
+	comp, err := loadComponent(path, c.loading)
 	var problems *Problems
 	switch {
 	case errors.Is(err, fs.ErrNotExist):

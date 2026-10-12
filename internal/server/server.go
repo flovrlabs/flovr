@@ -90,6 +90,36 @@ type Step struct {
 	Millis int64  `json:"ms"`
 	Output any    `json:"output,omitempty"`
 	Error  string `json:"error,omitempty"`
+
+	// Steps is what the steps of a component made of steps did, for a step
+	// that uses one.
+	Steps []Step `json:"steps,omitempty"`
+}
+
+// record turns what a step did into the form runs are kept in.
+func record(r engine.StepResult) Step {
+	step := Step{
+		ID: r.ID, Kind: r.Kind, Status: string(r.Status), Detail: r.Detail,
+		Millis: r.Duration.Milliseconds(), Output: r.Output,
+	}
+	if r.Err != nil {
+		step.Error = r.Err.Error()
+	}
+	for _, inner := range r.Steps {
+		step.Steps = append(step.Steps, record(inner))
+	}
+	return step
+}
+
+// withoutOutputs returns the steps without what they put out, which may be
+// large and may hold what a list should not show.
+func withoutOutputs(steps []Step) []Step {
+	out := slices.Clone(steps)
+	for i := range out {
+		out[i].Output = nil
+		out[i].Steps = withoutOutputs(out[i].Steps)
+	}
+	return out
 }
 
 type Server struct {
@@ -418,16 +448,12 @@ func (s *Server) run(id string, w *workflow.Workflow, trigger any, source string
 		HTTP:  s.opts.HTTP,
 		Env:   s.opts.Env,
 		OnStep: func(r engine.StepResult) {
-			step := Step{
-				ID: r.ID, Kind: r.Kind, Status: string(r.Status), Detail: r.Detail,
-				Millis: r.Duration.Milliseconds(), Output: r.Output,
-			}
+			step := record(r)
 			line := fmt.Sprintf("%s   %s %s", id, r.ID, r.Status)
 			if r.Detail != "" {
 				line += "  " + r.Detail
 			}
 			if r.Err != nil {
-				step.Error = r.Err.Error()
 				line += "  " + firstLine(step.Error)
 			}
 			run.Steps = append(run.Steps, step)

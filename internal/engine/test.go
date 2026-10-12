@@ -75,7 +75,11 @@ func (e *Engine) Test(ctx context.Context, w *workflow.Workflow, t workflow.Test
 		}
 		vars["response"] = seen
 	}
-	res.Failures, err = unmet(t.Expect, res.Steps, vars)
+	given := []string{"trigger"}
+	if resp != nil {
+		given = append(given, "response")
+	}
+	res.Failures, err = unmet(t.Expect, res.Steps, vars, given...)
 	return res, err
 }
 
@@ -102,7 +106,8 @@ func (e *Engine) TestComponent(ctx context.Context, c *workflow.Component, t wor
 
 	start := time.Now()
 	step := StepResult{ID: c.Name, Kind: c.Kind(), Status: OK}
-	step.Output, step.Detail, step.Err = sandbox.call(ctx, c, input)
+	var vars map[string]any
+	step.Output, step.Detail, step.Steps, vars, step.Err = sandbox.call(ctx, c, input)
 	step.Duration = time.Since(start)
 	res.Duration = step.Duration
 
@@ -118,42 +123,21 @@ func (e *Engine) TestComponent(ctx context.Context, c *workflow.Component, t wor
 	}
 	res.Steps = []StepResult{step}
 
-	results, err := expr.Vars("input", "output")
-	if err != nil {
-		return res, err
-	}
-	vars := map[string]any{"input": input, "output": step.Output, "env": env}
-	for _, key := range slices.Sorted(maps.Keys(t.Expect)) {
-		if failure := differs(results, key, t.Expect[key], vars); failure != "" {
-			res.Failures = append(res.Failures, failure)
-		}
-	}
-	return res, nil
+	// Expectations see the input, the output and, of a component made of
+	// steps, each step.
+	vars["output"] = step.Output
+	res.Failures, err = unmet(t.Expect, step.Steps, vars, "input", "output")
+	return res, err
 }
 
-// differs says how the value of the expression key differs from want, or is
-// empty if it does not.
-func differs(env *expr.Env, key string, want any, vars map[string]any) string {
-	got, err := env.EvalExpr(key, vars)
-	if err != nil {
-		return fmt.Sprintf("%s: %v", key, err)
-	}
-	if g, w := jsonText(got), jsonText(want); g != w {
-		return fmt.Sprintf("%s: expected %s, got %s", key, w, g)
-	}
-	return ""
-}
-
-// unmet lists the expectations that the finished run does not meet.
-func unmet(expect map[string]any, steps []StepResult, vars map[string]any) ([]string, error) {
+// unmet lists the expectations that the finished run does not meet. given
+// names what expressions can read besides the steps.
+func unmet(expect map[string]any, steps []StepResult, vars map[string]any, given ...string) ([]string, error) {
 	status := map[string]Status{}
-	names := []string{"trigger"}
+	names := slices.Clone(given)
 	for _, s := range steps {
 		status[s.ID] = s.Status
 		names = append(names, s.ID)
-	}
-	if _, answered := vars["response"]; answered {
-		names = append(names, "response")
 	}
 	env, err := expr.Vars(names...)
 	if err != nil {

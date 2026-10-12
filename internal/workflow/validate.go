@@ -31,6 +31,7 @@ type checker struct {
 
 	components map[string]*Component // those loaded so far, by path
 	shapes     map[string]*shape     // what is known of the values expressions read, by name
+	loading    []string              // the component files being loaded, the one that uses the next before it
 }
 
 func (c *checker) addf(line int, format string, args ...any) {
@@ -62,9 +63,22 @@ func (c *checker) run() {
 		}
 	}
 
+	ids := c.steps(w.Steps, "trigger")
+	c.respond(ids)
+	c.tests(ids)
+}
+
+// reserved are the names expressions use for things other than steps.
+var reserved = []string{"trigger", "env", "response", "input", "output"}
+
+// steps checks the steps of a workflow or of a component made of steps, and
+// returns the ids that expressions after them may refer to. given is what
+// expressions see besides steps: "trigger" in a workflow, "input" in a
+// component.
+func (c *checker) steps(steps []Step, given string) []string {
 	// ids holds the steps a later step may refer to.
 	var ids []string
-	for i, s := range w.Steps {
+	for i, s := range steps {
 		line := c.line("steps", i)
 		label := fmt.Sprintf("step %q", s.ID)
 		usable := false
@@ -74,7 +88,7 @@ func (c *checker) run() {
 			c.addf(line, "%s: id is required", label)
 		case !idRE.MatchString(s.ID):
 			c.addf(line, "%s: id may contain only letters, digits and underscores, and must not start with a digit", label)
-		case s.ID == "trigger" || s.ID == "env" || s.ID == "response":
+		case slices.Contains(reserved, s.ID):
 			c.addf(line, "%s: this id is reserved", label)
 		case slices.Contains(ids, s.ID):
 			c.addf(line, "%s: this id is already used by an earlier step", label)
@@ -82,7 +96,7 @@ func (c *checker) run() {
 			usable = true
 		}
 
-		env, err := expr.NewEnv(ids)
+		env, err := expr.Vars(append([]string{given}, ids...)...)
 		if err != nil {
 			c.addf(line, "%s: %v", label, err)
 			continue
@@ -109,7 +123,7 @@ func (c *checker) run() {
 		case s.HTTP != nil:
 			c.http(base, label, s.HTTP, env)
 		case s.Use != "":
-			w.Steps[i].component = c.use(base, label, s, env)
+			steps[i].component = c.use(base, label, s, env)
 		default:
 			c.addf(line, "%s: needs one of ai, decide, http, use", label)
 		}
@@ -120,15 +134,14 @@ func (c *checker) run() {
 		c.reads(line, label, s.expressions(), c.shapes)
 		if usable {
 			ids = append(ids, s.ID)
-			if comp := w.Steps[i].component; comp != nil {
-				c.shapes[s.ID] = outputShape(comp.Path, comp.AI, comp.Decide, comp.HTTP)
+			if comp := steps[i].component; comp != nil {
+				c.shapes[s.ID] = comp.shape()
 			} else {
 				c.shapes[s.ID] = outputShape(c.path, s.AI, s.Decide, s.HTTP)
 			}
 		}
 	}
-	c.respond(ids)
-	c.tests(ids)
+	return ids
 }
 
 // respond checks what the workflow answers its caller with, which may refer

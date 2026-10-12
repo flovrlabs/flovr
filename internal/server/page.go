@@ -135,9 +135,23 @@ type stepView struct {
 	Edit      []fieldView    `json:"edit,omitempty"` // only when the page may change the files
 
 	// For a step that uses a component: the component's name and its path
-	// as the step gives it.
-	Component string `json:"component,omitempty"`
-	Uses      string `json:"uses,omitempty"`
+	// as the step gives it, and for a component made of steps, those steps.
+	Component string      `json:"component,omitempty"`
+	Uses      string      `json:"uses,omitempty"`
+	Inner     []innerView `json:"inner,omitempty"`
+
+	// Outputs lists what later steps can read from this one, as the fields
+	// to put behind its id, such as "category.value". It is absent where
+	// nothing is known of what the step puts out.
+	Outputs []string `json:"outputs,omitempty"`
+}
+
+// innerView is a step of a component made of steps.
+type innerView struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Subtitle string `json:"subtitle"`
+	When     string `json:"when,omitempty"`
 }
 
 // respondView is the answer a workflow gives its caller, as written.
@@ -191,10 +205,7 @@ func (s *Server) state() stateView {
 	for i := range view.Runs {
 		r := &view.Runs[i]
 		r.Trigger, r.Response = nil, nil
-		r.Steps = slices.Clone(r.Steps)
-		for j := range r.Steps {
-			r.Steps[j].Output = nil
-		}
+		r.Steps = withoutOutputs(r.Steps)
 	}
 	for _, w := range s.live.Load().workflows {
 		view.Workflows = append(view.Workflows, s.view(w))
@@ -296,7 +307,7 @@ func describe(w *workflow.Workflow) workflowView {
 	}
 
 	for i, s := range w.Steps {
-		step := stepView{ID: s.ID, Kind: s.Kind(), When: s.When, Reads: w.Reads(i), Fields: [][2]string{}}
+		step := stepView{ID: s.ID, Kind: s.Kind(), When: s.When, Reads: w.Reads(i), Fields: [][2]string{}, Outputs: w.Outputs(s.ID)}
 		if step.Reads == nil {
 			step.Reads = []string{}
 		}
@@ -326,6 +337,13 @@ func describe(w *workflow.Workflow) workflowView {
 				step.Questions = questions(c.Decide)
 			case c.HTTP != nil:
 				add("request", strings.ToUpper(c.HTTP.Method)+" "+c.HTTP.URL)
+			case len(c.Steps) > 0:
+				for _, in := range c.Steps {
+					step.Inner = append(step.Inner, innerView{ID: in.ID, Kind: in.Kind(), Subtitle: subtitle(in), When: in.When})
+				}
+				if out, ok := c.Output.(map[string]any); ok {
+					add("gives back", strings.Join(slices.Sorted(maps.Keys(out)), ", "))
+				}
 			}
 			for _, p := range c.Input {
 				texts("Input", p.Name, at("with", p.Name), s.With[p.Name])
@@ -389,6 +407,21 @@ func describe(w *workflow.Workflow) workflowView {
 		view.Steps = append(view.Steps, step)
 	}
 	return view
+}
+
+// subtitle is a few words on what a step does, for where it is listed.
+func subtitle(s workflow.Step) string {
+	switch c := s.Component(); {
+	case c != nil:
+		return c.Name
+	case s.AI != nil:
+		return shortModel(s.AI.Model)
+	case s.Decide != nil:
+		return shortModel(s.Decide.Model)
+	case s.HTTP != nil:
+		return strings.ToUpper(s.HTTP.Method) + " " + s.HTTP.URL
+	}
+	return ""
 }
 
 // questions describes what a decide step or component asks, by name.
