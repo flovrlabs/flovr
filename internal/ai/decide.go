@@ -26,7 +26,10 @@ const (
 
 // Option is one allowed answer to a choice or score question. Meaning tells
 // the model when the answer applies, and may be empty.
-type Option struct{ Name, Meaning string }
+type Option struct {
+	Name    string `json:"name"`
+	Meaning string `json:"meaning,omitempty"`
+}
 
 // Question is one thing for a decision model to decide.
 type Question struct {

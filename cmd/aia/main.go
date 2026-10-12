@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -198,7 +199,7 @@ func testCmd() *cobra.Command {
 }
 
 func serveCmd() *cobra.Command {
-	var addr string
+	var addr, history string
 	cmd := &cobra.Command{
 		Use:   "serve [path...]",
 		Short: "Stay running and run workflows when their triggers fire",
@@ -206,11 +207,14 @@ func serveCmd() *cobra.Command {
 			"workflow's webhook path, or its cron schedule. Steps run for real, as with run.\n\n" +
 			"Each path is a workflow file, or a directory that is searched for workflow.yaml\n" +
 			"files (default: the current directory). Restart the server to pick up changes.\n\n" +
-			"A webhook request's JSON body becomes trigger.body. The server answers 202 at\n" +
-			"once and runs the workflow in the background; add ?wait=true to get the finished\n" +
-			"run back instead.\n\n" +
-			"If AIA_TOKEN is set, every webhook request must carry it as a bearer token. The\n" +
-			"server only listens beyond this machine when that token is set.",
+			"A webhook request's JSON body, sent with Content-Type: application/json, becomes\n" +
+			"trigger.body. The server answers 202 at once and runs the workflow in the\n" +
+			"background; add ?wait=true to get the finished run back instead.\n\n" +
+			"Opening the server's address in a browser shows the workflows and their recent\n" +
+			"runs.\n\n" +
+			"If AIA_TOKEN is set, every webhook request must carry it as a bearer token, and\n" +
+			"the browser asks for it as a password. The server only listens beyond this\n" +
+			"machine when that token is set.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				args = []string{"."}
@@ -227,21 +231,24 @@ func serveCmd() *cobra.Command {
 
 			logger := log.New(os.Stdout, "", log.Ltime)
 			srv, err := server.New(workflows, server.Options{
-				Model: ai.NewRouter(),
-				HTTP:  &http.Client{Timeout: 30 * time.Second},
-				Env:   environ(),
-				Token: token,
-				Log:   logger.Printf,
+				Model:   ai.NewRouter(),
+				HTTP:    &http.Client{Timeout: 30 * time.Second},
+				Env:     environ(),
+				Token:   token,
+				Commit:  gitCommit(),
+				History: history,
+				Log:     logger.Printf,
 			})
 			if err != nil {
 				return err
 			}
+			defer srv.Close()
 
 			listener, err := net.Listen("tcp", addr)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("aia is serving on http://%s\n", listener.Addr())
+			fmt.Printf("aia is serving on http://%s  (open it in a browser to see workflows and runs)\n", listener.Addr())
 			for _, route := range srv.Routes() {
 				fmt.Println("  " + route)
 			}
@@ -271,7 +278,24 @@ func serveCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "address to listen on")
+	cmd.Flags().StringVar(&history, "history", filepath.Join(".aia", "runs.jsonl"),
+		"file that finished runs are saved to, with their trigger payloads and step outputs; empty keeps them in memory only")
 	return cmd
+}
+
+// gitCommit identifies the version of the files in the current directory: the
+// short commit hash, marked if there are uncommitted changes. It is empty
+// outside a git repository.
+func gitCommit() string {
+	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	commit := strings.TrimSpace(string(out))
+	if changes, err := exec.Command("git", "status", "--porcelain").Output(); err == nil && len(changes) > 0 {
+		commit += " + uncommitted changes"
+	}
+	return commit
 }
 
 // loopback reports whether addr can only be reached from this machine.

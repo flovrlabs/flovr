@@ -285,23 +285,56 @@ func (w *Workflow) Fixture(rel string) (any, error) {
 func (w *Workflow) EnvVars() []string {
 	var names []string
 	for _, s := range w.Steps {
-		names = append(names, expr.EnvVars(s.When)...)
-		if s.AI != nil {
-			names = append(names, expr.TemplateEnvVars(s.AI.Input)...)
-		}
-		if s.Decide != nil {
-			names = append(names, expr.TemplateEnvVars(s.Decide.Input)...)
-		}
-		if s.HTTP != nil {
-			names = append(names, expr.TemplateEnvVars(s.HTTP.URL)...)
-			for _, value := range s.HTTP.Headers {
-				names = append(names, expr.TemplateEnvVars(value)...)
-			}
-			names = append(names, expr.TemplateEnvVars(s.HTTP.Body)...)
+		for _, src := range s.expressions() {
+			names = append(names, expr.EnvVars(src)...)
 		}
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
+}
+
+// Reads lists what step i's expressions refer to among the trigger and the
+// steps before it, in the order those are defined.
+func (w *Workflow) Reads(i int) []string {
+	var mentioned []string
+	for _, src := range w.Steps[i].expressions() {
+		mentioned = append(mentioned, expr.Names(src)...)
+	}
+	var reads []string
+	if slices.Contains(mentioned, "trigger") {
+		reads = append(reads, "trigger")
+	}
+	for _, earlier := range w.Steps[:i] {
+		if slices.Contains(mentioned, earlier.ID) {
+			reads = append(reads, earlier.ID)
+		}
+	}
+	return reads
+}
+
+// expressions returns every expression the step contains: its condition and
+// the inside of each ${...} placeholder.
+func (s Step) expressions() []string {
+	var exprs []string
+	if s.When != "" {
+		exprs = append(exprs, s.When)
+	}
+	var templated []any
+	switch {
+	case s.AI != nil:
+		templated = []any{s.AI.Input}
+	case s.Decide != nil:
+		templated = []any{s.Decide.Input}
+	case s.HTTP != nil:
+		templated = []any{s.HTTP.URL, s.HTTP.Body}
+		for _, value := range s.HTTP.Headers {
+			templated = append(templated, value)
+		}
+	}
+	for _, v := range templated {
+		exprs = append(exprs, expr.Placeholders(v)...)
+	}
+	return exprs
 }
 
 // line returns the source line of the value at path (map keys and list

@@ -2,6 +2,7 @@ package expr
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -99,9 +100,24 @@ func TestEnvVars(t *testing.T) {
 		}
 	}
 
-	v := map[string]any{"url": "${env.URL}/x", "plain": "env.NOT_AN_EXPRESSION", "n": 3}
-	if got, want := TemplateEnvVars(v), []string{"URL"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("TemplateEnvVars = %v, want %v", got, want)
+}
+
+func TestNames(t *testing.T) {
+	got := Names(`classify.priority == "high" && trigger.body.items.exists(i, i.total > env.LIMIT)`)
+	if want := []string{"classify", "trigger", "i", "env"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Names = %v, want %v", got, want)
+	}
+	if got := Names(`classify.priority ==`); got != nil {
+		t.Errorf("Names of an invalid expression = %v", got)
+	}
+}
+
+func TestPlaceholders(t *testing.T) {
+	v := map[string]any{"url": "${env.URL}/x?n=${ trigger.n }", "plain": "env.NOT_AN_EXPRESSION", "n": 3, "list": []any{"${a.b}"}}
+	got := Placeholders(v)
+	slices.Sort(got)
+	if want := []string{"a.b", "env.URL", "trigger.n"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Placeholders = %v, want %v", got, want)
 	}
 }
 

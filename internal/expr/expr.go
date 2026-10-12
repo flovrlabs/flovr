@@ -184,12 +184,8 @@ var parser = sync.OnceValue(func() *cel.Env {
 // EnvVars returns the NAME of every env.NAME that the bare expression src
 // reads.
 func EnvVars(src string) []string {
-	parsed, iss := parser().Parse(src)
-	if iss.Err() != nil {
-		return nil
-	}
 	var names []string
-	celast.PreOrderVisit(celast.NavigateAST(parsed.NativeRep()), celast.NewExprVisitor(func(e celast.Expr) {
+	visit(src, func(e celast.Expr) {
 		if e.Kind() != celast.SelectKind {
 			return
 		}
@@ -197,32 +193,54 @@ func EnvVars(src string) []string {
 		if op := sel.Operand(); op.Kind() == celast.IdentKind && op.AsIdent() == "env" {
 			names = append(names, sel.FieldName())
 		}
-	}))
+	})
 	return names
 }
 
-// TemplateEnvVars is EnvVars for the ${...} placeholders in v, which may be a
-// string or any nesting of maps and lists that contain strings.
-func TemplateEnvVars(v any) []string {
+// Names returns the names the bare expression src refers to, such as trigger,
+// env, or a step's id.
+func Names(src string) []string {
 	var names []string
+	visit(src, func(e celast.Expr) {
+		// Names starting with @ are variables that macros such as exists()
+		// introduce internally.
+		if e.Kind() == celast.IdentKind && !strings.HasPrefix(e.AsIdent(), "@") {
+			names = append(names, e.AsIdent())
+		}
+	})
+	return names
+}
+
+func visit(src string, fn func(celast.Expr)) {
+	parsed, iss := parser().Parse(src)
+	if iss.Err() != nil {
+		return
+	}
+	celast.PreOrderVisit(celast.NavigateAST(parsed.NativeRep()), celast.NewExprVisitor(fn))
+}
+
+// Placeholders returns the expression inside every ${...} in v, which may be a
+// string or any nesting of maps and lists that contain strings.
+func Placeholders(v any) []string {
+	var exprs []string
 	switch v := v.(type) {
 	case string:
 		parts, _ := split(v)
 		for _, p := range parts {
 			if p.expr {
-				names = append(names, EnvVars(p.text)...)
+				exprs = append(exprs, p.text)
 			}
 		}
 	case map[string]any:
 		for _, item := range v {
-			names = append(names, TemplateEnvVars(item)...)
+			exprs = append(exprs, Placeholders(item)...)
 		}
 	case []any:
 		for _, item := range v {
-			names = append(names, TemplateEnvVars(item)...)
+			exprs = append(exprs, Placeholders(item)...)
 		}
 	}
-	return names
+	return exprs
 }
 
 // native converts a CEL value to the types encoding/json produces.
