@@ -247,6 +247,7 @@ With `--edit` the page becomes a place to work on the workflows:
 - Add a step from one of the components in the workflow's folder, or remove a step.
 - Open a component, which is drawn like a workflow with what it takes at the top and what it gives back at the bottom, and change its values the same way. The change is refused if it would break a workflow that uses the component.
 - Run the tests of a workflow or of a component and see, for each, which expectations were met.
+- Keep a run that went right as a test. Its request becomes the fixture, saved as a new file in the workflow's folder, and what the run did becomes what to expect: which steps ran, and what a model decided. Text a model wrote is left out unless you ask for it, since it reads differently each time. A test can also be written from nothing, or removed.
 - See under **Changes** what git says has changed since the last commit.
 
 Nothing is written unless the result is a workflow the server can go on serving; otherwise the page says what is wrong and the file stays as it was. The server also follows the files: what an editor or git changes is taken up without a restart, and a file that is no longer valid keeps being served as it was while the page says why.

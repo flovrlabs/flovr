@@ -84,7 +84,7 @@ const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", run
 const openInner = new Set();
 
 let state = { commit: "", protected: false, workflows: [], runs: [] };
-let selected = { workflow: null, run: null, node: null, changes: false, add: null };
+let selected = { workflow: null, run: null, node: null, changes: false, add: null, test: null };
 let detail = null;      // the selected run in full, with trigger and outputs
 let shown = "";         // what the page currently shows, to tell whether anything changed
 let view = null;        // the workflow and run now drawn, for redrawing on resize and zoom
@@ -149,12 +149,13 @@ const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 
 // The address is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>,
 // or /a/<step> while a step is being added after that step ("trigger" for the
-// first place, "-" for the last).
+// first place, "-" for the last). /t/<run> is the form that keeps a run as a
+// test, and /t/- the form for a new test from nothing.
 function readAddress() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   const found = {};
   for (let i = 0; i + 1 < parts.length; i += 2) found[parts[i]] = parts[i + 1];
-  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null };
+  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null, test: found.t || null };
 }
 
 function go(change) {
@@ -163,10 +164,13 @@ function go(change) {
   if (!("changes" in change)) next.changes = false;
   // Nor does picking anything else keep the add-a-step form open.
   if (!("add" in change)) next.add = null;
+  // Nor the form for a test.
+  if (!("test" in change)) next.test = null;
   let hash = "#/w/" + encodeURIComponent(next.workflow);
   if (next.run) hash += "/r/" + encodeURIComponent(next.run);
   if (next.node) hash += "/n/" + encodeURIComponent(next.node);
   if (next.add) hash += "/a/" + encodeURIComponent(next.add);
+  if (next.test) hash += "/t/" + encodeURIComponent(next.test);
   if (next.changes) hash += "/c/1";
   if (location.hash !== hash) location.hash = hash;
 }
@@ -237,7 +241,7 @@ const latestRun = (name) => state.runs.find((r) => r.workflow === name && r.sour
 function render() {
   if (!state.workflows.some((w) => w.name === selected.workflow)) {
     const first = state.workflows.find((x) => !x.component) || state.workflows[0];
-    selected = { workflow: first ? first.name : null, run: null, node: null, changes: false, add: null };
+    selected = { workflow: first ? first.name : null, run: null, node: null, changes: false, add: null, test: null };
     detail = null;
   }
   // Rebuilding the page drops the reader's focus and text selection, so it is
@@ -252,7 +256,7 @@ function render() {
   const focusId = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
 
   const w = state.workflows.find((x) => x.name === selected.workflow);
-  const key = [selected.workflow, selected.run, selected.node, selected.changes, selected.add].join("|");
+  const key = [selected.workflow, selected.run, selected.node, selected.changes, selected.add, selected.test].join("|");
   const moved = key !== lastKey;
   lastKey = key;
 
@@ -260,6 +264,7 @@ function render() {
   if (!w) {
     view = null;
     form = null;
+    tform = null;
     insp.body = null;
     $("side").replaceChildren();
     $("changes").replaceChildren();
@@ -740,6 +745,7 @@ function runBar(run) {
     el("span", { class: "meta" }, when(run.started)),
     run.status !== "running" ? el("span", { class: "meta" }, "took " + duration(run.ms)) : null,
     el("span", { class: "meta" }, run.source),
+    canKeep(view.w, run) ? el("button", { type: "button", class: "ghost keep", "data-focus": "keep-bar", onclick: () => openKeep(run.run) }, icon("plus", 13), "Keep as a test") : null,
     el("button", { type: "button", class: "ghost", onclick: () => go({ run: null, node: null }) }, "Close run", el("kbd", {}, "Esc")));
 }
 
@@ -833,8 +839,12 @@ function renderInspector(w, run, moved) {
   const fields = !canEdit ? null : onStart ? (comp ? null : w.edit) : onEnd ? endEdit : step ? step.edit : null;
   const hasForm = !!(fields && fields.length);
   const adding = addMode(w);
+  const testing = testMode(w);
   let parts;
-  if (adding) parts = [header("workflow", "plus", "Add a step", "to " + w.name, true)];
+  const source = testing && selected.test !== "-" ? state.runs.find((r) => r.run === selected.test) : null;
+  if (testing) parts = [header("workflow", "plus", selected.test === "-" ? "New test" : "Keep as a test",
+    selected.test === "-" ? "of " + w.name : "from the run at " + (source ? when(source.started) : selected.test) + " of " + w.name, true)];
+  else if (adding) parts = [header("workflow", "plus", "Add a step", "to " + w.name, true)];
   else if (onStart) parts = comp ? inputDetails(w, run) : triggerDetails(w, run);
   else if (onEnd) parts = comp ? outputDetails(w, run) : responseDetails(w, run);
   else if (step) parts = stepDetails(w, step, run, hasForm);
@@ -845,11 +855,17 @@ function renderInspector(w, run, moved) {
   const top = box.scrollTop;
   insp.head.replaceWith(head);
   insp.head = head;
-  if (adding) {
+  if (testing) {
+    showForm(w, null, null);
+    hideAdder();
+    showTester(w);
+  } else if (adding) {
+    hideTester();
     showForm(w, null, null);
     showAdder(w);
   } else {
     hideAdder();
+    hideTester();
     showForm(w, hasForm ? selected.node : null, fields);
   }
   insp.rest.replaceChildren(...sections);
@@ -1035,6 +1051,7 @@ function runDetails(w, run) {
     section("Result",
       statusPanel(run.status, run.status !== "running" ? el("div", { class: "muted" }, "took " + duration(run.ms) + ", started " + when(run.started)) : null),
       run.error ? el("pre", { class: "error" }, run.error) : null,
+      canKeep(w, run) ? keepOffer(run) : null,
       // What was answered is shown on the response node: only a line here.
       run.response ? el("p", { class: "muted small" }, "Answered the caller with ", el("span", { class: "mono" }, run.response.status), ". ", showResponse())
         : w.respond && run.status === "failed" && isWebhook(w) ? el("p", { class: "muted small" }, "The caller got 500 with only the run id. ", showResponse()) : null),
@@ -1375,7 +1392,7 @@ function dirtyNodes(name) {
 }
 const editedNodes = (w) => new Set(state.editable ? dirtyNodes(w.name) : []);
 const addTouched = (a) => !!a && (a.idTouched || a.when.trim() !== "" || Object.values(a.values).some((v) => v.trim() !== ""));
-const anyDirty = () => state.editable && state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name]));
+const anyDirty = () => state.editable && (state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name])) || Object.values(keeps).some((k) => k.touched));
 
 // adopt takes in a fresh answer from /api/state. A workflow whose file changed
 // without this page saving it keeps the person's drafts, on top of the new text.
@@ -1750,8 +1767,8 @@ function updateBar() {
   const b = insp.bar;
   if (!b || !view) return;
   const w = view.w, st = uiOf(w.name), n = dirtyCount(w.name);
-  const adding = addMode(w);
-  const on = state.editable && !w.problem && (adding || form || n > 0 || st.notice);
+  const adding = addMode(w), testing = testMode(w);
+  const on = state.editable && !w.problem && (adding || testing || form || n > 0 || st.notice);
   b.root.hidden = !on;
   if (!on) return;
   const share = isComp(w) && !adding;
@@ -1764,6 +1781,27 @@ function updateBar() {
     b.shared.title = (w.usedBy || []).map((u) => (entryOf(u.workflow) ? compTitle(entryOf(u.workflow)) : u.workflow) + " › " + u.step).join("\n");
   }
   const key = isMac ? "⌘S" : "Ctrl+S";
+  if (testing) {
+    // The same bar serves the form for a new test: Cancel and Add test.
+    const td = keepFor(w), ready = !!td && td.state === "ready";
+    const issues = ready ? keepIssues(w, td) : [];
+    b.status.replaceChildren(...(st.saving ? ["Adding…"]
+      : !td || td.state === "loading" ? ["Reading the run…"]
+      : td.state === "error" ? ["This run cannot become a test."]
+      : issues.length && !st.notice ? [issues[0].message]
+      : ["Writes the test and its fixture file."]));
+    b.status.classList.remove("dirty");
+    b.save.setAttribute("aria-disabled", st.saving || !ready ? "true" : "false");
+    b.discard.setAttribute("aria-disabled", st.saving ? "true" : "false");
+    b.discard.classList.remove("armed");
+    b.discard.textContent = "Cancel";
+    if (b.save.dataset.mode !== "test") { b.save.dataset.mode = "test"; b.save.replaceChildren("Add test", el("kbd", {}, key)); }
+    if (b.shownNotice !== st.notice) {
+      b.shownNotice = st.notice;
+      b.slot.replaceChildren(...(st.notice ? [noticeView(st.notice, w)] : []));
+    }
+    return;
+  }
   if (adding) {
     // The same bar serves the form for a new step: Cancel and Add step.
     const comp = componentOf(w, addOf(w.name).component);
@@ -1808,7 +1846,8 @@ function noticeView(n, w) {
   const text = [];
   let title = "";
   // What was being done: a plain save, or adding or removing a step.
-  const isAdd = n.did === "add", isRemove = n.did === "remove";
+  const isTest = n.did === "test", isUntest = n.did === "untest";
+  const isAdd = n.did === "add" || isTest, isRemove = n.did === "remove" || isUntest;
   if (n.kind === "saved") {
     title = n.title || "Saved";
     // A component has no changes view of its own: its file is part of the workflow that uses it.
@@ -1818,14 +1857,16 @@ function noticeView(n, w) {
       !isComp(w) ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ changes: true }) }, "See what changed")
         : home ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ workflow: home.name, run: null, node: null, changes: true }) }, "See what changed in " + home.name) : null),
       isComp(w) && usesOf(w) ? el("p", {}, "It now applies to ", plural(usesOf(w), "step"), " that use" + (usesOf(w) === 1 ? "s" : ""), " ", compTitle(w), ".") : null,
+      isUntest ? el("p", {}, "Its fixture file ", mono(n.fixture), " was left in the folder. Delete it yourself if nothing else uses it.") : null,
+      isTest ? testNext(n, w) : null,
       droppedView(n));
   } else if (n.kind === "invalid") {
-    title = isAdd ? "Not added. The file was left as it was." : isRemove ? "Not removed. The file was left as it was."
+    title = isTest ? "Not added. Nothing was written." : isAdd ? "Not added. The file was left as it was." : isRemove ? "Not removed. The file was left as it was."
       : isComp(w) ? "Not saved. The component was left as it was." : "Not saved. The file was left as it was.";
     if (n.saved && n.saved.length) text.push(el("p", {}, "Already written: ", n.saved.join(", "), "."));
     if (n.problems && n.problems.length) {
-      const users = isRemove ? usersOf(n.problems) : [];
-      if (isRemove) text.push(el("p", {}, users.length ? [n.id + " is still used by ", users.join(", "), ". Change those first, then remove it again."] : "Something still depends on " + n.id + ". Change it first, then remove it again."));
+      const users = n.did === "remove" ? usersOf(n.problems) : [];
+      if (n.did === "remove") text.push(el("p", {}, users.length ? [n.id + " is still used by ", users.join(", "), ". Change those first, then remove it again."] : "Something still depends on " + n.id + ". Change it first, then remove it again."));
       // A component is checked together with everything that uses it.
       if (isComp(w) && !isAdd && !isRemove) {
         text.push(el("p", {}, n.error || "The server did not accept the change."),
@@ -1835,14 +1876,17 @@ function noticeView(n, w) {
               : compTitle(w) + " is shared by " + plural(usesOf(w), "step") + ", and the server checks them with it, so a change that breaks one of them is refused. Nothing was written."));
       }
       text.push(el("p", {}, isRemove ? "What the server found:" : isAdd ? "Fix this and try again:" : "Fix this and save again:"),
-        el("ul", { class: "problems" }, n.problems.map((p) => problemItem(p, w, isAdd ? n.id : null))));
+        el("ul", { class: "problems" }, n.problems.map((p) => problemItem(p, w, n.did === "add" ? n.id : null))));
     } else text.push(el("p", {}, n.error || "The server did not accept the change."));
   } else if (n.kind === "conflict") {
     title = isAdd ? "The file changed on disk, so nothing was added" : isRemove ? "The file changed on disk, so nothing was removed"
       : "The file changed on disk, so nothing was saved";
     if (isAdd || isRemove) {
       text.push(el("p", {}, "The workflow file was changed after this page read it. The page now shows the file as it is."),
-        el("p", {}, isAdd ? "Your entries are still in the form. Check the position, then add the step again." : "Look at the steps again, then remove it again if it is still what you want."));
+        el("p", {}, isTest ? "Your entries are still in the form. Check them, then add the test again."
+          : isAdd ? "Your entries are still in the form. Check the position, then add the step again."
+          : isUntest ? "Look at the tests again, then remove it again if it is still what you want."
+          : "Look at the steps again, then remove it again if it is still what you want."));
     } else {
       text.push(el("p", {}, (n.what === "prompt" ? "The prompt file was changed after this page read it." : "The workflow file was changed after this page read it.")
         + " The form now shows what is in the file" + (n.kept ? ", with your " + plural(n.kept, "unsaved edit") + " on top." : ".")),
@@ -1907,7 +1951,7 @@ function problemItem(p, w, skip) {
   const node = m && m[1] !== skip && w.steps.some((s) => s.id === m[1]) ? m[1] : w.respond && /^respond\b/.test(p.message || "") ? "response" : null;
   return el("li", {},
     p.line ? el("span", { class: "ln" }, "Line " + p.line) : null,
-    el("span", { class: "msg" }, p.message),
+    el("span", { class: "msg" + (p.plain ? " plain" : "") }, p.message),
     node ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ node }) }, "Show " + node) : null);
 }
 
@@ -1932,6 +1976,7 @@ function failureOf(r, what, extra) {
 async function saveCurrent() {
   if (!view || !state.editable) return;
   if (addMode(view.w)) return addStep();
+  if (testMode(view.w)) return addTest();
   const name = view.w.name, st = uiOf(name);
   const w = workflowByName(name);
   if (st.saving || !w || w.problem) return;
@@ -2017,6 +2062,7 @@ async function saveCurrent() {
 function discardCurrent() {
   if (!view) return;
   if (addMode(view.w)) return go({ add: null });
+  if (testMode(view.w)) return go({ test: null });
   const name = view.w.name, st = uiOf(name);
   if (st.saving || dirtyCount(name) === 0) return;
   if (!st.armed) {
@@ -2805,6 +2851,8 @@ function testsSection(w) {
   if (!cases.length) {
     return section("Tests", el("div", { class: "emptystate" },
       el("div", { class: "etitle" }, "No tests yet"),
+      canAddTest(w) ? el("p", {}, "Keep a run that did the right thing as a test: open a run and choose ", el("strong", {}, "Keep as a test"), ". Or write one from nothing.") : null,
+      canAddTest(w) ? el("p", {}, newTestButton(w)) : null,
       el("p", {}, "Tests are written under ", mono("tests:"), " in ", mono(w.path), ". " + (isComp(w)
         ? "Each gives the component an input, written there or in a file, and says what to expect of its steps and of what it gives back."
         : "Each names a fixture, a sample request, and what to expect of the steps and what they put out.")),
@@ -2813,7 +2861,9 @@ function testsSection(w) {
   const v = roundView(w.name);
   return section("Tests",
     el("p", { class: "muted" }, "Tests call the AI models for real, so they check what the model actually answers. No HTTP request is sent. They run the saved file."),
-    canTest(w) ? el("div", { class: "testrow" }, startButton(w, null, "Run all tests", "ov:test-all", { primary: true })) : el("p", { class: "muted small" }, "Tests cannot run while the file has a problem."),
+    canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) ? startButton(w, null, "Run all tests", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null)
+      : el("p", { class: "muted small" }, "Tests cannot run while the file has a problem."),
+    canAddTest(w) ? el("p", { class: "muted small" }, "To keep a run as a test, open it on the left and choose Keep as a test.") : null,
     unsavedNote(w),
     testErrorNotice(w),
     el("ul", { class: "tcases" }, cases.map((c, i) => testCase(w, c, i, v))));
@@ -2850,7 +2900,527 @@ function testCase(w, c, i, v) {
         statusMark(got ? (got.failure ? "failed" : "ok") : "pending", 9),
         el("span", { class: "ek mono" }, got ? el("span", { class: "sr" }, got.failure ? "Not met: " : "Met: ") : null, e.key),
         el("span", { class: "ew mono" }, want));
-    })));
+    })),
+    canAddTest(w) ? removeTestButton(w, c, i) : null);
+}
+
+// ---- writing tests: from a run, or from nothing ----
+//
+// The form for a new test is a long-lived piece of the page, like the one for a
+// new step: what has been typed lives in `keeps` and in the controls built
+// once, the poll only brings them up to date (syncTester), and a trip to
+// another step or run leaves it as it was. One form is kept per workflow and
+// source (a run, or "-" for nothing), and thrown away when the test is saved.
+
+const keeps = {};       // "workflow|source" -> the test being written
+let tform = null;       // the entry of `keeps` now on the page
+const canAddTest = (w) => !!w && state.editable && !w.problem && !w.component;
+const testMode = (w) => canAddTest(w) && !!selected.test;
+const keepKey = (name, source) => name + "|" + source;
+const keepFor = (w) => (selected.test && w ? keeps[keepKey(w.name, selected.test)] || null : null);
+// An ordinary run that succeeded. A test's own run is not offered: its test and
+// its fixture are already files, and keeping it would only copy them.
+const canKeep = (w, run) => canAddTest(w) && !!run && !isTestRun(run) && run.status === "ok";
+
+function openKeep(runId) { go({ test: runId, node: null }); }
+function openNewTest() { go({ test: "-", run: null, node: null }); }
+
+function keepOffer(run) {
+  return el("div", { class: "keepoffer" },
+    el("button", { type: "button", class: "btn primary", "data-focus": "keep", onclick: () => openKeep(run.run) }, icon("plus", 14), "Keep as a test"),
+    el("p", { class: "muted small" }, "Turns this request, and what the workflow did with it, into a test, so that a later change that alters it is caught."));
+}
+
+function newTestButton() {
+  return el("button", { type: "button", class: "btn", "data-focus": "new-test", onclick: () => openNewTest() }, icon("plus", 14), "New test");
+}
+
+// ---- typed values ----
+//
+// A wanted value goes out as true or false, a number, or text, and the rule is
+// the same wherever it came from: read what is in the box. true and false are
+// yes and no, what is written as a JSON number is a number, anything else is
+// text. Quotes round the whole value make it text, so "200" is the text 200.
+// What will be saved is shown under the box. A step is wanted as called or
+// skipped and is chosen, not typed.
+
+const NUMBER = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/;
+
+function parseWant(text) {
+  const t = text.trim();
+  if (t === "") return { error: true };
+  if (t === "true" || t === "false") return { value: t === "true", type: "true or false", cls: "boolean" };
+  if (NUMBER.test(t) && Number.isFinite(Number(t))) return { value: Number(t), type: "number", cls: "number" };
+  if (t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"') {
+    let v;
+    try { v = JSON.parse(t); } catch (err) { v = t.slice(1, -1); }
+    if (typeof v === "string") return { value: v, type: "text", cls: "text" };
+  }
+  return { value: text, type: "text", cls: "text" };
+}
+
+// valueText is what a value from the server looks like in the box: the same
+// value comes back out of parseWant, so an untouched value keeps its type.
+function valueText(v) {
+  if (typeof v !== "string") return typeof v === "number" || typeof v === "boolean" ? String(v) : JSON.stringify(v);
+  const p = parseWant(v);
+  return p.value === v && p.cls === "text" ? v : JSON.stringify(v);
+}
+
+const clip = (text, n) => (text.length > n ? text.slice(0, n) + "…" : text);
+const isStepKey = (w, key) => w.steps.some((s) => s.id === key);
+const isBlankRow = (r) => r.hand && !r.key.trim() && !r.text.trim();
+
+function parseFixture(text) {
+  try { return { value: JSON.parse(text) }; } catch (err) { return { error: String(err.message || err) }; }
+}
+
+// startFixture is what a test from nothing starts with: a request the workflow
+// is known to take, when it has one.
+function startFixture(w) {
+  if (!isWebhook(w)) return {};
+  return { body: w.sample !== undefined ? w.sample : {} };
+}
+
+// keySuggestions are the keys worth offering for an expectation: each step, and
+// what each puts out.
+function keySuggestions(w) {
+  const out = [];
+  for (const s of w.steps) {
+    out.push(s.id);
+    for (const o of s.outputs || []) out.push(s.id + "." + o);
+  }
+  if (w.respond) out.push("response.status");
+  return out;
+}
+
+// ---- the form's data ----
+
+function keepStart(w, source) {
+  const key = keepKey(w.name, source);
+  if (keeps[key]) return keeps[key];
+  const td = keeps[key] = {
+    key, workflow: w.name, source, state: "ready", error: "", name: "", items: [], fixtureText: "",
+    touched: false, seq: 0, built: false, shown: "", root: el("section", { class: "editform testform" }),
+  };
+  if (source === "-") td.fixtureText = JSON.stringify(startFixture(w), null, 2);
+  else { td.state = "loading"; loadKeepDraft(td); }
+  return td;
+}
+
+// loadKeepDraft asks the server what a run would make of a test. Nothing is written.
+async function loadKeepDraft(td) {
+  td.state = "loading";
+  td.error = "";
+  td.built = false;
+  let r = null;
+  try { r = await request("POST", "/api/cases", { workflow: td.workflow, draft: td.source }); } catch (err) { r = null; }
+  if (keeps[td.key] !== td) return;
+  if (r && r.ok && r.body.draft) {
+    const d = r.body.draft;
+    td.fixtureText = JSON.stringify(d.fixture === undefined ? {} : d.fixture, null, 2);
+    td.items = (d.expect || []).map((e) => ({ id: ++td.seq, key: e.key, text: valueText(e.want), keep: e.keep !== false, hand: false, advice: e.keep !== false, wasStep: false }));
+    td.state = "ready";
+  } else {
+    td.state = "error";
+    td.error = r ? r.body.error || "The server answered " + r.status + "." : "Could not reach the server.";
+  }
+  td.built = false;
+  uiTick++;
+  shown = "";
+  render();
+}
+
+// keepIssues lists what stops the test from being added, with the control it is about.
+function keepIssues(w, td) {
+  const out = [];
+  if (!td.name.trim()) out.push({ message: "Give the test a name.", at: td.nameBox });
+  const counted = td.items.filter((r) => r.keep && !isBlankRow(r));
+  const seen = new Set();
+  for (const r of counted) {
+    const key = r.key.trim(), E = r.els;
+    if (!key) { out.push({ message: "An expectation needs a key: a step id or an expression.", at: E && E.key }); continue; }
+    if (seen.has(key)) out.push({ message: key + " is expected twice. Keep one.", at: E && (E.key || E.check) });
+    seen.add(key);
+    if (!isStepKey(w, key) && parseWant(r.text).error) out.push({ message: key + ": give the wanted value, or \"\" for empty text.", at: E && E.box });
+  }
+  if (!counted.length) out.push({ message: "Tick or add at least one expectation.", at: td.addBtn });
+  const f = parseFixture(td.fixtureText);
+  if (f.error) out.push({ message: "The fixture is not valid JSON: " + f.error, at: td.fixBox });
+  return out;
+}
+
+// ---- the form on the page ----
+
+function hideTester() {
+  if (!tform) return;
+  tform = null;
+  insp.formslot.replaceChildren();
+}
+
+function showTester(w) {
+  const td = keepStart(w, selected.test);
+  const fresh = tform !== td;
+  if (fresh) {
+    tform = td;
+    // What the last save said is not news in a new form.
+    const st = uiOf(w.name);
+    if (st.notice && (st.notice.kind === "saved" || st.notice.local)) st.notice = null;
+  }
+  paintTester(w, td);
+  if (td.root.parentNode !== insp.formslot) {
+    insp.formslot.replaceChildren(td.root);
+    afterRender = focusTester;
+  }
+}
+
+function focusTester() {
+  const td = tform;
+  if (!td) return;
+  const t = td.state === "ready" && td.nameBox ? td.nameBox : insp.head.querySelector(".x");
+  if (t) t.focus({ preventScroll: false });
+}
+
+function paintTester(w, td) {
+  if (td.state !== "ready") {
+    const sig = td.state + "|" + td.error;
+    if (td.shown !== sig) {
+      td.shown = sig;
+      td.root.replaceChildren(td.state === "loading"
+        ? el("p", { class: "muted", role: "status" }, "Reading the run…")
+        : el("div", { class: "emptystate" },
+            el("div", { class: "etitle" }, "This run cannot become a test"),
+            el("p", {}, td.error),
+            el("p", {},
+              el("button", { type: "button", class: "linkbtn", onclick: () => { loadKeepDraft(td); } }, "Try again"), " · ",
+              el("button", { type: "button", class: "linkbtn", onclick: () => go({ test: null }) }, "Close"))));
+    }
+    return;
+  }
+  if (!td.built) {
+    const wasLoading = td.shown.startsWith("loading");
+    buildTester(w, td);
+    td.built = true;
+    td.shown = "ready";
+    // The form has just replaced "Reading the run": the person goes on from the name.
+    if (wasLoading) afterRender = () => { const a = document.activeElement; if (!a || a === document.body || a.closest(".inspector header")) td.nameBox.focus({ preventScroll: true }); };
+  }
+  syncTester(w, td);
+}
+
+// touch notes that the person has changed something.
+function touch(td) {
+  td.touched = true;
+  const st = uiOf(td.workflow);
+  if (st.notice && st.notice.local) st.notice = null;
+  paintCount(td);
+  updateBar();
+}
+
+function paintCount(td) {
+  const n = td.items.filter((r) => r.keep && !isBlankRow(r)).length;
+  td.count.textContent = td.items.length ? n + " of " + plural(td.items.filter((r) => !isBlankRow(r)).length, "expectation") + " will be saved" : "None yet";
+}
+
+function buildTester(w, td) {
+  const uid = ++formId;
+  td.uid = uid;
+  const fromRun = td.source !== "-";
+
+  const nameId = "tn" + uid;
+  td.nameBox = el("input", { id: nameId, type: "text", class: "in", spellcheck: "false", autocomplete: "off", "aria-describedby": nameId + "h" });
+  td.nameBox.value = td.name;
+  td.nameBox.addEventListener("input", () => { td.name = td.nameBox.value; touch(td); });
+  const nameField = el("div", { class: "field" },
+    el("div", { class: "lab" }, el("label", { for: nameId }, "Test name")),
+    td.nameBox,
+    el("p", { class: "hint-text", id: nameId + "h" }, "Say what the workflow should do with this request. The name also names the fixture file."));
+
+  td.list = el("ul", { class: "xlist", "aria-label": "Expectations" });
+  td.count = el("span", { class: "xcount", role: "status" });
+  td.keys = el("datalist", { id: "tk" + uid });
+  td.addBtn = el("button", { type: "button", class: "btn small", "data-focus": "x-add" }, icon("plus", 12), "Add an expectation");
+  td.addBtn.addEventListener("click", () => {
+    const row = { id: ++td.seq, key: "", text: "", keep: true, hand: true, advice: true, wasStep: false };
+    td.items.push(row);
+    td.list.append(buildRow(td, row));
+    paintX(td, row);
+    touch(td);
+    row.els.key.focus();
+  });
+  td.items.forEach((row) => td.list.append(buildRow(td, row)));
+
+  const xhead = el("div", { class: "xhead" }, el("h2", {}, "Expectations"), td.count);
+  const lede = el("p", { class: "hint-text xlede" }, fromRun
+    ? "What this run did. Tick what the workflow must keep doing; what is left unticked is not checked."
+    : "What the workflow should do with this request: which steps run, what they decide, what it answers.");
+  const help = el("div", { class: "xhelp" },
+    el("p", {}, el("strong", {}, "Key"), " is a step id, or an expression over ", mono("trigger"), ", the steps and ", mono("response"), ", such as ", mono("classify.category.value"), " or ", mono("response.status"), "."),
+    el("p", {}, el("strong", {}, "Value"), " is read as typed: ", mono("true"), " or ", mono("false"), " is yes or no, a plain number is a number, anything else is text. Put quotes round text that looks like one of those: ", mono("\"200\""), " is the text 200."));
+
+  const fixId = "tf" + uid;
+  td.fixBox = el("textarea", { id: fixId, class: "in mono prompt fixbox", rows: 12, spellcheck: "false", autocomplete: "off", "aria-describedby": fixId + "e" });
+  td.fixBox.value = td.fixtureText;
+  td.fixErr = el("p", { class: "conflict bad", id: fixId + "e", "aria-live": "polite", hidden: true });
+  td.fixField = el("div", { class: "field" },
+    el("div", { class: "lab" }, el("label", { for: fixId }, "Fixture"), el("span", { class: "tag", title: "Edited as JSON" }, "JSON")),
+    td.fixBox, td.fixErr);
+  td.fixBox.addEventListener("input", () => { td.fixtureText = td.fixBox.value; touch(td); paintFixture(td); });
+  const folder = folderOf(w.path) + "/fixtures/";
+  const note = el("div", { class: "notice warn fixnote" },
+    el("div", { class: "nhead" }, el("strong", {}, fromRun ? "This is the real request" : "Saved to a file in your repository")),
+    el("p", {}, "Saving writes it to a file in ", mono(folder), ", which belongs in git. Check it for personal data first, and edit it here if it has any."));
+
+  td.root.replaceChildren(nameField, xhead, lede, td.list, el("div", { class: "xadd" }, td.addBtn), td.keys, help,
+    el("h2", { class: "sub" }, "Fixture"), note, td.fixField);
+  paintFixture(td);
+  td.keySig = "";
+  td.stepSig = null;
+}
+
+function paintFixture(td) {
+  const f = parseFixture(td.fixtureText);
+  td.fixErr.hidden = !f.error;
+  td.fixErr.textContent = f.error ? "Not valid JSON: " + f.error : "";
+  td.fixField.classList.toggle("invalid", !!f.error);
+}
+
+// buildRow is one expectation: a tick, its key, and what is wanted. A row from
+// the run has its key fixed; one added by hand has a box for the key and a
+// button to take it away again.
+function buildRow(td, row) {
+  const id = "x" + td.uid + "r" + row.id;
+  const E = row.els = {};
+  E.check = el("input", { type: "checkbox", id: id + "c", "aria-label": row.hand ? "Include this expectation" : null });
+  E.check.checked = row.keep;
+  E.check.addEventListener("change", () => { row.keep = E.check.checked; touch(td); paintX(td, row); });
+  if (row.hand) {
+    E.key = el("input", { type: "text", id: id + "k", class: "in mono", list: "tk" + td.uid, spellcheck: "false", autocomplete: "off", autocapitalize: "off", placeholder: "step id or expression", "aria-label": "Key of this expectation" });
+    E.key.value = row.key;
+    E.key.addEventListener("input", () => { row.key = E.key.value; touch(td); paintX(td, row); });
+    E.del = el("button", { type: "button", class: "x small", "aria-label": "Remove this expectation", title: "Remove" }, icon("close", 13));
+    E.del.addEventListener("click", () => {
+      td.items.splice(td.items.indexOf(row), 1);
+      row.el.remove();
+      touch(td);
+      td.addBtn.focus();
+    });
+  } else {
+    E.label = el("label", { for: id + "c", class: "xkey mono" }, row.key);
+  }
+  const what = row.hand ? "Wanted value" : "Wanted value of " + row.key;
+  const long = row.text.length > 56 || row.text.includes("\n");
+  E.box = el(long ? "textarea" : "input", { id: id + "v", class: "in mono", spellcheck: "false", autocomplete: "off", autocapitalize: "off", "aria-label": what, rows: long ? 2 : null, type: long ? null : "text", placeholder: row.hand ? "true, 200, or text" : null });
+  E.box.value = row.text;
+  E.box.addEventListener("input", () => { row.text = E.box.value; autosize(E.box); touch(td); paintX(td, row); });
+  E.sel = el("select", { id: id + "s", class: "in", "aria-label": what }, el("option", { value: "called" }, "called"), el("option", { value: "skipped" }, "skipped"));
+  E.sel.addEventListener("change", () => { row.text = E.sel.value; touch(td); paintX(td, row); });
+  E.clip = el("div", { class: "xclip mono" });
+  E.typed = el("p", { class: "typed" });
+  E.why = el("p", { class: "xwhy" });
+  row.el = el("li", { class: "xrow" + (row.hand ? " hand" : "") },
+    E.check, row.hand ? E.key : E.label, E.del,
+    el("div", { class: "xbody" }, E.clip, E.box, E.sel, E.typed, E.why));
+  return row.el;
+}
+
+// paintX brings one row up to date: what is shown depends on whether it is
+// ticked and on whether its key is a step.
+function paintX(td, row) {
+  const w = workflowByName(td.workflow);
+  if (!w || !row.els) return;
+  const E = row.els, step = isStepKey(w, row.key.trim()) && !!row.key.trim();
+  row.el.classList.toggle("on", row.keep);
+  if (E.check.checked !== row.keep) E.check.checked = row.keep;
+  // A key that stopped being a step leaves the value it was given as a step.
+  if (row.hand && row.wasStep && !step) row.text = "";
+  row.wasStep = step;
+  if (step && row.text !== "called" && row.text !== "skipped") row.text = "called";
+  E.clip.hidden = row.keep;
+  E.box.hidden = !row.keep || step;
+  E.sel.hidden = !row.keep || !step;
+  E.typed.hidden = !row.keep || step;
+  E.clip.textContent = row.text.replace(/\s+/g, " ");
+  if (step) E.sel.value = row.text;
+  else {
+    setValue(E.box, row.text);
+    if (row.keep) autosize(E.box);
+  }
+  if (row.keep && !step) {
+    const p = parseWant(row.text);
+    E.typed.className = "typed" + (p.error ? " bad" : "");
+    E.typed.replaceChildren(...(p.error ? ["Give a value, or ", mono("\"\""), " for empty text."]
+      : ["Saved as ", el("span", { class: "vt " + p.cls }, p.type), mono(clip(JSON.stringify(p.value), 90))]));
+  }
+  // The server's advice, in a few words: this is text a model wrote.
+  E.why.hidden = row.hand || row.advice;
+  if (!E.why.hidden) {
+    E.why.className = "xwhy" + (row.keep ? " warn" : "");
+    E.why.replaceChildren(el("span", { class: "vt model" }, "Model text"),
+      row.keep ? " A model wrote this. The test fails whenever it words it differently." : " Left out: a model wrote it, so it reads differently each time.");
+  }
+}
+
+// syncTester brings the form up to date with the workflow behind it, without
+// touching a control whose text already matches.
+function syncTester(w, td) {
+  const keys = keySuggestions(w).join("\u0001");
+  if (keys !== td.keySig) {
+    td.keySig = keys;
+    td.keys.replaceChildren(...keySuggestions(w).map((k) => el("option", { value: k })));
+  }
+  const steps = w.steps.map((s) => s.id).join(",");
+  if (steps !== td.stepSig) {
+    td.stepSig = steps;
+    td.items.forEach((row) => paintX(td, row));
+  }
+  paintCount(td);
+}
+
+// ---- saving ----
+
+async function addTest() {
+  if (!view || !state.editable) return;
+  const name = view.w.name, w = workflowByName(name), st = uiOf(name);
+  const td = keepFor(w);
+  if (!w || w.problem || st.saving || !td || td.state !== "ready") return;
+  const issues = keepIssues(w, td);
+  if (issues.length) {
+    // Caught here, before anything is sent.
+    st.notice = { kind: "invalid", did: "test", local: true, problems: issues.map((i) => ({ message: i.message, plain: true })) };
+    updateBar();
+    if (issues[0].at) issues[0].at.focus();
+    return;
+  }
+  const fixture = parseFixture(td.fixtureText).value;
+  const expect = td.items.filter((r) => r.keep && !isBlankRow(r)).map((r) => {
+    const key = r.key.trim();
+    return { key, want: isStepKey(w, key) ? r.text : parseWant(r.text).value };
+  });
+  st.saving = true;
+  st.notice = null;
+  updateBar();
+  let r = null, failure = null;
+  try {
+    r = await request("POST", "/api/cases", { workflow: name, rev: w.rev, add: { name: td.name.trim(), fixture, expect } });
+  } catch (err) {
+    failure = { kind: "network", did: "test" };
+  }
+  st.saving = false;
+  if (!failure && r.ok && r.body.workflow) {
+    epoch++;
+    changesEpoch++;
+    const prev = workflowByName(name);
+    replaceWorkflow(r.body.workflow);
+    known[name] = r.body.workflow.rev;
+    reattach(name, prev, r.body.workflow);
+    const next = r.body.workflow, cases = next.cases || [], index = cases.length - 1, made = cases[index];
+    const path = next.path || w.path;
+    delete keeps[td.key];
+    st.notice = { kind: "saved", did: "test", title: "Test added: " + (made ? made.name : td.name.trim()), index,
+      files: [path, made && made.fixture ? folderOf(path) + "/" + made.fixture : null].filter(Boolean) };
+    afterRender = () => { const b = document.querySelector('[data-focus="notice-run"]'); if (b) b.focus({ preventScroll: true }); };
+    go({ test: null });
+    readAddress();
+  } else {
+    st.notice = failure || failureOf(r, "workflow", { did: "test" });
+  }
+  await refresh();
+  uiTick++;
+  shown = "";
+  render();
+}
+
+// testNext is what to do with a test that has just been written: run it, or look at it.
+function testNext(n, w) {
+  const run = el("button", { type: "button", class: "btn small", "data-focus": "notice-run", title: "Runs the saved file. Calls the models for real and sends no requests." }, icon("run", 11), "Run this test");
+  run.addEventListener("click", () => {
+    const now = workflowByName(w.name);
+    if (now && !(testsOf(now.name).starting || roundActive(now.name))) startTests(now.name, n.index);
+  });
+  const show = el("button", { type: "button", class: "linkbtn" }, "Show it in Tests");
+  show.addEventListener("click", () => showTestCard(w.name, n.index));
+  return el("div", { class: "nextrow" }, run, show);
+}
+
+// showTestCard goes to the tests of the workflow, with the new one in view.
+function showTestCard(name, index) {
+  afterRender = () => {
+    const b = document.querySelector('[data-focus="ov:test:' + index + '"]');
+    if (b) { b.scrollIntoView({ block: "center" }); b.focus({ preventScroll: true }); }
+  };
+  go({ workflow: name, run: null, node: null });
+  readAddress();
+  uiTick++;
+  shown = "";
+  render();
+}
+
+// removeTestButton asks twice, like removing a step: the first click arms it.
+function removeTestButton(w, c, i) {
+  const tag = "test:" + i;
+  const b = el("button", { type: "button", class: "btn small danger rmtest", "data-focus": "rm:" + tag, "aria-label": "Remove test: " + c.name }, icon("trash", 12), "Remove");
+  const note = el("p", { class: "rmnote", hidden: true }, "Takes the test out of " + w.path + ". Its fixture file ", mono(c.fixture), " stays in the folder.");
+  const busy = () => testsOf(w.name).starting || roundActive(w.name);
+  const paint = () => {
+    const armed = uiOf(w.name).removeArmed === tag;
+    b.classList.toggle("armed", armed);
+    b.setAttribute("aria-disabled", busy() ? "true" : "false");
+    b.replaceChildren(icon("trash", 12), armed ? "Remove this test? Click again" : "Remove");
+    note.hidden = !armed;
+  };
+  paint();
+  b.addEventListener("click", () => {
+    const st = uiOf(w.name);
+    if (st.saving || busy()) return;
+    if (st.removeArmed !== tag) {
+      st.removeArmed = tag;
+      clearTimeout(st.removeTimer);
+      st.removeTimer = setTimeout(() => { if (st.removeArmed === tag) { st.removeArmed = null; paint(); } }, 4000);
+      paint();
+      return;
+    }
+    clearTimeout(st.removeTimer);
+    st.removeArmed = null;
+    paint();
+    removeTest(w.name, i, c);
+  });
+  b.addEventListener("blur", () => {
+    const st = uiOf(w.name);
+    if (st.removeArmed === tag) { st.removeArmed = null; clearTimeout(st.removeTimer); paint(); }
+  });
+  return el("div", { class: "trow" }, b, note);
+}
+
+async function removeTest(name, index, c) {
+  const w = workflowByName(name), st = uiOf(name);
+  if (!w || w.problem || st.saving) return;
+  st.saving = true;
+  st.notice = null;
+  updateBar();
+  let r = null, failure = null;
+  try {
+    r = await request("POST", "/api/cases", { workflow: name, rev: w.rev, remove: index });
+  } catch (err) {
+    failure = { kind: "network", did: "untest" };
+  }
+  st.saving = false;
+  if (!failure && r.ok && r.body.workflow) {
+    epoch++;
+    changesEpoch++;
+    const prev = workflowByName(name);
+    replaceWorkflow(r.body.workflow);
+    known[name] = r.body.workflow.rev;
+    reattach(name, prev, r.body.workflow);
+    const path = r.body.workflow.path || w.path;
+    st.notice = { kind: "saved", did: "untest", title: "Removed test: " + c.name, files: [path], fixture: folderOf(path) + "/" + c.fixture };
+  } else {
+    st.notice = failure || failureOf(r, "workflow", { did: "untest" });
+  }
+  await refresh();
+  uiTick++;
+  shown = "";
+  render();
 }
 
 // ---- the changes view ----
@@ -2936,7 +3506,7 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   const typing = event.target.closest && event.target.closest("input, textarea, select, [contenteditable]");
-  if ((event.key === "a" || event.key === "A") && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && view && canAdd(view.w) && !selected.add && !selected.changes) {
+  if ((event.key === "a" || event.key === "A") && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && view && canAdd(view.w) && !selected.add && !selected.test && !selected.changes) {
     event.preventDefault();
     openAdd();
     return;
@@ -2945,6 +3515,7 @@ window.addEventListener("keydown", (event) => {
   // In a form field Escape only leaves the field.
   if (event.target.closest && event.target.closest(".editform")) { event.target.blur(); return; }
   if (selected.add) go({ add: null });
+  else if (selected.test) go({ test: null });
   else if (selected.changes) go({ changes: false });
   else if (selected.node) go({ node: null });
   else if (selected.run) go({ run: null });
