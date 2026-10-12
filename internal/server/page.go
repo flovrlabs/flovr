@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"aia/internal/ai"
@@ -137,15 +138,17 @@ type stepView struct {
 
 // respondView is the answer a workflow gives its caller, as written.
 type respondView struct {
-	Status int      `json:"status"`
-	Body   any      `json:"body"`  // with its ${...} unresolved
-	Reads  []string `json:"reads"` // the trigger and steps it uses
+	Status int         `json:"status"`
+	Body   any         `json:"body"`           // with its ${...} unresolved
+	Reads  []string    `json:"reads"`          // the trigger and steps it uses
+	Edit   []fieldView `json:"edit,omitempty"` // only when the page may change the files
 }
 
 // What a field holds, which decides how the page lets it be changed.
 const (
 	kindText       = "text"
 	kindExpression = "expression"
+	kindNumber     = "number" // a whole number
 	kindChoice     = "choice" // one of Options
 	kindPrompt     = "prompt" // Value names a file; its text is at /api/prompt
 )
@@ -159,6 +162,7 @@ type fieldView struct {
 	Kind     string   `json:"kind"`
 	Options  []string `json:"options,omitempty"`
 	Optional bool     `json:"optional,omitempty"` // saving it empty removes it
+	Hint     string   `json:"hint,omitempty"`     // a line of help, such as what leaving it empty means
 }
 
 type questionView struct {
@@ -205,6 +209,9 @@ func (s *Server) view(w *workflow.Workflow) workflowView {
 		for i := range view.Steps {
 			view.Steps[i].Edit = nil
 		}
+		if view.Respond != nil {
+			view.Respond.Edit = nil
+		}
 		return view
 	}
 	view.Rev, view.Problem = src.rev, src.problem
@@ -232,16 +239,52 @@ func describe(w *workflow.Workflow) workflowView {
 			}
 		}
 	}
-	if r := w.Respond; r != nil {
-		view.Respond = &respondView{Status: r.Status, Body: r.Body, Reads: w.RespondReads()}
-		if view.Respond.Status == 0 {
-			view.Respond.Status = http.StatusOK
+	// texts offers every piece of text in v, however deep it is.
+	var texts func(to *[]fieldView, group, label string, path []any, v any)
+	texts = func(to *[]fieldView, group, label string, path []any, v any) {
+		switch v := v.(type) {
+		case string:
+			if label == "" {
+				label = group
+			}
+			offer(to, fieldView{Label: label, Group: group, Path: path, Value: v})
+		case map[string]any:
+			for _, key := range slices.Sorted(maps.Keys(v)) {
+				name := key
+				if label != "" {
+					name = label + "." + key
+				}
+				texts(to, group, name, append(slices.Clone(path), key), v[key])
+			}
 		}
+	}
+
+	if r := w.Respond; r != nil {
+		rv := &respondView{Status: r.Status, Body: r.Body, Reads: w.RespondReads()}
+		status := ""
+		if r.Status != 0 {
+			status = strconv.Itoa(r.Status)
+		} else {
+			rv.Status = http.StatusOK
+		}
+		offer(&rv.Edit, fieldView{
+			Label: "Status", Path: []any{"respond", "status"}, Value: status,
+			Kind: kindNumber, Optional: true, Hint: "Empty means 200.",
+		})
+		for _, name := range slices.Sorted(maps.Keys(r.Headers)) {
+			offer(&rv.Edit, fieldView{Label: name, Group: "Headers", Path: []any{"respond", "headers", name}, Value: r.Headers[name]})
+		}
+		texts(&rv.Edit, "Body", "", []any{"respond", "body"}, r.Body)
+		view.Respond = rv
 	}
 	switch t := w.Trigger; {
 	case t != nil && t.Webhook != "":
 		view.Trigger, view.Input = "POST "+t.Webhook, t.Input
 		offer(&view.Edit, fieldView{Label: "Webhook path", Path: []any{"trigger", "webhook"}, Value: t.Webhook})
+		offer(&view.Edit, fieldView{
+			Label: "Body schema", Path: []any{"trigger", "input"}, Value: t.Input, Optional: true,
+			Hint: "A JSON Schema file. A request whose body does not match it is refused. Empty takes any body.",
+		})
 	case t != nil && t.Cron != "":
 		view.Trigger = "cron " + t.Cron
 		offer(&view.Edit, fieldView{Label: "Schedule", Path: []any{"trigger", "cron"}, Value: t.Cron})
@@ -259,27 +302,12 @@ func describe(w *workflow.Workflow) workflowView {
 		}
 		at := func(path ...any) []any { return append([]any{"steps", i}, path...) }
 		edit := func(f fieldView) { offer(&step.Edit, f) }
-		// texts offers every piece of text in v, however deep it is.
-		var texts func(group, label string, path []any, v any)
-		texts = func(group, label string, path []any, v any) {
-			switch v := v.(type) {
-			case string:
-				if label == "" {
-					label = group
-				}
-				edit(fieldView{Label: label, Group: group, Path: path, Value: v})
-			case map[string]any:
-				for _, key := range slices.Sorted(maps.Keys(v)) {
-					name := key
-					if label != "" {
-						name = label + "." + key
-					}
-					texts(group, name, append(slices.Clone(path), key), v[key])
-				}
-			}
-		}
+		texts := func(group, label string, path []any, v any) { texts(&step.Edit, group, label, path, v) }
 
-		edit(fieldView{Label: "Run only when", Path: at("when"), Value: s.When, Kind: kindExpression, Optional: true})
+		edit(fieldView{
+			Label: "Run only when", Path: at("when"), Value: s.When, Kind: kindExpression, Optional: true,
+			Hint: "Empty means the step always runs.",
+		})
 		if c := s.Component(); c != nil {
 			// What the component does is shown but is not the workflow's to
 			// change; the input the step gives it is.

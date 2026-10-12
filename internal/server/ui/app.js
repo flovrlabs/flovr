@@ -36,15 +36,17 @@ const ICONS = {
   branch: ["M6 3.5v13", "M6 20.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z", "M18 3.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M18 7.5c0 5-12 3-12 9"],
   plus: ["M12 5v14", "M5 12h14"],
   minus: ["M5 12h14"],
+  response: ["M10 5 4 11l6 6", "M4 11h9a7 7 0 0 1 7 7v1"],
   fit: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"],
 };
 
-const KIND_LABEL = { trigger: "Trigger", decide: "Decide", ai: "AI", http: "HTTP" };
+const KIND_LABEL = { trigger: "Trigger", decide: "Decide", ai: "AI", http: "HTTP", response: "Response" };
 const KIND_NAMES = {
   trigger: "Trigger: starts the workflow",
   decide: "Decision step: a model answers typed questions",
   ai: "AI step: a model writes structured output",
   http: "HTTP step: sends a request",
+  response: "Response: answers the caller",
 };
 const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", running: "Running", pending: "Not reached" };
 
@@ -165,6 +167,9 @@ async function refresh() {
 function progress(run, id) {
   if (!run) return null;
   if (id === "trigger") return "ok";
+  // The way out: answered, or not (yet). A run that ended well without a caller
+  // waiting never answered, which is neither a success nor a failure.
+  if (id === "response") return run.response ? "ok" : run.status === "ok" ? "skipped" : "pending";
   const done = run.steps.find((s) => s.id === id);
   return done ? done.status : "pending";
 }
@@ -334,6 +339,13 @@ function silhouette(kind, w, h) {
     const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
     return { d: `M${h / 2} ${m}H${w - h / 2}A${r} ${r} 0 0 1 ${w - h / 2} ${h - m}H${h / 2}A${r} ${r} 0 0 1 ${h / 2} ${m}Z`, sep: [inset + 2, w - inset - 2] };
   }
+  if (kind === "response") {
+    // The way out: the trigger's rounded end on the left, a point on the right.
+    const p = h * 0.3, r = h / 2 - m, dy = cut - h / 2;
+    const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
+    const tipAt = (p - m) * ((h - m - cut) / (h / 2 - m));
+    return { d: roundedPath([[m, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [m, h - m]], [r, 9, 12, 9, r]), sep: [inset + 2, w - p + tipAt - 3] };
+  }
   if (kind === "decide") {
     const p = h / 4;
     return { d: roundedPath([[m, h / 2], [p, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [p, h - m]], [9, 10, 10, 9, 10, 10]),
@@ -391,10 +403,23 @@ function layout(w, width) {
       parent = step.reads[0];
       for (const name of step.reads) if (byId[name].depth >= byId[parent].depth) parent = name;
     }
-    const node = { id: step.id, kind: step.kind, title: step.id, subtitle: step.subtitle, order: i + 1, parent, depth: byId[parent].depth + 1, step };
+    const node = { id: step.id, kind: step.kind, title: step.id, subtitle: step.subtitle, order: i + 1, parent, sources: [parent], depth: byId[parent].depth + 1, step };
     nodes.push(node);
     byId[step.id] = node;
   });
+
+  nodes[0].sources = [];
+  // The response comes after every step, in a row of its own. Its lines come
+  // from the latest steps it reads, or from the last row if it reads none.
+  if (w.respond) {
+    const last = Math.max(...nodes.map((n) => n.depth));
+    const reads = (w.respond.reads || []).filter((name) => byId[name]);
+    const deepest = Math.max(...reads.map((name) => byId[name].depth));
+    const sources = reads.length ? reads.filter((name) => byId[name].depth === deepest) : nodes.filter((n) => n.depth === last).map((n) => n.id);
+    const node = { id: "response", kind: "response", title: "Response", subtitle: isWebhook(w) ? "Answers " + w.trigger.slice(5) : "Answers the caller", sources, depth: last + 1 };
+    nodes.push(node);
+    byId.response = node;
+  }
 
   const rows = [];
   for (const node of nodes) (rows[node.depth] = rows[node.depth] || []).push(node);
@@ -409,7 +434,7 @@ function layout(w, width) {
       node.hasOut = false;
     });
   });
-  for (const node of nodes) if (node.parent) byId[node.parent].hasOut = true;
+  for (const node of nodes) for (const name of node.sources) byId[name].hasOut = true;
   return { nodes, byId, nodeW, width: PAD * 2 + total, height: PAD * 2 + rows.length * CARD_H + (rows.length - 1) * GAP_Y };
 }
 
@@ -428,14 +453,15 @@ function renderCanvas(moved) {
 
   const lines = [];
   for (const node of plan.nodes) {
-    if (!node.parent) continue;
-    const from = plan.byId[node.parent];
-    const x1 = from.x + mid + portShift(from.kind, "out"), y1 = from.y + CARD_H, x2 = node.x + mid + portShift(node.kind, "in"), y2 = node.y;
     const status = progress(run, node.id) || "";
-    const k = (y2 - y1) * 0.55;
-    lines.push(
-      svg("path", { class: "edge " + status, d: `M${x1} ${y1} C${x1} ${y1 + k}, ${x2} ${y2 - k}, ${x2} ${y2 - 8}` }),
-      svg("path", { class: "head " + status, d: `M${x2} ${y2 - 0.5} l-4.5 -8 h9 z` }));
+    for (const name of node.sources) {
+      const from = plan.byId[name];
+      const x1 = from.x + mid + portShift(from.kind, "out"), y1 = from.y + CARD_H, x2 = node.x + mid + portShift(node.kind, "in"), y2 = node.y;
+      const k = (y2 - y1) * 0.55;
+      lines.push(
+        svg("path", { class: "edge " + status, d: `M${x1} ${y1} C${x1} ${y1 + k}, ${x2} ${y2 - k}, ${x2} ${y2 - 8}` }),
+        svg("path", { class: "head " + status, d: `M${x2} ${y2 - 0.5} l-4.5 -8 h9 z` }));
+    }
   }
 
   const cards = plan.nodes.map((node, i) => {
@@ -444,17 +470,18 @@ function renderCanvas(moved) {
     const cond = node.step && node.step.when;
     let took = "";
     if (node.id === "trigger") took = run ? when(run.started) : "";
+    else if (node.id === "response") took = run ? (run.response ? String(run.response.status) : answerWait(run)) : String(w.respond.status);
     else if (done && done.status === "ok") took = duration(done.ms);
     else if (done) took = done.status === "failed" ? "failed" : done.status;
     else if (run) took = run.status === "running" ? "waiting" : "not reached";
-    const label = node.title + ", " + KIND_LABEL[node.kind] + (node.order ? ", step " + node.order : "") + (status ? ", " + (STATUS_TEXT[status] || status).toLowerCase() : "");
+    const label = node.title + ", " + KIND_LABEL[node.kind] + (node.order ? ", step " + node.order : "") + (status ? ", " + (node.id === "response" && run.response ? "answered " + run.response.status : (STATUS_TEXT[status] || status).toLowerCase()) : "");
     const isEdited = edited.has(node.id);
     return el("div", {
         class: "slot" + (animate ? " enter" : ""),
         css: { left: node.x + "px", top: node.y + "px", width: plan.nodeW + "px", height: CARD_H + "px", animationDelay: (animate ? i * 70 : 0) + "ms" },
       },
       el("button", {
-          class: "card shape-" + node.kind + " kind-" + node.kind + (status ? " " + status : "") + (node.parent ? " has-in" : "") + (node.hasOut ? " has-out" : "") + (isEdited ? " edited" : ""),
+          class: "card shape-" + node.kind + " kind-" + node.kind + (status ? " " + status : "") + (node.sources.length ? " has-in" : "") + (node.hasOut ? " has-out" : "") + (isEdited ? " edited" : ""),
           type: "button", "data-node": node.id, "data-focus": "n:" + node.id, "data-label": label,
           "aria-pressed": selected.node === node.id ? "true" : "false", "aria-label": label + (isEdited ? ", unsaved changes" : ""),
           onclick: () => go({ node: selected.node === node.id ? null : node.id }),
@@ -467,8 +494,9 @@ function renderCanvas(moved) {
             el("span", { class: "title" }, node.title),
             el("span", { class: "sub mono" }, node.subtitle)),
           status && node.id !== "trigger" ? statusMark(status, 12) : null),
-        el("span", { class: "foot", title: cond || null },
-          cond ? [el("b", {}, "IF"), el("span", { class: "cond mono" }, cond)] : el("span", { class: "always" }, node.id === "trigger" ? "Entry point" : "Always runs"),
+        el("span", { class: "foot", title: cond || (node.id === "trigger" && w.input ? "The body must match " + w.input : null) },
+          cond ? [el("b", {}, "IF"), el("span", { class: "cond mono" }, cond)] : el("span", { class: "always" },
+            node.id === "trigger" ? (w.input ? "Body: " + w.input.split("/").pop() : "Entry point") : node.id === "response" ? "Exit point" : "Always runs"),
           took ? el("span", { class: "took" }, took) : null)));
   });
 
@@ -500,6 +528,11 @@ function renderCanvas(moved) {
     const card = scroller.querySelector('[data-node="' + CSS.escape(selected.node) + '"]');
     if (card) card.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
+}
+
+// answerWait says why a run has no answer.
+function answerWait(run) {
+  return run.status === "running" ? "waiting" : run.status === "failed" ? "not reached" : "no caller";
 }
 
 const ordinal = (n) => "step " + n + " in file order";
@@ -572,9 +605,13 @@ function code(text, label) {
 }
 
 function statusPanel(status, ...rest) {
+  return panelTitled(status, STATUS_TEXT[status] || status, ...rest);
+}
+
+function panelTitled(status, title, ...rest) {
   return el("div", { class: "status-panel " + status },
     statusMark(status, 14),
-    el("div", {}, el("div", { class: "big" }, STATUS_TEXT[status] || status), rest));
+    el("div", {}, el("div", { class: "big" }, title), rest));
 }
 
 // example is a command that calls a workflow's webhook.
@@ -602,10 +639,12 @@ function renderInspector(w, run, moved) {
   ensureInspector();
   const step = w.steps.find((s) => s.id === selected.node);
   const canEdit = state.editable && !w.problem;
-  const fields = !canEdit ? null : selected.node === "trigger" ? w.edit : step ? step.edit : null;
+  const onResponse = selected.node === "response" && !!w.respond;
+  const fields = !canEdit ? null : selected.node === "trigger" ? w.edit : onResponse ? w.respond.edit : step ? step.edit : null;
   const hasForm = !!(fields && fields.length);
   let parts;
   if (selected.node === "trigger") parts = triggerDetails(w, run);
+  else if (onResponse) parts = responseDetails(w, run);
   else if (step) parts = stepDetails(w, step, run, hasForm);
   else if (run) parts = runDetails(w, run);
   else parts = workflowDetails(w);
@@ -631,6 +670,11 @@ function outline(w) {
       el("span", { class: "tag" }, KIND_LABEL[s.kind])))));
 }
 
+// showResponse is a link to the response node, where the answer is shown in full.
+function showResponse() {
+  return el("button", { type: "button", class: "linkbtn", onclick: () => go({ node: "response" }) }, "Show the response");
+}
+
 function workflowDetails(w) {
   return [
     header("workflow", "workflow", w.name, "Workflow"),
@@ -638,18 +682,13 @@ function workflowDetails(w) {
       ["File", el("span", { class: "mono" }, w.path)],
       ["Trigger", el("span", { class: "mono" }, w.trigger || "none: the server does not run it")],
       w.input ? ["Takes", el("span", { class: "mono" }, w.input)] : null,
+      w.respond ? ["Answers", [el("span", { class: "mono" }, w.respond.status), " ", showResponse()]] : null,
       ["Steps", w.steps.length],
       ["Tests", w.tests + (w.tests ? ", run with aia test" : "")],
       state.commit ? ["Version", el("span", { class: "mono" }, state.commit)] : null,
     ])),
     section("Steps", outline(w), el("p", { class: "muted small" }, "A step with an IF condition is skipped when the condition is false."),
-      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger or a step to edit it. Saved changes are written to " + w.path + ".") : null),
-    w.respond ? section("Answers with",
-      pairs([["Status", el("span", { class: "mono" }, w.respond.status)]]),
-      jsonView(w.respond.body),
-      el("p", { class: "muted small" }, w.input
-        ? "A request whose body does not match " + w.input + " is refused with status 400, and nothing runs."
-        : "Each ${...} is filled in from the steps when they have run.")) : null,
+      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger, a step" + (w.respond ? " or the response" : "") + " to edit it. Saved changes are written to " + w.path + ".") : null),
     isWebhook(w) ? section("Try it", example(w), el("p", { class: "muted small" }, answerNote(w))) : null,
   ];
 }
@@ -679,11 +718,11 @@ function runDetails(w, run) {
     header("workflow", "run", run.run, "Run of " + run.workflow),
     section("Result",
       statusPanel(run.status, run.status !== "running" ? el("div", { class: "muted" }, "took " + duration(run.ms) + ", started " + when(run.started)) : null),
-      run.error ? el("pre", { class: "error" }, run.error) : null),
+      run.error ? el("pre", { class: "error" }, run.error) : null,
+      // What was answered is shown on the response node: only a line here.
+      run.response ? el("p", { class: "muted small" }, "Answered the caller with ", el("span", { class: "mono" }, run.response.status), ". ", showResponse())
+        : w.respond && run.status === "failed" && isWebhook(w) ? el("p", { class: "muted small" }, "The caller got 500 with only the run id. ", showResponse()) : null),
     section("Steps", waterfall(w, run), el("p", { class: "muted small" }, "Select a step, here or on the drawing, to see what it produced.")),
-    run.response ? section("Answered the caller",
-      pairs([["Status", el("span", { class: "mono" }, run.response.status)]]),
-      run.response.body !== undefined && run.response.body !== null ? jsonView(run.response.body) : null) : null,
     run.trigger !== undefined ? section("Trigger payload", jsonView(run.trigger)) : null,
     section("About this run", pairs([
       ["Run", el("span", { class: "mono" }, run.run)],
@@ -697,7 +736,7 @@ function triggerDetails(w, run) {
   let how = "This workflow has no trigger, so the server does not run it. Run it with aia run.";
   if (isWebhook(w)) {
     how = "A POST request to " + w.trigger.slice(5) + " with a JSON body starts the workflow. Steps read the body as trigger.body.";
-    if (w.input) how += " The body must match " + w.input + ".";
+    if (w.input) how += " The body must match " + w.input + ": a request whose body does not is refused with status 400, and nothing runs.";
     if (w.respond) how += " The request waits for the answer.";
   }
   else if (w.trigger) how = "The workflow starts on the schedule " + w.trigger.slice(5) + ". Steps can read the start time as trigger.time.";
@@ -739,6 +778,39 @@ function stepDetails(w, step, run, hasForm) {
     step.reads.length ? section("Reads from", el("div", { class: "chips" }, step.reads.map((name) =>
       el("button", { type: "button", class: "pill link mono", title: "Show " + name, onclick: () => go({ node: name }) }, name)))) : null,
   ];
+}
+
+// responseDetails is the inspector for the way out. Without a run it says what
+// the workflow answers with; with one, what was answered.
+function responseDetails(w, run) {
+  const r = w.respond, got = run ? run.response : null;
+  const chips = r.reads && r.reads.length ? section("Reads from", el("div", { class: "chips" }, r.reads.map((name) =>
+    el("button", { type: "button", class: "pill link mono", title: "Show " + name, onclick: () => go({ node: name }) }, name)))) : null;
+  const head = header("response", "response", "response", KIND_NAMES.response, true);
+  if (!run) {
+    return [head,
+      section("Answers with", pairs([["Status", el("span", { class: "mono" }, r.status)]]),
+        el("p", { class: "muted small" }, "The request waits for this answer. " + (w.input ? "A body that does not match " + w.input + " is refused earlier, with 400." : ""))),
+      section("Body as written", jsonView(r.body), el("p", { class: "muted small" }, "Each ${...} is filled in from the steps when they have run.")),
+      chips];
+  }
+  if (!got) {
+    const failed = run.status === "failed", webhook = run.source.startsWith("webhook");
+    const note = run.status === "running" ? "The run has not got this far yet."
+      : failed && webhook ? "The run failed first, so the caller got 500 with only the run id."
+      : failed ? "The run failed first. It was not started by a request, so nobody was waiting."
+      : "This run was not started by a request, so nobody was waiting for an answer.";
+    return [head,
+      section("In this run", panelTitled(run.status === "ok" ? "skipped" : "pending", run.status === "ok" ? "No caller" : "Not reached", el("div", { class: "muted" }, note))),
+      chips];
+  }
+  const headers = got.headers ? Object.entries(got.headers) : [];
+  return [head,
+    section("In this run", panelTitled("ok", "Answered " + got.status,
+      got.status >= 400 ? el("div", { class: "muted" }, "A status the workflow chose itself, not a failure.") : el("div", { class: "muted" }, "Sent to the caller when the steps had finished."))),
+    headers.length ? section("Headers", pairs(headers.map(([k, v]) => [k, el("span", { class: "mono" }, String(v))]))) : null,
+    section("Body", got.body !== undefined && got.body !== null ? jsonView(got.body) : el("p", { class: "muted" }, "No body.")),
+    chips];
 }
 
 // question shows one question of a decision step: what it asks, what it can be
@@ -818,6 +890,7 @@ async function request(method, path, body) {
 function fieldIndex(w) {
   const map = new Map();
   (w.edit || []).forEach((f) => map.set(pathKey(f.path), { field: f, node: "trigger" }));
+  if (w.respond) (w.respond.edit || []).forEach((f) => map.set(pathKey(f.path), { field: f, node: "response" }));
   w.steps.forEach((s) => (s.edit || []).forEach((f) => map.set(pathKey(f.path), { field: f, node: s.id })));
   return map;
 }
@@ -911,13 +984,13 @@ function makeControl(f, field) {
   } else if (field.value.length > 56 || field.value.includes("\n")) {
     box = el("textarea", { id, class: "in" + (mono ? " mono" : ""), rows: 2, spellcheck: "false" });
   } else {
-    box = el("input", { id, type: "text", class: "in" + (mono ? " mono" : ""), spellcheck: "false", autocomplete: "off", autocapitalize: "off" });
+    // A whole number is still typed as text, so a wrong value can be sent and answered by the server.
+    box = el("input", { id, type: "text", class: "in" + (mono ? " mono" : ""), spellcheck: "false", autocomplete: "off", autocapitalize: "off", inputmode: field.kind === "number" ? "numeric" : null });
   }
   c.input = box;
 
   const hintId = id + "-hint";
-  const hintText = field.label === "Run only when" ? "Empty means the step always runs."
-    : field.optional ? "Optional. Leave it empty to remove it from the file." : null;
+  const hintText = field.hint || null;
   if (hintText && field.kind !== "prompt") box.setAttribute("aria-describedby", hintId);
   if (field.optional && field.kind !== "prompt") box.setAttribute("placeholder", "Not set");
 
@@ -1004,7 +1077,7 @@ function showForm(w, nodeId, fields) {
     if (form) { form = null; insp.formslot.replaceChildren(); }
     return;
   }
-  const key = [w.name, nodeId, fields.map((f) => [pathKey(f.path), f.kind, f.label, f.group || "", (f.options || []).join(",")].join("~")).join("|")].join("##");
+  const key = [w.name, nodeId, fields.map((f) => [pathKey(f.path), f.kind, f.label, f.group || "", f.hint || "", (f.options || []).join(",")].join("~")).join("|")].join("##");
   if (form && form.key === key) {
     form.fields = fields;
   } else {
@@ -1220,7 +1293,7 @@ function noticeView(n, w) {
 // A problem from the server reads like: step "summarize": when: Syntax error.
 function problemItem(p, w) {
   const m = /^step "([^"]+)"/.exec(p.message || "");
-  const node = m && w.steps.some((s) => s.id === m[1]) ? m[1] : null;
+  const node = m && w.steps.some((s) => s.id === m[1]) ? m[1] : w.respond && /^respond\b/.test(p.message || "") ? "response" : null;
   return el("li", {},
     p.line ? el("span", { class: "ln" }, "Line " + p.line) : null,
     el("span", { class: "msg" }, p.message),

@@ -73,8 +73,12 @@ func TestPageIsToldWhatItMayChange(t *testing.T) {
 		t.Fatalf("state = %+v", state)
 	}
 	w := state.Workflows[0]
-	if got := mustJSON(w.Edit); got != `[{"label":"Webhook path","path":["trigger","webhook"],"value":"/tickets","kind":"text"}]` {
-		t.Errorf("trigger fields = %s", got)
+	if len(w.Edit) != 2 || mustJSON(w.Edit[0]) != `{"label":"Webhook path","path":["trigger","webhook"],"value":"/tickets","kind":"text"}` {
+		t.Errorf("trigger fields = %s", mustJSON(w.Edit))
+	}
+	// The example names no schema for its body, so one can be given.
+	if schema := w.Edit[1]; schema.Label != "Body schema" || schema.Value != "" || !schema.Optional || schema.Hint == "" || mustJSON(schema.Path) != `["trigger","input"]` {
+		t.Errorf("body schema field = %+v", schema)
 	}
 
 	var labels []string
@@ -564,5 +568,96 @@ func TestChangesToAComponentFileAreTakenUp(t *testing.T) {
 	rewrite(t, file, "  summary: string\n", "  summary: string\n  category: string\n")
 	if fourth := currentState(t, srv).Workflows[0]; fourth.Problem != "" {
 		t.Errorf("after the fix: problem %q", fourth.Problem)
+	}
+}
+
+// editEndpoint serves a copy of the moderate-comment example that the page
+// may change, and returns the copy's workflow file.
+func editEndpoint(t *testing.T) (*Server, string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "moderate-comment")
+	if err := os.CopyFS(dir, os.DirFS("../../examples/moderate-comment")); err != nil {
+		t.Fatal(err)
+	}
+	w, err := workflow.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := New([]*workflow.Workflow{w}, Options{Model: moderator{allowed: true, reason: "none"}, Edit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, filepath.Join(dir, "workflow.yaml")
+}
+
+func TestTheAnswerOfAnEndpointCanBeChanged(t *testing.T) {
+	srv, file := editEndpoint(t)
+	save := func(edits ...any) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{"workflow": "moderate-comment", "rev": currentState(t, srv).Workflows[0].Rev, "edits": edits})
+		return post(srv, "/api/edit", "", string(body))
+	}
+
+	w := currentState(t, srv).Workflows[0]
+	var labels []string
+	for _, f := range w.Respond.Edit {
+		labels = append(labels, f.Group+"/"+f.Label+" ("+f.Kind+") = "+f.Value)
+	}
+	want := []string{"/Status (number) = ", "Body/allowed (text) = ${check.allowed.value}", "Body/reason (text) = ${check.reason.value}"}
+	if strings.Join(labels, "\n") != strings.Join(want, "\n") || w.Respond.Edit[0].Hint != "Empty means 200." {
+		t.Fatalf("fields of the answer:\n%s", strings.Join(labels, "\n"))
+	}
+	if schema := w.Edit[1]; schema.Label != "Body schema" || schema.Value != "schemas/comment.json" {
+		t.Fatalf("body schema field = %+v", schema)
+	}
+
+	// The status is written as a number, behind nothing else that changes.
+	before := readFile(t, file)
+	if rec := save(set("201", "respond", "status"), set("${check.reason.value != \"none\"}", "respond", "body", "reason")); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	after := strings.NewReplacer(
+		"    reason: ${check.reason.value}\n", "    reason: ${check.reason.value != \"none\"}\n  status: 201\n",
+	).Replace(before)
+	if got := readFile(t, file); got != after {
+		t.Errorf("file after the change:\n%s\nwant:\n%s", got, after)
+	}
+	rec := post(srv, "/moderate", "", `{"text": "hello"}`)
+	if rec.Code != http.StatusCreated || strings.TrimSpace(rec.Body.String()) != `{"allowed":true,"reason":false}` {
+		t.Errorf("the endpoint now answers %d %s", rec.Code, rec.Body)
+	}
+
+	for value, want := range map[string]string{"abc": "Status must be a whole number", "99": "status must be an HTTP status from 200 to 599"} {
+		if rec := save(set(value, "respond", "status")); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("status %q: %d %s; want %q", value, rec.Code, rec.Body, want)
+		}
+	}
+	// Saved empty, the status and the schema go, and with them their effect.
+	if rec := save(set("", "respond", "status"), set("", "trigger", "input")); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	if got := readFile(t, file); strings.Contains(got, "  status: 201") || strings.Contains(got, "input: schemas") {
+		t.Errorf("file after removing them:\n%s", got)
+	}
+	// A body without text is no longer refused at the door. It now gets as
+	// far as the step that needs the text, and fails there.
+	if rec := post(srv, "/moderate", "", `{"anything": true}`); rec.Code != http.StatusInternalServerError {
+		t.Errorf("without a schema: %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(srv, "/moderate", "", `{"text": "hello"}`); rec.Code != http.StatusOK {
+		t.Errorf("without a status: %d %s", rec.Code, rec.Body)
+	}
+
+	// A schema is named again, and must exist.
+	if rec := save(set("schemas/missing.json", "trigger", "input")); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "schema file not found") {
+		t.Errorf("a schema that is missing: %d %s", rec.Code, rec.Body)
+	}
+	if rec := save(set("schemas/comment.json", "trigger", "input")); rec.Code != http.StatusOK || !strings.Contains(readFile(t, file), "  webhook: /moderate\n  input: schemas/comment.json\n") {
+		t.Errorf("naming the schema again: %d %s\n%s", rec.Code, rec.Body, readFile(t, file))
+	}
+
+	// A server that does not allow editing says nothing of these fields.
+	plain := currentState(t, serveEndpoint(t, moderator{})).Workflows[0]
+	if plain.Respond == nil || plain.Respond.Edit != nil || plain.Edit != nil {
+		t.Errorf("a read-only server offers editing: %+v", plain.Respond)
 	}
 }

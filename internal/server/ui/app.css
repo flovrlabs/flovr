@@ -3,7 +3,7 @@
   surfaces and white tabular figures. Green is a step that succeeded, red one
   that failed, yellow one in progress, grey one skipped or not reached. Purple
   is the accent: selection, focus, links and the active run. The kind of a step
-  (trigger, decide, ai, http) is told by its icon and label, not by colour, so
+  (trigger, decide, ai, http, response) is told by its icon and label, not by colour, so
   a card never mixes a kind colour with a status colour.
 */
 :root {
@@ -36,6 +36,8 @@
   --ai-soft: var(--sunken);
   --http: var(--text);
   --http-soft: var(--sunken);
+  --response: var(--text);
+  --response-soft: var(--sunken);
   --code-bg: #f3f3f6;
   --j-key: #8a2aa8;
   --j-str: #15151e;
@@ -395,6 +397,7 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .kind-decide { --kind: var(--decide); --kind-soft: var(--decide-soft); }
 .kind-ai { --kind: var(--ai); --kind-soft: var(--ai-soft); }
 .kind-http { --kind: var(--http); --kind-soft: var(--http-soft); }
+.kind-response { --kind: var(--response); --kind-soft: var(--response-soft); }
 .kind-workflow { --kind: var(--accent); --kind-soft: var(--accent-soft); }
 
 /* A node's body is an SVG outline (see shapeSVG), so the border, the rings for
@@ -460,6 +463,8 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .card.shape-decide .head { padding: 0 26px 0 25px; }
 .card.shape-decide .foot { padding: 0 18px; }
 .card.shape-ai .head { padding: 0 14px 0 12px; }
+.card.shape-response .head { padding: 0 34px 0 21px; }
+.card.shape-response .foot { padding: 0 30px 0 24px; }
 .card.shape-http .head { padding: 0 26px 0 22px; }
 .card.shape-http .foot { padding: 0 24px 0 14px; }
 .card .head { display: flex; align-items: center; gap: 11px; flex: 1; min-height: 0; padding: 0 12px 0 11px; }
@@ -488,7 +493,7 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
   letter-spacing: 0.06em;
 }
 .card .foot .cond { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; }
-.card .foot .always { flex: 1; color: var(--faint); }
+.card .foot .always { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--faint); }
 .card .foot .took { flex: none; margin-left: auto; color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
 .card.failed .foot .took { color: var(--failed); }
 .card.skipped .foot .took, .card.pending .foot .took { color: var(--faint); font-weight: 500; }
@@ -759,6 +764,8 @@ select.in { padding-right: 6px; cursor: pointer; }
 .in:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 .in:disabled { opacity: 0.6; cursor: wait; }
 .in::placeholder { color: var(--faint); }
+/* A whole number needs little room. */
+.field.k-number .in { max-width: 9em; font-variant-numeric: tabular-nums; }
 textarea.in:not(.prompt) { overflow: hidden; resize: none; }
 textarea.prompt { min-height: 220px; line-height: 1.55; }
 .field.edited .in { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 45%, var(--sunken)); }

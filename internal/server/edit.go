@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -271,6 +272,11 @@ func (s *Server) edit(req editRequest) (int, any) {
 			offered[pathKey(f.Path)] = f
 		}
 	}
+	if view.Respond != nil {
+		for _, f := range view.Respond.Edit {
+			offered[pathKey(f.Path)] = f
+		}
+	}
 
 	var edits []yamledit.Edit
 	var changed []string
@@ -285,8 +291,20 @@ func (s *Server) edit(req editRequest) (int, any) {
 			return http.StatusUnprocessableEntity, fail("%s must be one of %s", f.Label, strings.Join(f.Options, ", "))
 		}
 		edit := yamledit.Edit{Path: path, Value: value, Remove: value == "" && f.Optional}
-		if path[len(path)-1] == "when" {
+		if f.Kind == kindNumber && !edit.Remove {
+			// A number is written as one, not as text that looks like one.
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return http.StatusUnprocessableEntity, fail("%s must be a whole number", f.Label)
+			}
+			edit.Value = n
+		}
+		// Where a key that is new to the file goes.
+		switch last := path[len(path)-1]; {
+		case last == "when":
 			edit.After = "id"
+		case pathKey(path) == "trigger.input":
+			edit.After = "webhook"
 		}
 		edits = append(edits, edit)
 		changed = append(changed, pathKey(path))
