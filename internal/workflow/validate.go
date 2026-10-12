@@ -16,10 +16,10 @@ import (
 	"aia/internal/expr"
 )
 
-var (
-	idRE    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	methods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
-)
+var idRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// Methods are the request methods an http step can use.
+var Methods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
 
 type checker struct {
 	w     *Workflow
@@ -228,8 +228,8 @@ func (c *checker) http(i int, label string, s *HTTPStep, env *expr.Env) {
 
 	if s.Method == "" {
 		c.addf(at("method"), "%s: http.method is required", label)
-	} else if !slices.Contains(methods, strings.ToUpper(s.Method)) {
-		c.addf(at("method"), "%s: http.method must be one of %s", label, strings.Join(methods, ", "))
+	} else if !slices.Contains(Methods, strings.ToUpper(s.Method)) {
+		c.addf(at("method"), "%s: http.method must be one of %s", label, strings.Join(Methods, ", "))
 	}
 
 	if s.URL == "" {

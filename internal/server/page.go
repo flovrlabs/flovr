@@ -15,8 +15,13 @@ import (
 //go:embed ui
 var ui embed.FS
 
-// page serves the read-only web page and the JSON it shows.
+// page serves the web page and the JSON it shows and, if the server allows
+// editing, takes the changes the page makes.
 func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
+	if s.opts.Edit && r.Method == http.MethodPost && (r.URL.Path == "/api/edit" || r.URL.Path == "/api/prompt") {
+		s.change(rw, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		reply(rw, http.StatusNotFound, map[string]string{"error": "no workflow has this webhook path"})
 		return
@@ -50,6 +55,10 @@ func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reply(rw, http.StatusOK, run)
+	case path == "/api/prompt" && s.opts.Edit:
+		s.prompt(rw, r)
+	case path == "/api/changes" && s.opts.Edit:
+		s.changes(rw, r)
 	default:
 		reply(rw, http.StatusNotFound, map[string]string{"error": "nothing is served at this path"})
 	}
@@ -83,6 +92,7 @@ func (s *Server) file(rw http.ResponseWriter, name, contentType string) {
 type stateView struct {
 	Commit    string         `json:"commit"`
 	Protected bool           `json:"protected"` // whether requests need the token
+	Editable  bool           `json:"editable"`  // whether the page may change the files
 	Workflows []workflowView `json:"workflows"`
 	Runs      []Run          `json:"runs"` // newest first, without triggers and outputs
 }
@@ -93,6 +103,11 @@ type workflowView struct {
 	Trigger string     `json:"trigger"` // such as "POST /tickets"; empty if it is not served
 	Tests   int        `json:"tests"`
 	Steps   []stepView `json:"steps"`
+
+	// Only when the page may change the files.
+	Rev     string      `json:"rev,omitempty"`     // identifies the file's content; sent back with a change
+	Problem string      `json:"problem,omitempty"` // why what the file holds now is not being served
+	Edit    []fieldView `json:"edit,omitempty"`    // the values of the trigger
 }
 
 type stepView struct {
@@ -103,6 +118,26 @@ type stepView struct {
 	Reads     []string       `json:"reads"`  // the trigger and earlier steps it uses
 	Fields    [][2]string    `json:"fields"` // label and value pairs describing it
 	Questions []questionView `json:"questions,omitempty"`
+	Edit      []fieldView    `json:"edit,omitempty"` // only when the page may change the files
+}
+
+// What a field holds, which decides how the page lets it be changed.
+const (
+	kindText       = "text"
+	kindExpression = "expression"
+	kindChoice     = "choice" // one of Options
+	kindPrompt     = "prompt" // Value names a file; its text is at /api/prompt
+)
+
+// fieldView is one value of a workflow that the page may change.
+type fieldView struct {
+	Label    string   `json:"label"`
+	Group    string   `json:"group,omitempty"` // what it belongs to, such as a question
+	Path     []any    `json:"path"`            // where the value is in the workflow file
+	Value    string   `json:"value"`
+	Kind     string   `json:"kind"`
+	Options  []string `json:"options,omitempty"`
+	Optional bool     `json:"optional,omitempty"` // saving it empty removes it
 }
 
 type questionView struct {
@@ -115,8 +150,13 @@ type questionView struct {
 }
 
 func (s *Server) state() stateView {
+	if s.opts.Edit {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.refresh()
+	}
 	view := stateView{
-		Commit: s.opts.Commit, Protected: s.opts.Token != "",
+		Commit: s.commit(), Protected: s.opts.Token != "", Editable: s.opts.Edit,
 		Workflows: []workflowView{}, Runs: s.history.recent(),
 	}
 	for i := range view.Runs {
@@ -127,19 +167,50 @@ func (s *Server) state() stateView {
 			r.Steps[j].Output = nil
 		}
 	}
-	for _, w := range s.workflows {
-		view.Workflows = append(view.Workflows, describe(w))
+	for _, w := range s.live.Load().workflows {
+		view.Workflows = append(view.Workflows, s.view(w))
 	}
+	return view
+}
+
+// view describes w for the page. If the server allows editing, the caller
+// holds s.mu.
+func (s *Server) view(w *workflow.Workflow) workflowView {
+	view := describe(w)
+	src := s.sources[w.Path]
+	if src == nil {
+		// Nothing can be changed, so the page is not told what could be.
+		view.Edit = nil
+		for i := range view.Steps {
+			view.Steps[i].Edit = nil
+		}
+		return view
+	}
+	view.Rev, view.Problem = src.rev, src.problem
 	return view
 }
 
 func describe(w *workflow.Workflow) workflowView {
 	view := workflowView{Name: w.Name, Path: w.Path, Tests: len(w.Tests), Steps: []stepView{}}
+	// offer lists a value as one the page may change, unless the way it is
+	// written in the file rules that out.
+	offer := func(to *[]fieldView, f fieldView) {
+		if !w.Writable(f.Path...) {
+			return
+		}
+		if f.Kind == "" {
+			f.Kind = kindText
+		}
+		*to = append(*to, f)
+	}
+
 	switch t := w.Trigger; {
 	case t != nil && t.Webhook != "":
 		view.Trigger = "POST " + t.Webhook
+		offer(&view.Edit, fieldView{Label: "Webhook path", Path: []any{"trigger", "webhook"}, Value: t.Webhook})
 	case t != nil && t.Cron != "":
 		view.Trigger = "cron " + t.Cron
+		offer(&view.Edit, fieldView{Label: "Schedule", Path: []any{"trigger", "cron"}, Value: t.Cron})
 	}
 
 	for i, s := range w.Steps {
@@ -152,15 +223,44 @@ func describe(w *workflow.Workflow) workflowView {
 				step.Fields = append(step.Fields, [2]string{label, value})
 			}
 		}
+		at := func(path ...any) []any { return append([]any{"steps", i}, path...) }
+		edit := func(f fieldView) { offer(&step.Edit, f) }
+		// texts offers every piece of text in v, however deep it is.
+		var texts func(group, label string, path []any, v any)
+		texts = func(group, label string, path []any, v any) {
+			switch v := v.(type) {
+			case string:
+				if label == "" {
+					label = group
+				}
+				edit(fieldView{Label: label, Group: group, Path: path, Value: v})
+			case map[string]any:
+				for _, key := range slices.Sorted(maps.Keys(v)) {
+					name := key
+					if label != "" {
+						name = label + "." + key
+					}
+					texts(group, name, append(slices.Clone(path), key), v[key])
+				}
+			}
+		}
+
+		edit(fieldView{Label: "Run only when", Path: at("when"), Value: s.When, Kind: kindExpression, Optional: true})
 		switch {
 		case s.AI != nil:
 			step.Subtitle = shortModel(s.AI.Model)
 			add("model", s.AI.Model)
 			add("prompt", s.AI.Prompt)
 			add("output", s.AI.Output)
+			edit(fieldView{Label: "Model", Path: at("ai", "model"), Value: s.AI.Model})
+			edit(fieldView{Label: "Prompt", Path: at("ai", "prompt"), Value: s.AI.Prompt, Kind: kindPrompt})
+			texts("", "Input", at("ai", "input"), s.AI.Input)
+			edit(fieldView{Label: "Output schema", Path: at("ai", "output"), Value: s.AI.Output})
 		case s.Decide != nil:
 			step.Subtitle = shortModel(s.Decide.Model)
 			add("model", s.Decide.Model)
+			edit(fieldView{Label: "Model", Path: at("decide", "model"), Value: s.Decide.Model})
+			texts("", "Input", at("decide", "input"), s.Decide.Input)
 			for _, name := range slices.Sorted(maps.Keys(s.Decide.Questions)) {
 				q := s.Decide.Questions[name]
 				spec := q.Spec()
@@ -168,6 +268,23 @@ func describe(w *workflow.Workflow) workflowView {
 					Name: name, Ask: q.Ask, Answers: answers(q),
 					Options: spec.Options, YesIf: spec.YesIf, NoIf: spec.NoIf,
 				})
+
+				in := func(path ...any) []any { return append(at("decide", "questions", name), path...) }
+				edit(fieldView{Label: "Question", Group: name, Path: in("ask"), Value: q.Ask})
+				list := "choice"
+				if q.Score != nil {
+					list = "score"
+				}
+				for j, o := range spec.Options {
+					// An answer's meaning is the value of its name, in a
+					// mapping of answers or in an item of a list of them.
+					edit(fieldView{Label: o.Name, Group: name, Path: in(list, o.Name), Value: o.Meaning})
+					edit(fieldView{Label: o.Name, Group: name, Path: in(list, j, o.Name), Value: o.Meaning})
+				}
+				if q.YesIf != "" {
+					edit(fieldView{Label: "Yes if", Group: name, Path: in("yes_if"), Value: q.YesIf})
+					edit(fieldView{Label: "No if", Group: name, Path: in("no_if"), Value: q.NoIf})
+				}
 			}
 		case s.HTTP != nil:
 			// The URL is shown as written, with its ${...} unresolved, so no
@@ -177,6 +294,15 @@ func describe(w *workflow.Workflow) workflowView {
 			if body, ok := s.HTTP.Body.(map[string]any); ok {
 				add("sends", strings.Join(slices.Sorted(maps.Keys(body)), ", "))
 			}
+			edit(fieldView{
+				Label: "Method", Path: at("http", "method"), Value: strings.ToUpper(s.HTTP.Method),
+				Kind: kindChoice, Options: workflow.Methods,
+			})
+			edit(fieldView{Label: "URL", Path: at("http", "url"), Value: s.HTTP.URL})
+			for _, name := range slices.Sorted(maps.Keys(s.HTTP.Headers)) {
+				edit(fieldView{Label: name, Group: "Headers", Path: at("http", "headers", name), Value: s.HTTP.Headers[name]})
+			}
+			texts("Body", "", at("http", "body"), s.HTTP.Body)
 		}
 		view.Steps = append(view.Steps, step)
 	}

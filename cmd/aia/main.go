@@ -200,18 +200,25 @@ func testCmd() *cobra.Command {
 
 func serveCmd() *cobra.Command {
 	var addr, history string
+	var edit bool
 	cmd := &cobra.Command{
 		Use:   "serve [path...]",
 		Short: "Stay running and run workflows when their triggers fire",
 		Long: "Stay running and run workflows when their triggers fire: a POST request to a\n" +
 			"workflow's webhook path, or its cron schedule. Steps run for real, as with run.\n\n" +
 			"Each path is a workflow file, or a directory that is searched for workflow.yaml\n" +
-			"files (default: the current directory). Restart the server to pick up changes.\n\n" +
+			"files (default: the current directory). Restart the server to pick up changes,\n" +
+			"unless it was started with --edit.\n\n" +
 			"A webhook request's JSON body, sent with Content-Type: application/json, becomes\n" +
 			"trigger.body. The server answers 202 at once and runs the workflow in the\n" +
 			"background; add ?wait=true to get the finished run back instead.\n\n" +
 			"Opening the server's address in a browser shows the workflows and their recent\n" +
 			"runs.\n\n" +
+			"With --edit, that page can also change the workflows: it writes each change to\n" +
+			"the workflow file, touching only the lines that change, so git shows exactly\n" +
+			"what was edited. The server then follows the files too, taking up what an\n" +
+			"editor or git changes in them. This is for working on workflows on your own\n" +
+			"machine, so it needs an address that only this machine can reach.\n\n" +
 			"If AIA_TOKEN is set, every webhook request must carry it as a bearer token, and\n" +
 			"the browser asks for it as a password. The server only listens beyond this\n" +
 			"machine when that token is set.",
@@ -228,9 +235,13 @@ func serveCmd() *cobra.Command {
 				return fmt.Errorf("refusing to listen on %s without AIA_TOKEN: anyone who can reach it could run these workflows.\n"+
 					"Set AIA_TOKEN, or listen on 127.0.0.1", addr)
 			}
+			if edit && !loopback(addr) {
+				return fmt.Errorf("refusing to combine --edit with %s: the page could then change files on this machine from elsewhere.\n"+
+					"Listen on 127.0.0.1 to edit", addr)
+			}
 
 			logger := log.New(os.Stdout, "", log.Ltime)
-			srv, err := server.New(workflows, server.Options{
+			opts := server.Options{
 				Model:   ai.NewRouter(),
 				HTTP:    &http.Client{Timeout: 30 * time.Second},
 				Env:     environ(),
@@ -238,7 +249,13 @@ func serveCmd() *cobra.Command {
 				Commit:  gitCommit(),
 				History: history,
 				Log:     logger.Printf,
-			})
+			}
+			if edit {
+				// The files change while the server runs, and so does
+				// their version.
+				opts.Edit, opts.CommitNow = true, gitCommit
+			}
+			srv, err := server.New(workflows, opts)
 			if err != nil {
 				return err
 			}
@@ -254,6 +271,9 @@ func serveCmd() *cobra.Command {
 			}
 			if token == "" {
 				fmt.Println("  no AIA_TOKEN set: requests from this machine are accepted without one")
+			}
+			if edit {
+				fmt.Println("  --edit: the page can change the workflow files, and changes to them are picked up")
 			}
 
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -280,6 +300,7 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "address to listen on")
 	cmd.Flags().StringVar(&history, "history", filepath.Join(".aia", "runs.jsonl"),
 		"file that finished runs are saved to, with their trigger payloads and step outputs; empty keeps them in memory only")
+	cmd.Flags().BoolVar(&edit, "edit", false, "let the web page change the workflow files, and pick up changes made to them")
 	return cmd
 }
 

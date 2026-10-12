@@ -1,6 +1,7 @@
 // Package server runs workflows when their triggers fire: an HTTP request to
-// a webhook path, or a cron schedule. It also serves a read-only web page
-// showing the workflows and their recent runs.
+// a webhook path, or a cron schedule. It also serves a web page showing the
+// workflows and their recent runs, which can change the workflow files if the
+// server is started for editing.
 package server
 
 import (
@@ -18,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -44,8 +46,15 @@ type Options struct {
 	Token string
 
 	// Commit identifies the version of the workflow files; it is recorded
-	// with every run.
-	Commit string
+	// with every run. CommitNow, if set, is asked instead, for servers whose
+	// files change while they run.
+	Commit    string
+	CommitNow func() string
+
+	// Edit lets the web page change the workflow files and the prompt files
+	// they name. The server then also takes up changes made to the workflow
+	// files by other means, such as an editor or git.
+	Edit bool
 
 	// History is a file that finished runs are appended to and that the
 	// server reads back when it starts. Empty keeps runs in memory only.
@@ -80,53 +89,58 @@ type Step struct {
 }
 
 type Server struct {
-	opts      Options
+	opts    Options
+	live    atomic.Pointer[routing] // what is being served now
+	history *history
+	running sync.WaitGroup
+
+	// mu is held while the workflows being served, their files or the
+	// schedule are changed.
+	mu      sync.Mutex
+	sources map[string]*source // by workflow path; only when editing
+	cron    *cron.Cron
+	started bool
+
+	version struct {
+		sync.Mutex
+		commit string
+		asked  time.Time
+	}
+}
+
+// routing is one consistent set of workflows and how each is reached.
+type routing struct {
 	workflows []*workflow.Workflow
 	webhooks  map[string]*workflow.Workflow // by request path
 	scheduled []*workflow.Workflow
-	history   *history
-	running   sync.WaitGroup
 }
 
 // New prepares to serve the workflows that have a webhook or cron trigger. It
 // refuses a set of workflows that could not run correctly: two that share a
-// webhook path, one whose path the server uses itself, or any that read an
-// environment variable that is not set.
+// name or a webhook path, one whose path the server uses itself, or any that
+// read an environment variable that is not set.
 func New(workflows []*workflow.Workflow, opts Options) (*Server, error) {
 	if opts.Log == nil {
 		opts.Log = func(string, ...any) {}
 	}
-	s := &Server{opts: opts, workflows: workflows, webhooks: map[string]*workflow.Workflow{}}
-
-	var unset []string
-	for _, w := range workflows {
-		switch t := w.Trigger; {
-		case t != nil && t.Webhook != "":
-			if reserved(t.Webhook) {
-				return nil, fmt.Errorf("%s: the webhook path %s is used by the server itself", w.Path, t.Webhook)
+	s := &Server{opts: opts, sources: map[string]*source{}}
+	if opts.Edit {
+		// The page changes a file only if it still holds what is being
+		// served, so both must come from one reading of the file.
+		workflows = slices.Clone(workflows)
+		for i, w := range workflows {
+			fresh, src, err := read(w.Path)
+			if err != nil {
+				return nil, err
 			}
-			if other, taken := s.webhooks[t.Webhook]; taken {
-				return nil, fmt.Errorf("%s and %s both use the webhook path %s", other.Path, w.Path, t.Webhook)
-			}
-			s.webhooks[t.Webhook] = w
-		case t != nil && t.Cron != "":
-			s.scheduled = append(s.scheduled, w)
-		default:
-			continue
-		}
-		for _, name := range w.EnvVars() {
-			if opts.Env[name] == "" && !slices.Contains(unset, name) {
-				unset = append(unset, name)
-			}
+			workflows[i], s.sources[w.Path] = fresh, src
 		}
 	}
-	if len(s.webhooks)+len(s.scheduled) == 0 {
-		return nil, errors.New("none of the workflows has a webhook or cron trigger, so there is nothing to serve")
+	r, err := route(workflows, opts.Env)
+	if err != nil {
+		return nil, err
 	}
-	if len(unset) > 0 {
-		slices.Sort(unset)
-		return nil, fmt.Errorf("the workflows read environment variables that are not set: %s", strings.Join(unset, ", "))
-	}
+	s.live.Store(r)
 
 	h, err := openHistory(opts.History)
 	if err != nil {
@@ -134,6 +148,48 @@ func New(workflows []*workflow.Workflow, opts Options) (*Server, error) {
 	}
 	s.history = h
 	return s, nil
+}
+
+// route works out how the workflows are reached, or why they cannot be served
+// together.
+func route(workflows []*workflow.Workflow, env map[string]string) (*routing, error) {
+	r := &routing{workflows: workflows, webhooks: map[string]*workflow.Workflow{}}
+	named := map[string]*workflow.Workflow{}
+	var unset []string
+	for _, w := range workflows {
+		if other, taken := named[w.Name]; taken {
+			return nil, fmt.Errorf("%s and %s are both named %s", other.Path, w.Path, w.Name)
+		}
+		named[w.Name] = w
+
+		switch t := w.Trigger; {
+		case t != nil && t.Webhook != "":
+			if reserved(t.Webhook) {
+				return nil, fmt.Errorf("%s: the webhook path %s is used by the server itself", w.Path, t.Webhook)
+			}
+			if other, taken := r.webhooks[t.Webhook]; taken {
+				return nil, fmt.Errorf("%s and %s both use the webhook path %s", other.Path, w.Path, t.Webhook)
+			}
+			r.webhooks[t.Webhook] = w
+		case t != nil && t.Cron != "":
+			r.scheduled = append(r.scheduled, w)
+		default:
+			continue
+		}
+		for _, name := range w.EnvVars() {
+			if env[name] == "" && !slices.Contains(unset, name) {
+				unset = append(unset, name)
+			}
+		}
+	}
+	if len(r.webhooks)+len(r.scheduled) == 0 {
+		return nil, errors.New("none of the workflows has a webhook or cron trigger, so there is nothing to serve")
+	}
+	if len(unset) > 0 {
+		slices.Sort(unset)
+		return nil, fmt.Errorf("the workflows read environment variables that are not set: %s", strings.Join(unset, ", "))
+	}
+	return r, nil
 }
 
 // reserved reports whether the server answers path itself.
@@ -146,33 +202,74 @@ func (s *Server) Close() { s.history.close() }
 
 // Routes describes what the server responds to, one line per trigger.
 func (s *Server) Routes() []string {
+	live := s.live.Load()
 	var lines []string
-	for path, w := range s.webhooks {
+	for path, w := range live.webhooks {
 		lines = append(lines, fmt.Sprintf("POST %s  ->  %s  (%s)", path, w.Name, w.Path))
 	}
 	slices.Sort(lines)
-	for _, w := range s.scheduled {
+	for _, w := range live.scheduled {
 		lines = append(lines, fmt.Sprintf("cron %s  ->  %s  (%s)", w.Trigger.Cron, w.Name, w.Path))
 	}
 	return lines
 }
 
 // Start begins running the scheduled workflows. The function it returns stops
-// the schedule and waits for scheduled runs in progress.
+// the schedule and waits for the runs it started that are in progress.
 func (s *Server) Start() (stop func()) {
-	c := cron.New()
-	for _, w := range s.scheduled {
+	s.mu.Lock()
+	s.started = true
+	s.schedule()
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		c := s.cron
+		s.cron, s.started = nil, false
+		s.mu.Unlock()
+		if c != nil {
+			<-c.Stop().Done()
+		}
+	}
+}
+
+// schedule replaces the cron schedule with that of the workflows now being
+// served. Runs an earlier schedule started carry on. The caller holds s.mu.
+func (s *Server) schedule() {
+	if !s.started {
+		return
+	}
+	if s.cron != nil {
+		s.cron.Stop()
+	}
+	s.cron = cron.New()
+	for _, w := range s.live.Load().scheduled {
 		// The schedule was checked when the workflow was loaded.
-		c.AddFunc(w.Trigger.Cron, func() {
+		s.cron.AddFunc(w.Trigger.Cron, func() {
+			s.running.Add(1)
+			defer s.running.Done()
 			s.run(newID(), w, map[string]any{"time": time.Now().Format(time.RFC3339)}, "cron "+w.Trigger.Cron)
 		})
 	}
-	c.Start()
-	return func() { <-c.Stop().Done() }
+	s.cron.Start()
 }
 
-// Wait blocks until the runs started by webhooks have finished.
+// Wait blocks until the runs started by webhooks and schedules have finished.
 func (s *Server) Wait() { s.running.Wait() }
+
+// commit identifies the version of the workflow files as they are now.
+func (s *Server) commit() string {
+	if s.opts.CommitNow == nil {
+		return s.opts.Commit
+	}
+	// The page asks every few seconds, and the answer takes running git.
+	v := &s.version
+	v.Lock()
+	defer v.Unlock()
+	if time.Since(v.asked) > 5*time.Second {
+		v.commit, v.asked = s.opts.CommitNow(), time.Now()
+	}
+	return v.commit
+}
 
 func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" {
@@ -186,7 +283,7 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		reply(rw, http.StatusForbidden, map[string]string{"error": "without AIA_TOKEN this server only answers requests addressed to localhost"})
 		return
 	}
-	if w, ok := s.webhooks[r.URL.Path]; ok {
+	if w, ok := s.live.Load().webhooks[r.URL.Path]; ok {
 		s.webhook(rw, r, w)
 		return
 	}
@@ -254,7 +351,7 @@ func (s *Server) run(id string, w *workflow.Workflow, trigger any, source string
 	defer cancel()
 
 	run := Run{
-		ID: id, Workflow: w.Name, Source: source, Commit: s.opts.Commit,
+		ID: id, Workflow: w.Name, Source: source, Commit: s.commit(),
 		Started: time.Now(), Status: running, Steps: []Step{}, Trigger: trigger,
 	}
 	s.history.put(run)

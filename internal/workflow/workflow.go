@@ -214,7 +214,13 @@ func Load(path string) (*Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
+	return Parse(path, data)
+}
 
+// Parse is Load for content that is already at hand: data is checked as the
+// workflow file at path, which need not hold it yet. The files that data
+// refers to are looked up from path's directory.
+func Parse(path string, data []byte) (*Workflow, error) {
 	w := &Workflow{Path: path}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -335,6 +341,41 @@ func (s Step) expressions() []string {
 		exprs = append(exprs, expr.Placeholders(v)...)
 	}
 	return exprs
+}
+
+// Writable reports whether the text at path, given as map keys and list
+// indexes, can be changed in the file without rewriting anything around it.
+// That takes a key of a mapping written in indented form, not inline as {...},
+// whose value is plain text or which the mapping does not have yet.
+func (w *Workflow) Writable(path ...any) bool {
+	n := w.root
+	for i, p := range path {
+		if n == nil {
+			return false
+		}
+		var next *yaml.Node
+		switch p := p.(type) {
+		case string:
+			if n.Kind != yaml.MappingNode {
+				return false
+			}
+			for j := 0; j+1 < len(n.Content); j += 2 {
+				if n.Content[j].Value == p {
+					next = n.Content[j+1]
+					break
+				}
+			}
+			if i == len(path)-1 {
+				return n.Style&yaml.FlowStyle == 0 && (next == nil || next.Kind == yaml.ScalarNode)
+			}
+		case int:
+			if n.Kind == yaml.SequenceNode && p >= 0 && p < len(n.Content) {
+				next = n.Content[p]
+			}
+		}
+		n = next
+	}
+	return false
 }
 
 // line returns the source line of the value at path (map keys and list

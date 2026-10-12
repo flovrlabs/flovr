@@ -20,6 +20,7 @@
   --faint: #8a8a95;
   --accent: #9b21c6;
   --accent-soft: #f0def8;
+  --on-accent: #ffffff;
   --ok: #00803a;
   --ok-soft: #e0f4e8;
   --failed: #d00a03;
@@ -62,6 +63,7 @@
     --faint: #6c6c74;
     --accent: #c24bec;
     --accent-soft: #3a2247;
+    --on-accent: #16001d;
     --ok: #00d95a;
     --ok-soft: #0d2b1b;
     --failed: #ff3b30;
@@ -96,6 +98,7 @@ code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 
 button { font: inherit; color: inherit; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
 
 kbd {
   display: inline-block;
@@ -708,3 +711,148 @@ pre.cond-pre { color: var(--accent); }
 .tile.kt .kshape path { fill: var(--sunken); stroke: var(--border-strong); stroke-width: 1.25; }
 .tile.kt > svg:last-child { position: relative; }
 .outline .tile.kt { width: 26px; height: 26px; }
+
+/* ---- Editing: only drawn when the server runs with --edit. ---- */
+
+.changes-slot { flex: none; }
+.chip.changes { padding: 0 12px; color: var(--muted); font-weight: 600; }
+.chip.changes.on { border-color: var(--accent); color: var(--accent); }
+.dot.edit { background: var(--accent); }
+.flag { grid-column: 3; grid-row: 1; justify-self: end; }
+.flag.edit { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.flag.problem { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--failed); color: #fff; font-size: 11px; font-weight: 800; line-height: 1; }
+
+/* A step with unsaved changes says so on its box and in the step list. */
+.card.edited .eyebrow::after { content: " · edited"; color: var(--accent); letter-spacing: 0.04em; }
+.outline button.edited .name::after, .waterfall button.edited .name::after { content: " ●"; color: var(--accent); font-size: 9px; vertical-align: 1px; }
+
+.banner { padding: 11px 16px; border-bottom: 1px solid color-mix(in srgb, var(--failed) 40%, var(--border)); background: var(--failed-soft); color: var(--text); }
+.banner .btitle { color: var(--failed); font-weight: 700; }
+.banner p { margin: 3px 0 8px; color: var(--muted); }
+.banner pre { max-height: 120px; border-color: color-mix(in srgb, var(--failed) 35%, var(--border)); background: var(--surface); }
+
+/* The form in the details column. */
+.editform { padding-bottom: 6px; }
+.field { margin: 0 0 14px; }
+.field .lab { display: flex; align-items: center; gap: 8px; min-height: 22px; margin-bottom: 4px; }
+.field label { font-weight: 600; font-size: 12.5px; }
+.field .tag { padding: 0 5px; border-radius: 4px; background: var(--sunken); color: var(--muted); font: 700 9.5px/16px var(--sans); letter-spacing: 0.06em; }
+.field .file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
+.linkbtn { padding: 0; border: 0; background: none; color: var(--accent); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.field .revert { margin-left: auto; flex: none; }
+.in {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--sunken);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.45;
+  resize: vertical;
+}
+select.in { padding-right: 6px; cursor: pointer; }
+.in.mono { font-family: var(--mono); font-size: 12px; }
+.in:hover { border-color: var(--faint); }
+.in:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.in:disabled { opacity: 0.6; cursor: wait; }
+.in::placeholder { color: var(--faint); }
+textarea.in:not(.prompt) { overflow: hidden; resize: none; }
+textarea.prompt { min-height: 220px; line-height: 1.55; }
+.field.edited .in { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 45%, var(--sunken)); }
+.hint-text, .promptnote { margin: 4px 0 0; color: var(--faint); font-size: 12px; }
+.promptnote { margin: 0 0 4px; color: var(--muted); }
+.conflict { margin: 5px 0 0; padding: 5px 8px; border-radius: 7px; background: var(--running-soft); color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+.group { min-width: 0; margin: 0 0 14px; padding: 10px 12px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--raised); }
+.group legend { padding: 0 6px; font-size: 13px; font-weight: 650; }
+.group .in { background: var(--surface); }
+.group .field.edited .in { background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); }
+.group .field label { font-weight: 500; color: var(--muted); }
+
+/* Save bar: pinned to the bottom of the details column. */
+.inspector { display: flex; flex-direction: column; }
+.inspector > header, .inspector > .savebar { flex: none; }
+.inspector .body { flex: 1 0 auto; }
+.savebar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 -8px 18px -10px rgba(0, 0, 0, 0.35);
+}
+.barrow { display: flex; align-items: center; gap: 8px; }
+.barstatus { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.barstatus.dirty { color: var(--accent); font-weight: 600; }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--faint); }
+.btn.primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.btn.primary kbd { border-color: color-mix(in srgb, var(--on-accent) 45%, transparent); color: inherit; opacity: 0.85; }
+.btn.armed { border-color: var(--failed); color: var(--failed); }
+.btn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.btn[aria-disabled="true"]:hover { border-color: var(--border-strong); }
+.btn.primary[aria-disabled="true"]:hover { border-color: var(--accent); }
+
+.noticeslot:not(:empty) { margin-bottom: 10px; }
+.notice { max-height: 42vh; overflow: auto; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--raised); font-size: 12.5px; }
+.notice p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.notice .nhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.notice strong { font-size: 13px; }
+.notice.ok { border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); background: var(--ok-soft); }
+.notice.ok strong { color: var(--ok); }
+.notice.bad { border-color: color-mix(in srgb, var(--failed) 40%, var(--border)); background: var(--failed-soft); }
+.notice.bad strong { color: var(--failed); }
+.notice.warn { border-color: color-mix(in srgb, var(--running) 40%, var(--border)); background: var(--running-soft); }
+.notice.warn strong { color: var(--running); }
+.x.small { display: grid; place-items: center; flex: none; width: 22px; height: 22px; margin: -2px -4px 0 0; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.x.small:hover { background: var(--surface); color: var(--text); }
+.problems { margin: 4px 0 0; padding: 0; list-style: none; }
+.problems li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 5px 0; border-top: 1px solid color-mix(in srgb, var(--failed) 25%, transparent); }
+.problems .ln { flex: none; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.problems .msg { min-width: 0; flex: 1 1 100%; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
+
+/* The changes view: what git sees, in the middle of the page. */
+.hint.changesbar strong { color: var(--text); }
+.hint.changesbar .ghost { margin-left: auto; }
+.changes-wrap { flex: 1; min-width: 0; padding: 22px; }
+.changes { max-width: 900px; margin: 0 auto; padding: 18px 20px 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.changes .lede { margin: 0 0 14px; color: var(--muted); }
+.changes .empty { margin: 0; color: var(--muted); }
+.files-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.files-head h2 { margin: 0; color: var(--faint); font-size: 11px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; }
+.tally { display: inline-flex; gap: 10px; font: 700 12.5px var(--mono); }
+.tally .plus { color: var(--ok); }
+.tally .minus { color: var(--failed); }
+.files { margin: 0 0 14px; padding: 0; list-style: none; }
+.files li { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); }
+.files .path { min-width: 0; overflow-wrap: anywhere; }
+.badge { flex: none; min-width: 66px; padding: 0 7px; border-radius: 5px; background: var(--sunken); color: var(--muted); font-size: 10px; font-weight: 700; line-height: 18px; letter-spacing: 0.07em; text-align: center; text-transform: uppercase; }
+.badge.modified { background: var(--accent-soft); color: var(--accent); }
+.badge.new { background: var(--ok-soft); color: var(--ok); }
+.badge.deleted { background: var(--failed-soft); color: var(--failed); }
+pre.diff { max-height: none; padding: 0; overflow: auto; white-space: pre; overflow-wrap: normal; line-height: 1.6; }
+pre.diff:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dl { display: block; min-height: 1.6em; padding: 0 13px; }
+.dl.meta { color: var(--faint); }
+.dl.hunk { background: var(--accent-soft); color: var(--accent); }
+.dl.add { background: var(--ok-soft); color: var(--ok); }
+.dl.del { background: var(--failed-soft); color: var(--failed); }
+
+@media (max-width: 860px) {
+  .savebar { position: static; box-shadow: none; }
+}

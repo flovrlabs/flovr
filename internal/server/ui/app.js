@@ -49,7 +49,7 @@ const KIND_NAMES = {
 const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", running: "Running", pending: "Not reached" };
 
 let state = { commit: "", protected: false, workflows: [], runs: [] };
-let selected = { workflow: null, run: null, node: null };
+let selected = { workflow: null, run: null, node: null, changes: false };
 let detail = null;      // the selected run in full, with trigger and outputs
 let shown = "";         // what the page currently shows, to tell whether anything changed
 let view = null;        // the workflow and run now drawn, for redrawing on resize and zoom
@@ -116,14 +116,17 @@ function readAddress() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   const found = {};
   for (let i = 0; i + 1 < parts.length; i += 2) found[parts[i]] = parts[i + 1];
-  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null };
+  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1" };
 }
 
 function go(change) {
   const next = { ...selected, ...change };
+  // Picking anything else leaves the changes view, unless it is asked for.
+  if (!("changes" in change)) next.changes = false;
   let hash = "#/w/" + encodeURIComponent(next.workflow);
   if (next.run) hash += "/r/" + encodeURIComponent(next.run);
   if (next.node) hash += "/n/" + encodeURIComponent(next.node);
+  if (next.changes) hash += "/c/1";
   if (location.hash !== hash) location.hash = hash;
 }
 
@@ -135,8 +138,12 @@ async function getJSON(path) {
 
 async function refresh() {
   const live = $("live");
+  const stamp = epoch;
   try {
-    state = await getJSON("/api/state");
+    const fresh = await getJSON("/api/state");
+    // A save finished while this answer was on its way: it may be older than the file.
+    if (stamp !== epoch) return;
+    adopt(fresh);
     if (selected.run) {
       const loaded = detail && detail.run === selected.run && detail.status !== "running";
       if (!loaded) detail = await getJSON("/api/runs/" + encodeURIComponent(selected.run)).catch(() => null);
@@ -166,24 +173,30 @@ const latestRun = (name) => state.runs.find((r) => r.workflow === name);
 
 function render() {
   if (!state.workflows.some((w) => w.name === selected.workflow)) {
-    selected = { workflow: state.workflows.length ? state.workflows[0].name : null, run: null, node: null };
+    selected = { workflow: state.workflows.length ? state.workflows[0].name : null, run: null, node: null, changes: false };
     detail = null;
   }
   // Rebuilding the page drops the reader's focus and text selection, so it is
   // only done when there is something new to show.
-  const next = JSON.stringify([state, selected, detail]);
+  const wanted = state.workflows.find((x) => x.name === selected.workflow);
+  if (selected.changes && state.editable && wanted) ensureChanges(wanted);
+  const next = JSON.stringify([state, selected, detail, uiTick, selected.changes ? changesCache[selected.workflow] : null]);
   if (next === shown) return;
   shown = next;
+  const focusId = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
 
   const w = state.workflows.find((x) => x.name === selected.workflow);
-  const key = [selected.workflow, selected.run, selected.node].join("|");
+  const key = [selected.workflow, selected.run, selected.node, selected.changes].join("|");
   const moved = key !== lastKey;
   lastKey = key;
 
   renderTop(w);
   if (!w) {
     view = null;
+    form = null;
+    insp.body = null;
     $("side").replaceChildren();
+    $("changes").replaceChildren();
     $("inspector").replaceChildren();
     $("canvas").replaceChildren(el("p", { class: "none" }, "No workflows are loaded."));
     return;
@@ -193,12 +206,18 @@ function render() {
   renderSide(w);
   renderCanvas(moved);
   renderInspector(w, run, moved);
+  if (focusId) {
+    const back = document.querySelector('[data-focus="' + CSS.escape(focusId) + '"]');
+    if (back && back !== document.activeElement) back.focus({ preventScroll: true });
+  }
 }
 
 // ---- top bar ----
 
 function renderTop(w) {
   $("commit").replaceChildren(...(state.commit ? [icon("branch", 13), el("span", {}, state.commit)] : []));
+
+  $("changes").replaceChildren(...(state.editable && w ? [changesChip()] : []));
 
   const last = w ? latestRun(w.name) : null;
   const anyFailed = state.runs.some((r) => r.status === "failed" && latestRun(r.workflow) === r);
@@ -245,6 +264,7 @@ function renderSide(w) {
       },
       el("span", { class: "dot " + (last ? last.status : ""), title: last ? "Latest run: " + last.status : "No runs yet" }),
       el("span", { class: "name" }, x.name),
+      flagFor(x),
       el("span", { class: "sub mono" }, x.trigger || "no trigger"),
       el("span", { class: "aside" }, x.steps.length + (x.steps.length === 1 ? " step" : " steps")));
   });
@@ -268,7 +288,9 @@ function renderSide(w) {
     runs.length
       ? el("div", { class: "list runs" }, rows)
       : el("p", { class: "empty" }, w.trigger ? "None yet. A run appears here each time the trigger fires." : "The server does not run this workflow: it has no webhook or cron trigger."),
-    el("p", { class: "note" }, "Read-only. Workflows are files in git: edit the YAML, commit it, restart the server."));
+    el("p", { class: "note" }, state.editable
+      ? "Edits are written to the workflow's YAML file. Committing stays in git."
+      : "Read-only. Workflows are files in git: edit the YAML, commit it, restart the server."));
 }
 
 // outcome says in a few words what a run did.
@@ -394,6 +416,8 @@ function layout(w, width) {
 function renderCanvas(moved) {
   const canvas = $("canvas");
   const { w, run } = view;
+  if (selected.changes && state.editable) return renderChanges(w);
+  const edited = editedNodes(w);
   const old = canvas.querySelector(".scroller");
   const keep = old && !moved ? [old.scrollLeft, old.scrollTop] : null;
 
@@ -424,14 +448,15 @@ function renderCanvas(moved) {
     else if (done) took = done.status === "failed" ? "failed" : done.status;
     else if (run) took = run.status === "running" ? "waiting" : "not reached";
     const label = node.title + ", " + KIND_LABEL[node.kind] + (node.order ? ", step " + node.order : "") + (status ? ", " + (STATUS_TEXT[status] || status).toLowerCase() : "");
+    const isEdited = edited.has(node.id);
     return el("div", {
         class: "slot" + (animate ? " enter" : ""),
         css: { left: node.x + "px", top: node.y + "px", width: plan.nodeW + "px", height: CARD_H + "px", animationDelay: (animate ? i * 70 : 0) + "ms" },
       },
       el("button", {
-          class: "card shape-" + node.kind + " kind-" + node.kind + (status ? " " + status : "") + (node.parent ? " has-in" : "") + (node.hasOut ? " has-out" : ""),
-          type: "button", "data-node": node.id,
-          "aria-pressed": selected.node === node.id ? "true" : "false", "aria-label": label,
+          class: "card shape-" + node.kind + " kind-" + node.kind + (status ? " " + status : "") + (node.parent ? " has-in" : "") + (node.hasOut ? " has-out" : "") + (isEdited ? " edited" : ""),
+          type: "button", "data-node": node.id, "data-focus": "n:" + node.id, "data-label": label,
+          "aria-pressed": selected.node === node.id ? "true" : "false", "aria-label": label + (isEdited ? ", unsaved changes" : ""),
           onclick: () => go({ node: selected.node === node.id ? null : node.id }),
         },
         shapeSVG(node.kind, plan.nodeW, CARD_H),
@@ -456,9 +481,10 @@ function renderCanvas(moved) {
   const scroller = el("div", { class: "scroller" }, holder);
 
   canvas.replaceChildren(...[
+    problemBanner(w),
     run ? runBar(run) : el("div", { class: "hint" },
       el("span", {}, "Steps run top to bottom in the order numbered."),
-      el("span", {}, "Pick a run on the left to see what happened.")),
+      el("span", {}, state.editable && !w.problem ? "Select a step to edit it, or a run on the left to see what happened." : "Pick a run on the left to see what happened.")),
     scroller,
     el("div", { class: "tools", role: "group", "aria-label": "Zoom" },
       tool("minus", "Zoom out", () => setZoom(scale - 0.1)),
@@ -564,16 +590,24 @@ function example(w) {
 }
 
 function renderInspector(w, run, moved) {
+  ensureInspector();
   const step = w.steps.find((s) => s.id === selected.node);
+  const canEdit = state.editable && !w.problem;
+  const fields = !canEdit ? null : selected.node === "trigger" ? w.edit : step ? step.edit : null;
+  const hasForm = !!(fields && fields.length);
   let parts;
   if (selected.node === "trigger") parts = triggerDetails(w, run);
-  else if (step) parts = stepDetails(w, step, run);
+  else if (step) parts = stepDetails(w, step, run, hasForm);
   else if (run) parts = runDetails(w, run);
   else parts = workflowDetails(w);
   const [head, ...sections] = parts.flat(Infinity).filter(Boolean);
   const box = $("inspector");
   const top = box.scrollTop;
-  box.replaceChildren(head, el("div", { class: "body" }, sections));
+  insp.head.replaceWith(head);
+  insp.head = head;
+  showForm(w, hasForm ? selected.node : null, fields);
+  insp.rest.replaceChildren(...sections);
+  updateBar();
   box.scrollTop = moved ? 0 : top;
 }
 
@@ -581,7 +615,7 @@ function renderInspector(w, run, moved) {
 // keyboard and for a quick look at the shape of the workflow.
 function outline(w) {
   return el("ol", { class: "outline" }, w.steps.map((s, i) =>
-    el("li", {}, el("button", { type: "button", class: "kind-" + s.kind, onclick: () => go({ node: s.id }) },
+    el("li", {}, el("button", { type: "button", class: "kind-" + s.kind + (editedNodes(w).has(s.id) ? " edited" : ""), "data-node": s.id, onclick: () => go({ node: s.id }) },
       el("span", { class: "n" }, i + 1),
       kindTile(s.kind, 26),
       el("span", { class: "name mono" }, s.id),
@@ -598,7 +632,8 @@ function workflowDetails(w) {
       ["Tests", w.tests + (w.tests ? ", run with aia test" : "")],
       state.commit ? ["Version", el("span", { class: "mono" }, state.commit)] : null,
     ])),
-    section("Steps", outline(w), el("p", { class: "muted small" }, "A step with an IF condition is skipped when the condition is false.")),
+    section("Steps", outline(w), el("p", { class: "muted small" }, "A step with an IF condition is skipped when the condition is false."),
+      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger or a step to edit it. Saved changes are written to " + w.path + ".") : null),
     isWebhook(w) ? section("Try it", example(w), el("p", { class: "muted small" }, "With ?wait=true the answer is the finished run. Without it the server answers at once and the run appears in the list.")) : null,
   ];
 }
@@ -613,7 +648,7 @@ function waterfall(w, run) {
     const start = offset;
     if (done) offset += done.ms;
     const ran = done && (status === "ok" || status === "failed" || status === "running");
-    return el("li", {}, el("button", { type: "button", class: "kind-" + step.kind, onclick: () => go({ node: step.id }) },
+    return el("li", {}, el("button", { type: "button", class: "kind-" + step.kind + (editedNodes(w).has(step.id) ? " edited" : ""), "data-node": step.id, onclick: () => go({ node: step.id }) },
       el("span", { class: "n" }, i + 1),
       el("span", { class: "name mono" }, step.id),
       el("span", { class: "lane " + status }, ran
@@ -651,7 +686,7 @@ function triggerDetails(w, run) {
   ];
 }
 
-function stepDetails(w, step, run) {
+function stepDetails(w, step, run, hasForm) {
   const status = progress(run, step.id);
   const done = run ? run.steps.find((s) => s.id === step.id) : null;
   const output = done && done.output !== undefined ? done.output : null;
@@ -668,12 +703,12 @@ function stepDetails(w, step, run) {
       done && done.detail ? el("p", { class: "detail mono" }, done.detail) : null,
       done && done.error ? el("pre", { class: "error" }, done.error) : null) : null,
     step.questions && output ? section("Answers", step.questions.map((q) => question(q, output[q.name]))) : null,
-    step.questions && !output ? section("Questions", step.questions.map((q) => question(q, null))) : null,
+    step.questions && !output && !hasForm ? section("Questions", step.questions.map((q) => question(q, null))) : null,
     output !== null && !step.questions ? section("Output", jsonView(output)) : null,
-    section("Runs when",
+    hasForm ? null : section("Runs when",
       step.when ? el("pre", { class: "cond-pre" }, step.when) : el("p", { class: "muted" }, "Always, once the steps before it have finished."),
       el("p", { class: "muted small" }, "Step " + order + " of " + w.steps.length + " in file order.")),
-    step.fields.length ? section("Settings", pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)]))) : null,
+    step.fields.length && !hasForm ? section("Settings", pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)]))) : null,
     step.reads.length ? section("Reads from", el("div", { class: "chips" }, step.reads.map((name) =>
       el("button", { type: "button", class: "pill link mono", title: "Show " + name, onclick: () => go({ node: name }) }, name)))) : null,
   ];
@@ -713,14 +748,666 @@ function question(q, a) {
     })));
 }
 
+// ---- editing ----
+//
+// What the person has typed lives in `drafts`, not in the page, so a redraw can
+// never lose it. The form is a long-lived piece of the page: when the data
+// behind it changes it is updated in place (see syncForm) instead of rebuilt,
+// which keeps the focus, the caret and the text being typed where they are.
+
+let epoch = 0;          // counts saves, so an answer older than a save can be told apart
+let uiTick = 0;         // bumped when something outside the data changes what is drawn
+let formId = 0;
+let form = null;        // the form now on the page: { key, workflow, node, fields, controls, root }
+let flagSig = "";       // which steps had unsaved changes the last time the flags were drawn
+const drafts = {};      // workflow -> { fields: { pathKey: { path, value, node, label } }, prompts: { step: text } }
+const known = {};       // workflow -> the rev this page last saw
+const ui = {};          // workflow -> { saving, notice, conflicts, armed }
+const promptCache = {}; // "workflow|step" -> { state, file, text, rev, wfRev, inflight, error }
+const changesCache = {}; // workflow -> { state, data, error, stamp, inflight }
+let changesEpoch = 0;   // bumped by every save, so the diff is fetched again
+const insp = { head: null, body: null, formslot: null, rest: null, bar: null };
+
+const pathKey = (path) => JSON.stringify(path);
+const draftsOf = (name) => drafts[name] || (drafts[name] = { fields: {}, prompts: {} });
+const uiOf = (name) => ui[name] || (ui[name] = { saving: false, notice: null, conflicts: {}, armed: false, armTimer: 0 });
+const workflowByName = (name) => state.workflows.find((x) => x.name === name);
+const plural = (n, one, many) => n + " " + (n === 1 ? one : many || one + "s");
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
+
+async function request(method, path, body) {
+  const response = await fetch(path, {
+    method,
+    headers: body ? { Accept: "application/json", "Content-Type": "application/json" } : { Accept: "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data = null;
+  try { data = await response.json(); } catch (err) { data = null; }
+  return { ok: response.ok, status: response.status, body: data || {} };
+}
+
+// fieldIndex maps every editable field of a workflow, by path, to the field and
+// the node (the trigger or a step) it belongs to.
+function fieldIndex(w) {
+  const map = new Map();
+  (w.edit || []).forEach((f) => map.set(pathKey(f.path), { field: f, node: "trigger" }));
+  w.steps.forEach((s) => (s.edit || []).forEach((f) => map.set(pathKey(f.path), { field: f, node: s.id })));
+  return map;
+}
+
+// pruneDrafts forgets drafts that now say what the file says, and drafts for
+// fields that are no longer in the file.
+function pruneDrafts(w) {
+  const d = draftsOf(w.name), index = fieldIndex(w);
+  for (const [k, e] of Object.entries(d.fields)) {
+    const f = index.get(k);
+    if (!f || f.field.value === e.value) delete d.fields[k];
+  }
+  for (const [step, text] of Object.entries(d.prompts)) {
+    const p = promptCache[w.name + "|" + step];
+    if (!w.steps.some((s) => s.id === step) || (p && p.state === "ready" && p.text === text)) delete d.prompts[step];
+  }
+}
+
+function dirtyCount(name) {
+  const d = drafts[name];
+  return d ? Object.keys(d.fields).length + Object.keys(d.prompts).length : 0;
+}
+function dirtyNodes(name) {
+  const d = drafts[name];
+  if (!d) return [];
+  return [...new Set([...Object.values(d.fields).map((e) => e.node), ...Object.keys(d.prompts)])];
+}
+const editedNodes = (w) => new Set(state.editable ? dirtyNodes(w.name) : []);
+const anyDirty = () => state.editable && state.workflows.some((w) => dirtyCount(w.name) > 0);
+
+// adopt takes in a fresh answer from /api/state. A workflow whose file changed
+// without this page saving it keeps the person's drafts, on top of the new text.
+function adopt(fresh) {
+  const before = state;
+  state = fresh;
+  for (const w of state.workflows) {
+    if (known[w.name] === undefined) known[w.name] = w.rev;
+    else if (known[w.name] !== w.rev) {
+      known[w.name] = w.rev;
+      changedOutside(w.name, before.workflows.find((x) => x.name === w.name), w);
+    }
+    pruneDrafts(w);
+  }
+  flagSig = "";
+}
+
+function changedOutside(name, prev, w) {
+  const st = uiOf(name), d = draftsOf(name);
+  const was = prev ? fieldIndex(prev) : new Map(), now = fieldIndex(w);
+  let kept = Object.keys(d.prompts).length;
+  for (const [k, e] of Object.entries(d.fields)) {
+    const n = now.get(k);
+    if (!n) { delete d.fields[k]; continue; }
+    kept++;
+    const o = was.get(k);
+    if (o && o.field.value !== n.field.value) st.conflicts[k] = n.field.value;
+  }
+  if (st.notice && st.notice.kind === "conflict") st.notice = { ...st.notice, kept };
+  else if (kept > 0 || (view && view.w.name === name && selected.node)) st.notice = { kind: "external", kept };
+}
+
+// ---- the form ----
+
+function autosize(box) {
+  if (box.tagName !== "TEXTAREA" || box.classList.contains("prompt")) return;
+  box.style.height = "auto";
+  box.style.height = box.scrollHeight + 2 + "px";
+}
+
+function setValue(box, value) {
+  if (box.value === value) return;
+  if (box.tagName === "SELECT" && ![...box.options].some((o) => o.value === value)) box.append(el("option", { value }, value));
+  let range = null;
+  try { if (box.selectionStart != null && document.activeElement === box) range = [box.selectionStart, box.selectionEnd]; } catch (err) { range = null; }
+  box.value = value;
+  if (range) { try { box.setSelectionRange(Math.min(range[0], value.length), Math.min(range[1], value.length)); } catch (err) { /* not a text box */ } }
+  autosize(box);
+}
+
+function makeControl(f, field) {
+  const id = "f" + (++formId);
+  const c = { field, key: pathKey(field.path), kind: field.kind, base: field.value, node: f.node, workflow: f.workflow, id };
+  const mono = field.kind === "expression";
+  let box;
+  if (field.kind === "choice") {
+    const options = (field.options || []).slice();
+    if (!options.includes(field.value)) options.unshift(field.value);
+    box = el("select", { id, class: "in" }, options.map((o) => el("option", { value: o }, o)));
+  } else if (field.kind === "prompt") {
+    box = el("textarea", { id, class: "in mono prompt", rows: 14, spellcheck: "false", disabled: true });
+  } else if (field.value.length > 56 || field.value.includes("\n")) {
+    box = el("textarea", { id, class: "in" + (mono ? " mono" : ""), rows: 2, spellcheck: "false" });
+  } else {
+    box = el("input", { id, type: "text", class: "in" + (mono ? " mono" : ""), spellcheck: "false", autocomplete: "off", autocapitalize: "off" });
+  }
+  c.input = box;
+
+  const hintId = id + "-hint";
+  const hintText = field.label === "Run only when" ? "Empty means the step always runs."
+    : field.optional ? "Optional. Leave it empty to remove it from the file." : null;
+  if (hintText && field.kind !== "prompt") box.setAttribute("aria-describedby", hintId);
+  if (field.optional && field.kind !== "prompt") box.setAttribute("placeholder", "Not set");
+
+  c.revert = el("button", { type: "button", class: "linkbtn revert", hidden: true, title: "Put back what the file says" }, "Revert");
+  c.revert.addEventListener("click", () => {
+    const d = draftsOf(c.workflow);
+    if (c.kind === "prompt") delete d.prompts[c.node]; else delete d.fields[c.key];
+    delete uiOf(c.workflow).conflicts[c.key];
+    setValue(box, c.base);
+    paintRow(c);
+    draftChanged(c.workflow);
+    box.focus();
+  });
+  c.conflict = el("p", { class: "conflict", hidden: true });
+  c.note = c.kind === "prompt" ? el("p", { class: "promptnote", role: "status" }) : null;
+  c.row = el("div", { class: "field" + (field.group ? " grouped" : "") + " k-" + field.kind },
+    el("div", { class: "lab" },
+      el("label", { for: id }, field.label),
+      mono ? el("span", { class: "tag", title: "A CEL expression" }, "CEL") : null,
+      field.kind === "prompt" ? el("span", { class: "file mono", title: "The prompt is stored in this file" }, field.value) : null,
+      c.revert),
+    box,
+    c.note,
+    hintText ? el("p", { class: "hint-text", id: hintId }, hintText) : null,
+    c.conflict);
+
+  const onInput = () => {
+    const d = draftsOf(c.workflow), st = uiOf(c.workflow);
+    const value = box.value;
+    if (c.kind === "prompt") {
+      if (value === c.base) delete d.prompts[c.node]; else d.prompts[c.node] = value;
+    } else if (value === c.base) delete d.fields[c.key];
+    else d.fields[c.key] = { path: field.path, value, node: c.node, label: field.label };
+    if (!(c.kind === "prompt" ? d.prompts[c.node] !== undefined : d.fields[c.key])) delete st.conflicts[c.key];
+    if (st.notice && (st.notice.kind === "saved" || st.notice.kind === "external")) st.notice = null;
+    autosize(box);
+    paintRow(c);
+    draftChanged(c.workflow);
+  };
+  box.addEventListener("input", onInput);
+  return c;
+}
+
+function draftOf(c) {
+  const d = draftsOf(c.workflow);
+  if (c.kind === "prompt") return d.prompts[c.node] === undefined ? null : { value: d.prompts[c.node] };
+  return d.fields[c.key] || null;
+}
+
+function paintRow(c) {
+  const edited = !!draftOf(c);
+  c.row.classList.toggle("edited", edited);
+  c.revert.hidden = !edited;
+  const fresh = uiOf(c.workflow).conflicts[c.key];
+  c.conflict.hidden = !(edited && fresh !== undefined);
+  if (!c.conflict.hidden) c.conflict.replaceChildren("The file now says: ", el("span", { class: "mono" }, fresh.length > 240 ? fresh.slice(0, 240) + "…" : fresh));
+}
+
+function buildForm(w, nodeId, fields, key) {
+  const f = { key, workflow: w.name, node: nodeId, fields, controls: [], root: null };
+  const body = [];
+  let group = null, groupName = null;
+  for (const field of fields) {
+    const c = makeControl(f, field);
+    f.controls.push(c);
+    if (field.group) {
+      if (groupName !== field.group) {
+        groupName = field.group;
+        group = el("fieldset", { class: "group" }, el("legend", {}, field.group));
+        body.push(group);
+      }
+      group.append(c.row);
+    } else {
+      groupName = null;
+      body.push(c.row);
+    }
+  }
+  f.root = el("section", { class: "editform" }, el("h2", {}, "Settings"), body);
+  return f;
+}
+
+function showForm(w, nodeId, fields) {
+  if (!nodeId) {
+    if (form) { form = null; insp.formslot.replaceChildren(); }
+    return;
+  }
+  const key = [w.name, nodeId, fields.map((f) => [pathKey(f.path), f.kind, f.label, f.group || "", (f.options || []).join(",")].join("~")).join("|")].join("##");
+  if (form && form.key === key) {
+    form.fields = fields;
+  } else {
+    form = buildForm(w, nodeId, fields, key);
+    insp.formslot.replaceChildren(form.root);
+  }
+  syncForm(w);
+}
+
+// syncForm brings the controls up to date with the data and the drafts without
+// touching a control whose text already matches.
+function syncForm(w) {
+  if (!form || form.workflow !== w.name) return;
+  form.controls.forEach((c, i) => {
+    c.field = form.fields[i];
+    if (c.kind === "prompt") return syncPrompt(c, w);
+    c.base = c.field.value;
+    const d = draftOf(c);
+    setValue(c.input, d ? d.value : c.base);
+    paintRow(c);
+  });
+}
+
+function syncPrompt(c, w) {
+  const key = w.name + "|" + c.node;
+  const p = promptCache[key];
+  if (!p || (p.wfRev !== w.rev && !p.inflight && p.state !== "error")) loadPrompt(w, c.node);
+  const now = promptCache[key];
+  c.input.disabled = now.state !== "ready";
+  c.note.hidden = now.state === "ready";
+  if (now.state === "loading") c.note.replaceChildren("Loading the prompt…");
+  else if (now.state === "error") {
+    const again = el("button", { type: "button", class: "linkbtn" }, "Try again");
+    again.addEventListener("click", () => { promptCache[key] = { state: "loading", wfRev: w.rev }; loadPrompt(w, c.node, true); syncForm(w); });
+    c.note.replaceChildren("Could not load the prompt: " + now.error + " ", again);
+  }
+  if (now.state === "ready") {
+    c.base = now.text;
+    const d = draftOf(c);
+    setValue(c.input, d ? d.value : now.text);
+    autosize(c.input);
+  }
+  paintRow(c);
+}
+
+function loadPrompt(w, step, force) {
+  const key = w.name + "|" + step;
+  const prev = promptCache[key];
+  if (prev && prev.inflight && !force) return Promise.resolve();
+  promptCache[key] = { ...(prev || { state: "loading" }), inflight: true, wfRev: w.rev };
+  return request("GET", "/api/prompt?workflow=" + encodeURIComponent(w.name) + "&step=" + encodeURIComponent(step))
+    .then((r) => {
+      promptCache[key] = r.ok
+        ? { state: "ready", file: r.body.file, text: r.body.text, rev: r.body.rev, wfRev: w.rev }
+        : { state: "error", error: r.body.error || "the server answered " + r.status, wfRev: w.rev };
+    })
+    .catch(() => { promptCache[key] = { state: "error", error: "the server cannot be reached", wfRev: w.rev }; })
+    .then(() => {
+      const now = workflowByName(w.name);
+      if (!now) return;
+      pruneDrafts(now);
+      if (form && form.workflow === w.name) syncForm(now);
+      draftChanged(w.name, true);
+    });
+}
+
+// draftChanged refreshes what shows unsaved changes, other than the form.
+function draftChanged(name, force) {
+  const w = workflowByName(name);
+  if (!w || !view || view.w.name !== name) { updateBar(); return; }
+  updateBar();
+  const sig = name + ":" + dirtyNodes(name).sort().join(",");
+  if (sig === flagSig && !force) return;
+  flagSig = sig;
+  const edited = editedNodes(w);
+  for (const node of document.querySelectorAll("#canvas .card[data-node]")) {
+    const on = edited.has(node.dataset.node);
+    node.classList.toggle("edited", on);
+    node.setAttribute("aria-label", node.dataset.label + (on ? ", unsaved changes" : ""));
+  }
+  for (const node of document.querySelectorAll("#inspector [data-node]")) node.classList.toggle("edited", edited.has(node.dataset.node));
+  renderSide(w);
+  $("changes").replaceChildren(...(state.editable ? [changesChip()] : []));
+}
+
+// flagFor marks a workflow in the list on the left: a file problem, or unsaved changes.
+function flagFor(x) {
+  if (!state.editable) return null;
+  if (x.problem) return el("span", { class: "flag problem", title: "The file has a problem: " + x.problem, role: "img", "aria-label": "The file has a problem" }, "!");
+  const n = dirtyCount(x.name);
+  return n ? el("span", { class: "flag edit", title: plural(n, "unsaved change"), role: "img", "aria-label": plural(n, "unsaved change") }) : null;
+}
+
+function changesChip() {
+  const uncommitted = /uncommitted/.test(state.commit || "");
+  return el("button", {
+      type: "button", class: "chip changes" + (selected.changes ? " on" : ""), "data-focus": "changes",
+      "aria-pressed": selected.changes ? "true" : "false",
+      title: "Show what changed in the workflow files, as git sees it",
+      onclick: () => go({ changes: !selected.changes }),
+    },
+    uncommitted ? el("span", { class: "dot edit", title: "There are uncommitted changes" }) : null,
+    "Changes");
+}
+
+function problemBanner(w) {
+  if (!w.problem) return null;
+  const kept = dirtyCount(w.name);
+  return el("div", { class: "banner", role: "alert" },
+    el("div", { class: "btitle" }, "This workflow's file has a problem"),
+    el("p", {}, "The server keeps running the last valid version, and editing is switched off for this workflow until the file is fixed. Fix it in your editor: this page notices by itself."
+      + (kept ? " Your " + plural(kept, "unsaved change") + " " + (kept === 1 ? "is" : "are") + " kept." : "")),
+    el("pre", { class: "mono" }, w.problem));
+}
+
+// ---- the save bar ----
+
+function ensureInspector() {
+  if (insp.body) return;
+  insp.head = el("header");
+  insp.formslot = el("div", { class: "formslot" });
+  insp.rest = el("div", { class: "rest" });
+  insp.body = el("div", { class: "body" }, insp.formslot, insp.rest);
+  insp.bar = buildBar();
+  $("inspector").replaceChildren(insp.head, insp.body, insp.bar.root);
+}
+
+function buildBar() {
+  const b = {};
+  b.slot = el("div", { class: "noticeslot" });
+  b.status = el("span", { class: "barstatus", role: "status" });
+  b.discard = el("button", { type: "button", class: "btn" }, "Discard");
+  b.save = el("button", { type: "button", class: "btn primary" }, "Save", el("kbd", {}, isMac ? "⌘S" : "Ctrl+S"));
+  b.root = el("div", { class: "savebar", hidden: true }, b.slot, el("div", { class: "barrow" }, b.status, b.discard, b.save));
+  b.shownNotice = null;
+  b.discard.addEventListener("click", () => discardCurrent());
+  b.save.addEventListener("click", () => saveCurrent());
+  b.discard.addEventListener("blur", () => { if (view) disarm(view.w.name); });
+  return b;
+}
+
+function disarm(name) {
+  const st = uiOf(name);
+  clearTimeout(st.armTimer);
+  if (st.armed) { st.armed = false; updateBar(); }
+}
+
+function updateBar() {
+  const b = insp.bar;
+  if (!b || !view) return;
+  const w = view.w, st = uiOf(w.name), n = dirtyCount(w.name);
+  const on = state.editable && !w.problem && (form || n > 0 || st.notice);
+  b.root.hidden = !on;
+  if (!on) return;
+  const names = dirtyNodes(w.name);
+  const where = names.length > 3 ? names.slice(0, 3).join(", ") + " and " + (names.length - 3) + " more" : names.join(", ");
+  b.status.replaceChildren(...(st.saving ? ["Saving…"]
+    : n ? [plural(n, "unsaved change"), " in ", el("span", { class: "mono" }, where)]
+    : ["Saves to ", el("span", { class: "mono" }, w.path)]));
+  b.status.classList.toggle("dirty", n > 0 && !st.saving);
+  b.save.setAttribute("aria-disabled", st.saving || n === 0 ? "true" : "false");
+  b.discard.setAttribute("aria-disabled", st.saving || n === 0 ? "true" : "false");
+  b.discard.classList.toggle("armed", st.armed);
+  b.discard.textContent = st.armed ? "Discard " + plural(n, "change") + "?" : "Discard";
+  if (b.shownNotice !== st.notice) {
+    b.shownNotice = st.notice;
+    b.slot.replaceChildren(...(st.notice ? [noticeView(st.notice, w)] : []));
+  }
+}
+
+function dismissNotice(name) {
+  uiOf(name).notice = null;
+  updateBar();
+}
+
+// noticeView says in plain words what happened to a save, near the form.
+function noticeView(n, w) {
+  const tone = { saved: "ok", invalid: "bad", error: "bad", network: "bad", conflict: "warn", external: "warn" }[n.kind];
+  const text = [];
+  let title = "";
+  if (n.kind === "saved") {
+    title = "Saved";
+    text.push(el("p", {}, "Written to ", n.files.map((f, i) => [i ? ", " : "", el("span", { class: "mono" }, f)])), el("p", {},
+      "These changes are saved in the file but not committed. ",
+      el("button", { type: "button", class: "linkbtn", onclick: () => go({ changes: true }) }, "See what changed")));
+  } else if (n.kind === "invalid") {
+    title = "Not saved. The file was left as it was.";
+    if (n.saved && n.saved.length) text.push(el("p", {}, "Already written: ", n.saved.join(", "), "."));
+    if (n.problems && n.problems.length) {
+      text.push(el("p", {}, "Fix this and save again:"), el("ul", { class: "problems" }, n.problems.map((p) => problemItem(p, w))));
+    } else text.push(el("p", {}, n.error || "The server did not accept the change."));
+  } else if (n.kind === "conflict") {
+    title = "The file changed on disk, so nothing was saved";
+    text.push(el("p", {}, (n.what === "prompt" ? "The prompt file was changed after this page read it." : "The workflow file was changed after this page read it.")
+      + " The form now shows what is in the file" + (n.kept ? ", with your " + plural(n.kept, "unsaved edit") + " on top." : ".")),
+      el("p", {}, n.kept ? "Check your edits, then save again." : "Nothing of yours was lost."));
+  } else if (n.kind === "external") {
+    title = "The file was changed outside this page";
+    text.push(el("p", {}, "The form shows what is in the file now" + (n.kept ? ", with your " + plural(n.kept, "unsaved edit") + " kept on top." : ".")));
+  } else if (n.kind === "network") {
+    title = "Could not reach the server";
+    text.push(el("p", {}, "Nothing was lost: your edits are still here. Try saving again when it is back."));
+  } else {
+    title = "Not saved";
+    text.push(el("p", {}, n.error || "The server answered " + n.status + "."));
+  }
+  const close = el("button", { type: "button", class: "x small", "aria-label": "Dismiss this message", title: "Dismiss" }, icon("close", 13));
+  close.addEventListener("click", () => dismissNotice(w.name));
+  return el("div", { class: "notice " + tone, role: tone === "ok" ? "status" : "alert" },
+    el("div", { class: "nhead" }, el("strong", {}, title), close), text);
+}
+
+// A problem from the server reads like: step "summarize": when: Syntax error.
+function problemItem(p, w) {
+  const m = /^step "([^"]+)"/.exec(p.message || "");
+  const node = m && w.steps.some((s) => s.id === m[1]) ? m[1] : null;
+  return el("li", {},
+    p.line ? el("span", { class: "ln" }, "Line " + p.line) : null,
+    el("span", { class: "msg" }, p.message),
+    node ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ node }) }, "Show " + node) : null);
+}
+
+function replaceWorkflow(next) {
+  const i = state.workflows.findIndex((x) => x.name === next.name);
+  if (i >= 0) state.workflows[i] = next;
+}
+
+// promptKey is the key a prompt's field is known by (its path in the file).
+function promptKey(name, step) {
+  const w = workflowByName(name), s = w && w.steps.find((x) => x.id === step);
+  const f = s && (s.edit || []).find((x) => x.kind === "prompt");
+  return f ? pathKey(f.path) : "prompt|" + step;
+}
+
+function failureOf(r, what) {
+  if (r.status === 422) return { kind: "invalid", error: r.body.error, problems: r.body.problems || [] };
+  if (r.status === 409) return { kind: "conflict", what };
+  return { kind: "error", status: r.status, error: r.body.error };
+}
+
+async function saveCurrent() {
+  if (!view || !state.editable) return;
+  const name = view.w.name, st = uiOf(name);
+  const w = workflowByName(name);
+  if (st.saving || !w || w.problem) return;
+  const d = draftsOf(name);
+  const fields = Object.values(d.fields).map((e) => ({ path: e.path, value: e.value }));
+  const texts = Object.entries(d.prompts).map(([step, text]) => ({ step, text }));
+  if (!fields.length && !texts.length) return;
+
+  st.saving = true;
+  st.notice = null;
+  disarm(name);
+  updateBar();
+  const files = [];
+  let failure = null;
+  try {
+    if (fields.length) {
+      const r = await request("POST", "/api/edit", { workflow: name, rev: w.rev, edits: fields });
+      if (r.ok && r.body.workflow) {
+        epoch++;
+        changesEpoch++;
+        replaceWorkflow(r.body.workflow);
+        known[name] = r.body.workflow.rev;
+        for (const e of fields) {
+          const k = pathKey(e.path), cur = d.fields[k];
+          if (cur && cur.value === e.value) delete d.fields[k];
+          delete st.conflicts[k];
+        }
+        files.push(r.body.workflow.path || w.path);
+      } else failure = failureOf(r, "workflow");
+    }
+    if (!failure) {
+      for (const p of texts) {
+        const key = name + "|" + p.step, cached = promptCache[key];
+        const r = await request("POST", "/api/prompt", { workflow: name, step: p.step, rev: cached ? cached.rev : "", text: p.text });
+        if (r.ok) {
+          epoch++;
+          changesEpoch++;
+          promptCache[key] = { state: "ready", file: r.body.file, text: r.body.text, rev: r.body.rev, wfRev: (workflowByName(name) || w).rev };
+          if (d.prompts[p.step] === p.text) delete d.prompts[p.step];
+          delete st.conflicts[promptKey(name, p.step)];
+          files.push(r.body.path || r.body.file);
+        } else {
+          failure = failureOf(r, "prompt");
+          if (r.status === 409) {
+            const before = cached ? cached.text : null;
+            await loadPrompt(workflowByName(name), p.step, true);
+            const fresh = promptCache[key];
+            if (fresh && fresh.state === "ready" && fresh.text !== before) {
+              st.conflicts[promptKey(name, p.step)] = fresh.text;
+            }
+            failure.kept = dirtyCount(name);
+          }
+          break;
+        }
+      }
+    }
+  } catch (err) {
+    failure = { kind: "network" };
+  }
+  st.saving = false;
+  if (failure) {
+    if (files.length) failure.saved = files;
+    st.notice = failure;
+  } else st.notice = { kind: "saved", files };
+
+  if (failure && failure.kind === "conflict" && failure.what === "workflow") {
+    st.notice = { ...failure, kept: Object.keys(d.fields).length + Object.keys(d.prompts).length };
+    await refresh();
+    // The poll noticed the new file and counted the edits on top of it.
+  } else {
+    pruneDrafts(workflowByName(name) || w);
+    await refresh();
+  }
+  uiTick++;
+  shown = "";
+  flagSig = "";
+  render();
+  if (form) syncForm(workflowByName(name) || w);
+  draftChanged(name, true);
+}
+
+function discardCurrent() {
+  if (!view) return;
+  const name = view.w.name, st = uiOf(name);
+  if (st.saving || dirtyCount(name) === 0) return;
+  if (!st.armed) {
+    st.armed = true;
+    clearTimeout(st.armTimer);
+    st.armTimer = setTimeout(() => disarm(name), 4000);
+    updateBar();
+    return;
+  }
+  clearTimeout(st.armTimer);
+  st.armed = false;
+  drafts[name] = { fields: {}, prompts: {} };
+  st.conflicts = {};
+  st.notice = null;
+  if (form) syncForm(workflowByName(name));
+  draftChanged(name, true);
+}
+
+// ---- the changes view ----
+
+function ensureChanges(w) {
+  const stamp = [state.commit, w.rev, changesEpoch].join("|");
+  const c = changesCache[w.name];
+  if (c && (c.stamp === stamp || c.inflight)) return;
+  changesCache[w.name] = { ...(c || { state: "loading" }), inflight: true };
+  const done = (next) => {
+    changesCache[w.name] = { ...next, stamp };
+    shown = "";
+    render();
+  };
+  request("GET", "/api/changes?workflow=" + encodeURIComponent(w.name))
+    .then((r) => done(r.ok ? { state: "ready", data: r.body } : { state: "error", error: r.body.error || "the server answered " + r.status }))
+    .catch(() => done({ state: "error", error: "the server cannot be reached" }));
+}
+
+const CHANGE_WORD = { modified: "Modified", new: "New", deleted: "Deleted", renamed: "Renamed" };
+
+// diffLines cuts the diff into lines and tells what each one is.
+function diffLines(text) {
+  const out = [];
+  let body = false;
+  for (const line of text.replace(/\n$/, "").split("\n")) {
+    let kind = "ctx";
+    if (line.startsWith("diff --git")) { body = false; kind = "meta"; }
+    else if (line.startsWith("@@")) { body = true; kind = "hunk"; }
+    else if (!body) kind = "meta";
+    else if (line.startsWith("+")) kind = "add";
+    else if (line.startsWith("-")) kind = "del";
+    out.push([kind, line]);
+  }
+  return out;
+}
+
+function renderChanges(w) {
+  const c = changesCache[w.name] || { state: "loading" };
+  const lede = el("p", { class: "lede" }, "These changes are saved in the file but not committed. Commit them with git when you are happy with them.");
+  let content;
+  if (c.state === "error") {
+    content = [el("p", { class: "empty" }, "Could not read the changes: " + c.error + ". ",
+      el("button", { type: "button", class: "linkbtn", onclick: () => { changesCache[w.name] = { state: "loading" }; shown = ""; render(); } }, "Try again"))];
+  } else if (c.state === "loading" || !c.data) {
+    content = [el("p", { class: "empty" }, "Reading the changes…")];
+  } else if (c.data.git === false) {
+    content = [el("p", { class: "empty" }, "This folder is not in a git repository, so there is no diff to show. Edits are still written to the file.")];
+  } else if (!c.data.files || !c.data.files.length) {
+    content = [el("p", { class: "empty" }, "No uncommitted changes in this workflow's files. What the page shows is what the last commit says.")];
+  } else {
+    const lines = diffLines(c.data.diff || "");
+    const added = lines.filter((l) => l[0] === "add").length, removed = lines.filter((l) => l[0] === "del").length;
+    content = [
+      el("div", { class: "files-head" },
+        el("h2", {}, plural(c.data.files.length, "file"), " changed"),
+        el("span", { class: "tally" }, el("b", { class: "plus" }, "+" + added), el("b", { class: "minus" }, "−" + removed))),
+      el("ul", { class: "files" }, c.data.files.map((f) =>
+        el("li", {}, el("span", { class: "badge " + f.change }, CHANGE_WORD[f.change] || f.change), el("span", { class: "mono path" }, f.path)))),
+      c.data.diff ? el("pre", { class: "diff", tabindex: "0", "aria-label": "Diff of the changed files" },
+        lines.map(([kind, line]) => el("span", { class: "dl " + kind }, line + "\n"))) : null,
+    ];
+  }
+  $("canvas").replaceChildren(...[
+    problemBanner(w),
+    el("div", { class: "hint changesbar" },
+      el("strong", {}, "Changes in " + w.name),
+      el("span", {}, "as git sees them"),
+      el("button", { type: "button", class: "ghost", "data-focus": "close-changes", onclick: () => go({ changes: false }) }, "Back to the drawing", el("kbd", {}, "Esc"))),
+    el("div", { class: "scroller" }, el("div", { class: "changes-wrap" }, el("div", { class: "changes" }, lede, content))),
+  ].filter(Boolean));
+}
+
 window.addEventListener("hashchange", () => {
   readAddress();
   if (!selected.run) detail = null;
   refresh();
 });
 window.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && event.target.closest && event.target.closest(".editform")) {
+    event.preventDefault();
+    saveCurrent();
+    return;
+  }
   if (event.key !== "Escape") return;
-  if (selected.node) go({ node: null });
+  // In a form field Escape only leaves the field.
+  if (event.target.closest && event.target.closest(".editform")) { event.target.blur(); return; }
+  if (selected.changes) go({ changes: false });
+  else if (selected.node) go({ node: null });
   else if (selected.run) go({ run: null });
 });
 
@@ -737,3 +1424,9 @@ new ResizeObserver(() => {
 readAddress();
 refresh();
 setInterval(refresh, REFRESH_MS);
+
+window.addEventListener("beforeunload", (event) => {
+  if (!anyDirty()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});

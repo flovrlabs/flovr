@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -349,6 +350,76 @@ func TestResolve(t *testing.T) {
 	want := []string{filepath.Join("flows", "triage", "prompts", "p.md"), "/abs/p.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Resolve = %v, want %v", got, want)
+	}
+}
+
+func TestParseChecksContentThatIsNotInTheFileYet(t *testing.T) {
+	path := filepath.Join("..", "..", "examples", "triage-ticket", FileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The files it names are looked up next to the path it is given.
+	if w, err := Parse(path, data); err != nil || w.Path != path || len(w.Steps) != 4 {
+		t.Fatalf("Parse = %+v, %v", w, err)
+	}
+	changed := bytes.Replace(data, []byte("prompts/summarize.md"), []byte("prompts/missing.md"), 1)
+	var problems *Problems
+	if _, err := Parse(path, changed); !errors.As(err, &problems) || len(problems.Items) != 1 || problems.Items[0].Msg != `step "summarize": prompt file not found: prompts/missing.md` {
+		t.Errorf("Parse of changed content: error = %v", err)
+	}
+}
+
+func TestWritable(t *testing.T) {
+	w, err := Load(writeProject(t, `name: x
+trigger:
+  webhook: /hook
+steps:
+  - id: a
+    decide:
+      model: openrouter/cloudflare/clef
+      input: {ticket: "${trigger.body}"}
+      questions:
+        kind:
+          ask: What is it?
+          choice:
+            bug: It is broken.
+            other:
+        level:
+          ask: How bad?
+          score:
+            - low
+            - high: Very.
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	questions := []any{"steps", 0, "decide", "questions"}
+	at := func(path ...any) []any { return append(append([]any{}, questions...), path...) }
+	for _, tt := range []struct {
+		path []any
+		want bool
+	}{
+		{[]any{"name"}, true},
+		{[]any{"trigger", "webhook"}, true},
+		{[]any{"steps", 0, "when"}, true}, // a key the step does not have yet
+		{at("kind", "ask"), true},
+		{at("kind", "choice", "bug"), true},
+		{at("kind", "choice", "other"), true}, // an answer without a meaning
+		{at("level", "score", 1, "high"), true},
+
+		{[]any{"steps", 0, "decide", "input", "ticket"}, false}, // written inline
+		{[]any{"steps", 0, "decide", "input"}, false},           // not text
+		{at("level", "score", 0, "low"), false},                 // a bare name, with no meaning to change
+		{at("level", "score", 1), false},                        // a list item
+		{at("kind", "choice", 0, "bug"), false},
+		{[]any{"steps", 3, "when"}, false},
+		{[]any{"trigger", "webhook", "x"}, false},
+		{nil, false},
+	} {
+		if got := w.Writable(tt.path...); got != tt.want {
+			t.Errorf("Writable(%v) = %v, want %v", tt.path, got, tt.want)
+		}
 	}
 }
 
