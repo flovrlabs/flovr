@@ -58,34 +58,77 @@ type Engine struct {
 	StubHTTP bool
 }
 
+// Response is what a workflow that has respond answers its caller with.
+type Response struct {
+	Status  int               `json:"status"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    any               `json:"body"`
+}
+
 // Run executes w with trigger as the triggering event, stopping at the first
-// step that fails.
-func (e *Engine) Run(ctx context.Context, w *workflow.Workflow, trigger any) error {
-	_, err := e.run(ctx, w, trigger)
-	return err
+// step that fails. The response is nil for a workflow that has no respond.
+func (e *Engine) Run(ctx context.Context, w *workflow.Workflow, trigger any) (*Response, error) {
+	_, resp, err := e.run(ctx, w, trigger)
+	return resp, err
 }
 
 // run is Run, also returning everything expressions could see by the end:
 // trigger, env, and each step's output.
-func (e *Engine) run(ctx context.Context, w *workflow.Workflow, trigger any) (map[string]any, error) {
+func (e *Engine) run(ctx context.Context, w *workflow.Workflow, trigger any) (map[string]any, *Response, error) {
 	vars := map[string]any{"trigger": trigger, "env": e.Env}
+	if err := w.CheckTrigger(trigger); err != nil {
+		return vars, nil, err
+	}
 	var ids []string
 	for _, s := range w.Steps {
 		env, err := expr.NewEnv(ids)
 		if err != nil {
-			return vars, err
+			return vars, nil, err
 		}
 		res := e.step(ctx, w, s, env, vars)
 		if e.OnStep != nil {
 			e.OnStep(res)
 		}
 		if res.Err != nil {
-			return vars, fmt.Errorf("step %q failed: %w", s.ID, res.Err)
+			return vars, nil, fmt.Errorf("step %q failed: %w", s.ID, res.Err)
 		}
 		vars[s.ID] = res.Output
 		ids = append(ids, s.ID)
 	}
-	return vars, nil
+	if w.Respond == nil {
+		return vars, nil, nil
+	}
+	resp, err := respond(w.Respond, ids, vars)
+	if err != nil {
+		return vars, nil, fmt.Errorf("respond: %w", err)
+	}
+	return vars, resp, nil
+}
+
+// respond works out the answer to the caller from what the steps produced.
+func respond(r *workflow.Respond, ids []string, vars map[string]any) (*Response, error) {
+	env, err := expr.NewEnv(ids)
+	if err != nil {
+		return nil, err
+	}
+	resp := &Response{Status: r.Status}
+	if resp.Status == 0 {
+		resp.Status = http.StatusOK
+	}
+	for _, name := range slices.Sorted(maps.Keys(r.Headers)) {
+		value, err := env.EvalString(r.Headers[name], vars)
+		if err != nil {
+			return nil, fmt.Errorf("headers.%s: %w", name, err)
+		}
+		if resp.Headers == nil {
+			resp.Headers = map[string]string{}
+		}
+		resp.Headers[name] = value
+	}
+	if resp.Body, err = env.Eval(r.Body, vars); err != nil {
+		return nil, fmt.Errorf("body: %w", err)
+	}
+	return resp, nil
 }
 
 func (e *Engine) step(ctx context.Context, w *workflow.Workflow, s workflow.Step, env *expr.Env, vars map[string]any) (res StepResult) {

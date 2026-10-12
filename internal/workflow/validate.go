@@ -65,7 +65,7 @@ func (c *checker) run() {
 			c.addf(line, "%s: id is required", label)
 		case !idRE.MatchString(s.ID):
 			c.addf(line, "%s: id may contain only letters, digits and underscores, and must not start with a digit", label)
-		case s.ID == "trigger" || s.ID == "env":
+		case s.ID == "trigger" || s.ID == "env" || s.ID == "response":
 			c.addf(line, "%s: this id is reserved", label)
 		case slices.Contains(ids, s.ID):
 			c.addf(line, "%s: this id is already used by an earlier step", label)
@@ -112,7 +112,36 @@ func (c *checker) run() {
 			ids = append(ids, s.ID)
 		}
 	}
+	c.respond(ids)
 	c.tests(ids)
+}
+
+// respond checks what the workflow answers its caller with, which may refer
+// to every step.
+func (c *checker) respond(ids []string) {
+	r := c.w.Respond
+	if r == nil {
+		return
+	}
+	if t := c.w.Trigger; t == nil || t.Webhook == "" {
+		c.addf(c.line("respond"), "respond: only a workflow started by a webhook has a caller to answer")
+	}
+	if r.Status != 0 && (r.Status < 200 || r.Status > 599) {
+		c.addf(c.line("respond", "status"), "respond: status must be an HTTP status from 200 to 599")
+	}
+	env, err := expr.NewEnv(ids)
+	if err != nil {
+		c.addf(c.line("respond"), "respond: %v", err)
+		return
+	}
+	for _, name := range slices.Sorted(maps.Keys(r.Headers)) {
+		if err := env.Check(r.Headers[name]); err != nil {
+			c.addf(c.line("respond", "headers", name), "respond: headers.%s: %v", name, err)
+		}
+	}
+	if err := env.Check(r.Body); err != nil {
+		c.addf(c.line("respond", "body"), "respond: body: %v", err)
+	}
 }
 
 func (c *checker) trigger() {
@@ -138,6 +167,17 @@ func (c *checker) trigger() {
 	}
 	if set != 1 {
 		c.addf(c.line("trigger"), "trigger: needs exactly one of webhook, cron, manual")
+	}
+	if t.Input != "" {
+		at := c.line("trigger", "input")
+		if t.Webhook == "" {
+			c.addf(at, "trigger: input describes the body of a webhook request, so it needs webhook")
+		}
+		if _, _, err := loadSchema(c.path, t.Input); errors.Is(err, fs.ErrNotExist) {
+			c.addf(at, "trigger: schema file not found: %s", t.Input)
+		} else if err != nil {
+			c.addf(at, "trigger: %s is not a valid JSON Schema: %v", t.Input, err)
+		}
 	}
 }
 
@@ -269,7 +309,13 @@ func (c *checker) http(base []any, label string, s *HTTPStep, env *expr.Env) {
 }
 
 func (c *checker) tests(ids []string) {
-	env, err := expr.NewEnv(ids)
+	// A test of a workflow that answers its caller can expect things of the
+	// answer, as response.status and response.body.
+	names := append([]string{"trigger"}, ids...)
+	if c.w.Respond != nil {
+		names = append(names, "response")
+	}
+	env, err := expr.Vars(names...)
 	if err != nil {
 		c.addf(c.line("tests"), "tests: %v", err)
 		return
@@ -283,10 +329,16 @@ func (c *checker) tests(ids []string) {
 		at := c.line("tests", i, "fixture")
 		if t.Fixture == "" {
 			c.addf(at, "%s: fixture is required", label)
-		} else if _, err := loadJSON(c.path, t.Fixture); errors.Is(err, fs.ErrNotExist) {
+		} else if event, err := loadJSON(c.path, t.Fixture); errors.Is(err, fs.ErrNotExist) {
 			c.addf(at, "%s: fixture file not found: %s", label, t.Fixture)
 		} else if err != nil {
 			c.addf(at, "%s: fixture %s is not valid JSON", label, t.Fixture)
+		} else if err := c.w.CheckTrigger(event); err != nil {
+			// A schema that could not be loaded is reported with the trigger.
+			var input *InputError
+			if errors.As(err, &input) {
+				c.addf(at, "%s: fixture %s does not match trigger.input: %s", label, t.Fixture, strings.Join(input.Problems, "; "))
+			}
 		}
 
 		// A key is either a step's id, expecting it to be called or skipped,

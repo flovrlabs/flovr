@@ -76,6 +76,10 @@ type Run struct {
 	Error    string    `json:"error,omitempty"`
 	Steps    []Step    `json:"steps"`
 	Trigger  any       `json:"trigger,omitempty"`
+
+	// Response is what the caller was answered with, for a workflow that
+	// has respond.
+	Response *engine.Response `json:"response,omitempty"`
 }
 
 type Step struct {
@@ -292,7 +296,8 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 // webhook starts w with the request's JSON body as trigger.body. It answers
 // 202 at once and runs the workflow in the background, unless the request has
-// ?wait=true, in which case it answers with the finished run.
+// ?wait=true, in which case it answers with the finished run. A workflow that
+// has respond is an endpoint: the request waits and gets that answer.
 func (s *Server) webhook(rw http.ResponseWriter, r *http.Request, w *workflow.Workflow) {
 	if r.Method != http.MethodPost {
 		rw.Header().Set("Allow", http.MethodPost)
@@ -324,8 +329,27 @@ func (s *Server) webhook(rw http.ResponseWriter, r *http.Request, w *workflow.Wo
 		return
 	}
 	trigger := map[string]any{"body": body}
+	// A body the workflow does not take starts nothing.
+	if err := w.CheckTrigger(trigger); err != nil {
+		var input *workflow.InputError
+		if !errors.As(err, &input) {
+			s.opts.Log("%s could not check a request: %v", w.Name, err)
+			reply(rw, http.StatusInternalServerError, map[string]string{"error": "the workflow could not check the request body"})
+			return
+		}
+		reply(rw, http.StatusBadRequest, map[string]any{
+			"error":    "the request body does not match what this workflow takes",
+			"problems": input.Problems,
+		})
+		return
+	}
 	source := "webhook " + r.URL.Path
 	id := newID()
+
+	if w.Respond != nil {
+		answer(rw, s.run(id, w, trigger, source))
+		return
+	}
 
 	if r.URL.Query().Get("wait") == "true" {
 		run := s.run(id, w, trigger, source)
@@ -342,6 +366,38 @@ func (s *Server) webhook(rw http.ResponseWriter, r *http.Request, w *workflow.Wo
 		s.run(id, w, trigger, source)
 	}()
 	reply(rw, http.StatusAccepted, map[string]string{"run": id})
+}
+
+// answer replies to the caller of a workflow that has respond.
+func answer(rw http.ResponseWriter, run Run) {
+	h := rw.Header()
+	h.Set("Run-Id", run.ID)
+	resp := run.Response
+	if resp == nil {
+		// Why it failed is in the run's record. It is not for the caller,
+		// who may be anyone and need not see what the steps handled.
+		reply(rw, http.StatusInternalServerError, map[string]string{"error": "the workflow failed", "run": run.ID})
+		return
+	}
+	for name, value := range resp.Headers {
+		h.Set(name, value)
+	}
+	switch body := resp.Body.(type) {
+	case nil:
+		rw.WriteHeader(resp.Status)
+	case string:
+		if h.Get("Content-Type") == "" {
+			h.Set("Content-Type", "text/plain; charset=utf-8")
+		}
+		rw.WriteHeader(resp.Status)
+		io.WriteString(rw, body)
+	default:
+		if h.Get("Content-Type") == "" {
+			h.Set("Content-Type", "application/json")
+		}
+		rw.WriteHeader(resp.Status)
+		json.NewEncoder(rw).Encode(body)
+	}
 }
 
 // run executes the workflow to completion. It is not tied to the request that
@@ -380,8 +436,8 @@ func (s *Server) run(id string, w *workflow.Workflow, trigger any, source string
 			s.opts.Log("%s", line)
 		},
 	}
-	err := eng.Run(ctx, w, trigger)
-	run.Status = "ok"
+	resp, err := eng.Run(ctx, w, trigger)
+	run.Status, run.Response = "ok", resp
 	if err != nil {
 		run.Status, run.Error = "failed", err.Error()
 	}

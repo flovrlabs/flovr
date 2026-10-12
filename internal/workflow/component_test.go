@@ -222,7 +222,7 @@ func checkProblems(t *testing.T, err error, want []string) {
 			found = found || strings.HasPrefix(g, w)
 		}
 		if !found {
-			t.Errorf("missing problem %q", w)
+			t.Errorf("missing problem %q among:\n%s", w, strings.Join(got, "\n"))
 		}
 	}
 	if len(got) != len(want) {

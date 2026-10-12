@@ -75,7 +75,7 @@ func runExample(t *testing.T, fixture, answer string, pagerStatus int) ([]StepRe
 		Env:    map[string]string{"PAGER_URL": srv.URL + "/hooks/secret-token"},
 		OnStep: func(r StepResult) { results = append(results, r) },
 	}
-	err = eng.Run(context.Background(), w, trigger)
+	_, err = eng.Run(context.Background(), w, trigger)
 	return results, model, p, err
 }
 
@@ -193,7 +193,7 @@ func TestUnreachableServerDoesNotLeakTheURL(t *testing.T) {
 		HTTP:  http.DefaultClient,
 		Env:   map[string]string{"PAGER_URL": "http://127.0.0.1:1/hooks/secret-token"},
 	}
-	err = eng.Run(context.Background(), w, map[string]any{"body": "x"})
+	_, err = eng.Run(context.Background(), w, map[string]any{"body": "x"})
 	if err == nil || strings.Contains(err.Error(), "secret-token") {
 		t.Errorf("error = %v, want a connection error without the URL path", err)
 	}
@@ -209,7 +209,7 @@ func TestMissingEnvVarFailsTheStep(t *testing.T) {
 		HTTP:  http.DefaultClient,
 		Env:   map[string]string{},
 	}
-	err = eng.Run(context.Background(), w, map[string]any{"body": "x"})
+	_, err = eng.Run(context.Background(), w, map[string]any{"body": "x"})
 	want := `step "escalate" failed: url: ${env.PAGER_URL}: no such key: PAGER_URL`
 	if err == nil || err.Error() != want {
 		t.Errorf("error = %v, want %s", err, want)

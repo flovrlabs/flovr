@@ -1,0 +1,43 @@
+name: moderate-comment
+
+# An endpoint: the request waits and is answered with what respond says.
+# A body that does not match the schema is refused before anything runs.
+trigger:
+  webhook: /moderate
+  input: schemas/comment.json
+
+steps:
+  - id: check
+    decide:
+      model: openrouter/cloudflare/clef
+      input: ${trigger.body.text}
+      questions:
+        allowed:
+          ask: Can this comment be published on a public product forum?
+          yes_if: It is on topic or harmless, even if it is critical or rude in tone.
+          no_if: It is spam, a threat, harassment, or gives away someone else's personal data.
+        reason:
+          ask: What is the main problem with the comment?
+          choice:
+            none: There is no problem with it.
+            spam: Advertising, or links that have nothing to do with the discussion.
+            abuse: Threats, harassment, or hateful language.
+            private: Someone's personal data, such as a phone number or home address.
+
+respond:
+  body:
+    allowed: ${check.allowed.value}
+    reason: ${check.reason.value}
+
+tests:
+  - name: harsh criticism is allowed
+    fixture: fixtures/criticism.json
+    expect:
+      response.status: 200
+      response.body.allowed: true
+
+  - name: spam is refused
+    fixture: fixtures/spam.json
+    expect:
+      response.body.allowed: false
+      response.body.reason: spam

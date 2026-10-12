@@ -56,7 +56,7 @@ func (e *Engine) Test(ctx context.Context, w *workflow.Workflow, t workflow.Test
 	}
 
 	start := time.Now()
-	vars, err := sandbox.run(ctx, w, trigger)
+	vars, resp, err := sandbox.run(ctx, w, trigger)
 	res.Duration = time.Since(start)
 
 	var unavailable *ai.UnavailableError
@@ -66,6 +66,14 @@ func (e *Engine) Test(ctx context.Context, w *workflow.Workflow, t workflow.Test
 	if err != nil {
 		res.Failures = []string{err.Error()}
 		return res, nil
+	}
+	if resp != nil {
+		// Expectations see the answer as a caller would, decoded from JSON.
+		var seen any
+		if data, err := json.Marshal(resp); err == nil {
+			json.Unmarshal(data, &seen)
+		}
+		vars["response"] = seen
 	}
 	res.Failures, err = unmet(t.Expect, res.Steps, vars)
 	return res, err
@@ -139,12 +147,15 @@ func differs(env *expr.Env, key string, want any, vars map[string]any) string {
 // unmet lists the expectations that the finished run does not meet.
 func unmet(expect map[string]any, steps []StepResult, vars map[string]any) ([]string, error) {
 	status := map[string]Status{}
-	var ids []string
+	names := []string{"trigger"}
 	for _, s := range steps {
 		status[s.ID] = s.Status
-		ids = append(ids, s.ID)
+		names = append(names, s.ID)
 	}
-	env, err := expr.NewEnv(ids)
+	if _, answered := vars["response"]; answered {
+		names = append(names, "response")
+	}
+	env, err := expr.Vars(names...)
 	if err != nil {
 		return nil, err
 	}

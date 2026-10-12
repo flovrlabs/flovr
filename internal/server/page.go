@@ -104,6 +104,15 @@ type workflowView struct {
 	Tests   int        `json:"tests"`
 	Steps   []stepView `json:"steps"`
 
+	// For a workflow that is an endpoint: the schema a request body must
+	// match, as the trigger names it, and what the caller gets back.
+	Input   string       `json:"input,omitempty"`
+	Respond *respondView `json:"respond,omitempty"`
+
+	// Sample is a request body the workflow can be tried with: that of its
+	// first test.
+	Sample any `json:"sample,omitempty"`
+
 	// Only when the page may change the files.
 	Rev     string      `json:"rev,omitempty"`     // identifies the file's content; sent back with a change
 	Problem string      `json:"problem,omitempty"` // why what the file holds now is not being served
@@ -124,6 +133,13 @@ type stepView struct {
 	// as the step gives it.
 	Component string `json:"component,omitempty"`
 	Uses      string `json:"uses,omitempty"`
+}
+
+// respondView is the answer a workflow gives its caller, as written.
+type respondView struct {
+	Status int      `json:"status"`
+	Body   any      `json:"body"`  // with its ${...} unresolved
+	Reads  []string `json:"reads"` // the trigger and steps it uses
 }
 
 // What a field holds, which decides how the page lets it be changed.
@@ -166,7 +182,7 @@ func (s *Server) state() stateView {
 	}
 	for i := range view.Runs {
 		r := &view.Runs[i]
-		r.Trigger = nil
+		r.Trigger, r.Response = nil, nil
 		r.Steps = slices.Clone(r.Steps)
 		for j := range r.Steps {
 			r.Steps[j].Output = nil
@@ -209,9 +225,22 @@ func describe(w *workflow.Workflow) workflowView {
 		*to = append(*to, f)
 	}
 
+	if len(w.Tests) > 0 {
+		if event, err := w.Fixture(w.Tests[0].Fixture); err == nil {
+			if fields, ok := event.(map[string]any); ok {
+				view.Sample = fields["body"]
+			}
+		}
+	}
+	if r := w.Respond; r != nil {
+		view.Respond = &respondView{Status: r.Status, Body: r.Body, Reads: w.RespondReads()}
+		if view.Respond.Status == 0 {
+			view.Respond.Status = http.StatusOK
+		}
+	}
 	switch t := w.Trigger; {
 	case t != nil && t.Webhook != "":
-		view.Trigger = "POST " + t.Webhook
+		view.Trigger, view.Input = "POST "+t.Webhook, t.Input
 		offer(&view.Edit, fieldView{Label: "Webhook path", Path: []any{"trigger", "webhook"}, Value: t.Webhook})
 	case t != nil && t.Cron != "":
 		view.Trigger = "cron " + t.Cron

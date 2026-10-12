@@ -34,6 +34,7 @@ type Workflow struct {
 	Name    string   `yaml:"name"`
 	Trigger *Trigger `yaml:"trigger"`
 	Steps   []Step   `yaml:"steps"`
+	Respond *Respond `yaml:"respond"`
 	Tests   []Test   `yaml:"tests"`
 
 	// Path is the workflow file. Paths inside the file are relative to its
@@ -46,6 +47,10 @@ type Trigger struct {
 	Webhook string `yaml:"webhook"`
 	Cron    string `yaml:"cron"`
 	Manual  bool   `yaml:"manual"`
+
+	// Input is the path of a JSON Schema that the body of a webhook request
+	// must match. A request whose body does not is refused and runs nothing.
+	Input string `yaml:"input"`
 }
 
 type Step struct {
@@ -321,6 +326,9 @@ func (w *Workflow) EnvVars() []string {
 			names = append(names, s.component.EnvVars()...)
 		}
 	}
+	for _, src := range w.Respond.expressions() {
+		names = append(names, expr.EnvVars(src)...)
+	}
 	slices.Sort(names)
 	return slices.Compact(names)
 }
@@ -341,17 +349,32 @@ func (w *Workflow) Files() []string {
 // Reads lists what step i's expressions refer to among the trigger and the
 // steps before it, in the order those are defined.
 func (w *Workflow) Reads(i int) []string {
+	return w.reads(w.Steps[i].expressions(), w.Steps[:i])
+}
+
+// RespondReads lists what the answer to the caller refers to among the
+// trigger and the steps, in the order those are defined.
+func (w *Workflow) RespondReads() []string {
+	if reads := w.reads(w.Respond.expressions(), w.Steps); reads != nil {
+		return reads
+	}
+	return []string{}
+}
+
+// reads lists which of the trigger and the given steps the expressions
+// refer to.
+func (w *Workflow) reads(exprs []string, steps []Step) []string {
 	var mentioned []string
-	for _, src := range w.Steps[i].expressions() {
+	for _, src := range exprs {
 		mentioned = append(mentioned, expr.Names(src)...)
 	}
 	var reads []string
 	if slices.Contains(mentioned, "trigger") {
 		reads = append(reads, "trigger")
 	}
-	for _, earlier := range w.Steps[:i] {
-		if slices.Contains(mentioned, earlier.ID) {
-			reads = append(reads, earlier.ID)
+	for _, step := range steps {
+		if slices.Contains(mentioned, step.ID) {
+			reads = append(reads, step.ID)
 		}
 	}
 	return reads

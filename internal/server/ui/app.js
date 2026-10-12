@@ -580,13 +580,22 @@ function statusPanel(status, ...rest) {
 // example is a command that calls a workflow's webhook.
 function example(w) {
   const path = w.trigger.slice("POST ".length);
+  // A workflow that answers its caller always waits; another is asked to.
   const lines = [
-    "curl -X POST '" + location.origin + path + "?wait=true' \\",
+    "curl -X POST '" + location.origin + path + (w.respond ? "" : "?wait=true") + "' \\",
     "  -H 'Content-Type: application/json' \\",
   ];
   if (state.protected) lines.push("  -H \"Authorization: Bearer $AIA_TOKEN\" \\");
-  lines.push("  -d '{\"subject\": \"Hello\", \"message\": \"...\"}'");
+  // The body of the workflow's first test is one it is known to take.
+  const body = w.sample !== undefined ? JSON.stringify(w.sample) : "{\"subject\": \"Hello\", \"message\": \"...\"}";
+  lines.push("  -d '" + body.replace(/'/g, "'\\''") + "'");
   return code(lines.join("\n"), "the curl command");
+}
+
+// answerNote says what a request to the workflow gets back.
+function answerNote(w) {
+  if (w.respond) return "The request waits and is answered with what the workflow responds with.";
+  return "With ?wait=true the answer is the finished run. Without it the server answers at once and the run appears in the list.";
 }
 
 function renderInspector(w, run, moved) {
@@ -628,13 +637,20 @@ function workflowDetails(w) {
     section("Definition", pairs([
       ["File", el("span", { class: "mono" }, w.path)],
       ["Trigger", el("span", { class: "mono" }, w.trigger || "none: the server does not run it")],
+      w.input ? ["Takes", el("span", { class: "mono" }, w.input)] : null,
       ["Steps", w.steps.length],
       ["Tests", w.tests + (w.tests ? ", run with aia test" : "")],
       state.commit ? ["Version", el("span", { class: "mono" }, state.commit)] : null,
     ])),
     section("Steps", outline(w), el("p", { class: "muted small" }, "A step with an IF condition is skipped when the condition is false."),
       state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger or a step to edit it. Saved changes are written to " + w.path + ".") : null),
-    isWebhook(w) ? section("Try it", example(w), el("p", { class: "muted small" }, "With ?wait=true the answer is the finished run. Without it the server answers at once and the run appears in the list.")) : null,
+    w.respond ? section("Answers with",
+      pairs([["Status", el("span", { class: "mono" }, w.respond.status)]]),
+      jsonView(w.respond.body),
+      el("p", { class: "muted small" }, w.input
+        ? "A request whose body does not match " + w.input + " is refused with status 400, and nothing runs."
+        : "Each ${...} is filled in from the steps when they have run.")) : null,
+    isWebhook(w) ? section("Try it", example(w), el("p", { class: "muted small" }, answerNote(w))) : null,
   ];
 }
 
@@ -665,6 +681,9 @@ function runDetails(w, run) {
       statusPanel(run.status, run.status !== "running" ? el("div", { class: "muted" }, "took " + duration(run.ms) + ", started " + when(run.started)) : null),
       run.error ? el("pre", { class: "error" }, run.error) : null),
     section("Steps", waterfall(w, run), el("p", { class: "muted small" }, "Select a step, here or on the drawing, to see what it produced.")),
+    run.response ? section("Answered the caller",
+      pairs([["Status", el("span", { class: "mono" }, run.response.status)]]),
+      run.response.body !== undefined && run.response.body !== null ? jsonView(run.response.body) : null) : null,
     run.trigger !== undefined ? section("Trigger payload", jsonView(run.trigger)) : null,
     section("About this run", pairs([
       ["Run", el("span", { class: "mono" }, run.run)],
@@ -676,7 +695,11 @@ function runDetails(w, run) {
 
 function triggerDetails(w, run) {
   let how = "This workflow has no trigger, so the server does not run it. Run it with aia run.";
-  if (isWebhook(w)) how = "A POST request to " + w.trigger.slice(5) + " with a JSON body starts the workflow. Steps read the body as trigger.body.";
+  if (isWebhook(w)) {
+    how = "A POST request to " + w.trigger.slice(5) + " with a JSON body starts the workflow. Steps read the body as trigger.body.";
+    if (w.input) how += " The body must match " + w.input + ".";
+    if (w.respond) how += " The request waits for the answer.";
+  }
   else if (w.trigger) how = "The workflow starts on the schedule " + w.trigger.slice(5) + ". Steps can read the start time as trigger.time.";
   return [
     header("trigger", "trigger", w.trigger || "manual", KIND_NAMES.trigger, true),

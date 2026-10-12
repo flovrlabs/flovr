@@ -142,7 +142,12 @@ func runCmd() *cobra.Command {
 				Env:    environ(),
 				OnStep: func(r engine.StepResult) { printStep("  ", r) },
 			}
-			return eng.Run(ctx, w, trigger)
+			resp, err := eng.Run(ctx, w, trigger)
+			if resp != nil {
+				body, _ := json.MarshalIndent(resp.Body, "    ", "  ")
+				fmt.Printf("  responds %d\n    %s\n", resp.Status, body)
+			}
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&fixture, "fixture", "", "JSON file to use as the trigger event; "+
@@ -244,6 +249,9 @@ func serveCmd() *cobra.Command {
 			"A webhook request's JSON body, sent with Content-Type: application/json, becomes\n" +
 			"trigger.body. The server answers 202 at once and runs the workflow in the\n" +
 			"background; add ?wait=true to get the finished run back instead.\n\n" +
+			"A workflow that has respond is an endpoint: the request waits and is answered\n" +
+			"with the status and body that respond gives. If its trigger names a schema as\n" +
+			"input, a body that does not match it is refused with 400 and nothing runs.\n\n" +
 			"Opening the server's address in a browser shows the workflows and their recent\n" +
 			"runs.\n\n" +
 			"With --edit, that page can also change the workflows: it writes each change to\n" +

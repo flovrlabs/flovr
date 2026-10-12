@@ -129,7 +129,7 @@ func TestStepsRunTheComponentsTheyUse(t *testing.T) {
 		OnStep: func(r StepResult) { results = append(results, r) },
 	}
 	trigger := map[string]any{"body": map[string]any{"subject": "Dashboard returns 502", "customer": "ops@example.org"}}
-	if err := eng.Run(context.Background(), w, trigger); err != nil {
+	if _, err := eng.Run(context.Background(), w, trigger); err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,7 +171,7 @@ func TestComponentRefusesInputOfTheWrongType(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng := &Engine{Model: &fakeModel{}, Env: map[string]string{"TEAM_URL": "http://unused", "NOTIFY_TOKEN": "t"}}
-	err = eng.Run(context.Background(), w, map[string]any{"body": map[string]any{"priority": 3}})
+	_, err = eng.Run(context.Background(), w, map[string]any{"body": map[string]any{"priority": 3}})
 	if want := `step "route" failed: input of route: text must be a string, but is a number`; err == nil || err.Error() != want {
 		t.Errorf("error = %v, want %q", err, want)
 	}
