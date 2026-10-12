@@ -57,7 +57,7 @@ func TestStepThatUsesAComponentMadeOfSteps(t *testing.T) {
 	want := stepView{
 		ID: "answer", Kind: "flow", Subtitle: "reply", Reads: []string{"trigger"},
 		Fields:    [][2]string{{"component", "components/reply"}, {"gives back", "subject"}},
-		Component: "reply", Uses: "components/reply",
+		Component: "reply", Uses: "components/reply", Target: filepath.ToSlash(filepath.Join(dir, "components", "reply")),
 		Inner: []innerView{
 			{ID: "draft", Kind: "ai", Subtitle: "deepseek-v4.1-flash"},
 			{ID: "send", Kind: "http", Subtitle: "POST ${input.url}"},

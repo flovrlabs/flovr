@@ -32,6 +32,7 @@ type checker struct {
 	components map[string]*Component // those loaded so far, by path
 	shapes     map[string]*shape     // what is known of the values expressions read, by name
 	loading    []string              // the component files being loaded, the one that uses the next before it
+	files      Overlay               // content to use in place of what component files hold
 }
 
 func (c *checker) addf(line int, format string, args ...any) {

@@ -69,7 +69,8 @@ func readFile(t *testing.T, path string) string {
 func TestPageIsToldWhatItMayChange(t *testing.T) {
 	srv, _ := editExample(t)
 	state := currentState(t, srv)
-	if !state.Editable || len(state.Workflows) != 1 || state.Workflows[0].Rev == "" {
+	// The workflow comes first; the components in its folder follow it.
+	if !state.Editable || len(state.Workflows) != 3 || state.Workflows[0].Rev == "" || state.Workflows[0].Component || !state.Workflows[1].Component {
 		t.Fatalf("state = %+v", state)
 	}
 	w := state.Workflows[0]

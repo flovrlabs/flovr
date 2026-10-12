@@ -318,12 +318,34 @@ func (s *Server) save(i int, out []byte, what string) (int, any) {
 func (s *Server) edit(req editRequest) (int, any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if c := s.componentNamed(req.Workflow); c != nil {
+		return s.editComponent(c, req)
+	}
 	i, w, data, status, refused := s.open(req.Workflow, req.Rev)
 	if status != 0 {
 		return status, refused
 	}
 
-	view := describe(w)
+	edits, changed, status, refused := editsFor(describe(w), func(path []any) string { return owner(w, path) }, req)
+	if status != 0 {
+		return status, refused
+	}
+
+	out, err := yamledit.Apply(data, edits...)
+	if err != nil {
+		return http.StatusUnprocessableEntity, fail("%v", err)
+	}
+	if bytes.Equal(out, data) {
+		return http.StatusOK, map[string]any{"workflow": s.view(w)}
+	}
+	return s.save(i, out, strings.Join(changed, ", "))
+}
+
+// editsFor turns the changes a request asks for into edits of the file that
+// view describes. It refuses, with a status and the reason, a change to a
+// value the page was not offered or was offered for another step. owner
+// names what the value at a path belongs to.
+func editsFor(view workflowView, owner func(path []any) string, req editRequest) (edits []yamledit.Edit, changed []string, status int, refused failure) {
 	offered := map[string]fieldView{}
 	for _, f := range view.Edit {
 		offered[pathKey(f.Path)] = f
@@ -338,27 +360,30 @@ func (s *Server) edit(req editRequest) (int, any) {
 			offered[pathKey(f.Path)] = f
 		}
 	}
+	if view.Gives != nil {
+		for _, f := range view.Gives.Edit {
+			offered[pathKey(f.Path)] = f
+		}
+	}
 
-	var edits []yamledit.Edit
-	var changed []string
 	for _, e := range req.Edits {
 		path := wholeNumbers(e.Path)
 		f, ok := offered[pathKey(path)]
 		value := strings.TrimSpace(e.Value)
 		switch {
 		case !ok || f.Kind == kindPrompt:
-			return http.StatusUnprocessableEntity, fail("the page cannot change this value")
-		case e.Node != "" && e.Node != owner(w, path):
-			return http.StatusConflict, fail("The steps of the file changed after the page read it, so nothing was saved. The page now shows the file as it is.")
+			return nil, nil, http.StatusUnprocessableEntity, fail("the page cannot change this value")
+		case e.Node != "" && e.Node != owner(path):
+			return nil, nil, http.StatusConflict, fail("The steps of the file changed after the page read it, so nothing was saved. The page now shows the file as it is.")
 		case f.Kind == kindChoice && !slices.Contains(f.Options, value):
-			return http.StatusUnprocessableEntity, fail("%s must be one of %s", f.Label, strings.Join(f.Options, ", "))
+			return nil, nil, http.StatusUnprocessableEntity, fail("%s must be one of %s", f.Label, strings.Join(f.Options, ", "))
 		}
 		edit := yamledit.Edit{Path: path, Value: value, Remove: value == "" && f.Optional}
 		if f.Kind == kindNumber && !edit.Remove {
 			// A number is written as one, not as text that looks like one.
 			n, err := strconv.Atoi(value)
 			if err != nil {
-				return http.StatusUnprocessableEntity, fail("%s must be a whole number", f.Label)
+				return nil, nil, http.StatusUnprocessableEntity, fail("%s must be a whole number", f.Label)
 			}
 			edit.Value = n
 		}
@@ -372,15 +397,7 @@ func (s *Server) edit(req editRequest) (int, any) {
 		edits = append(edits, edit)
 		changed = append(changed, pathKey(path))
 	}
-
-	out, err := yamledit.Apply(data, edits...)
-	if err != nil {
-		return http.StatusUnprocessableEntity, fail("%v", err)
-	}
-	if bytes.Equal(out, data) {
-		return http.StatusOK, map[string]any{"workflow": s.view(w)}
-	}
-	return s.save(i, out, strings.Join(changed, ", "))
+	return edits, changed, 0, failure{}
 }
 
 // owner names what the value at path belongs to, as the page names it: a
@@ -421,6 +438,9 @@ type stepsRequest struct {
 func (s *Server) steps(req stepsRequest) (int, any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.componentNamed(req.Workflow) != nil {
+		return http.StatusUnprocessableEntity, fail("The steps of a component are added and removed in its file.")
+	}
 	i, w, data, status, refused := s.open(req.Workflow, req.Rev)
 	if status != 0 {
 		return status, refused
@@ -626,7 +646,22 @@ func (s *Server) promptFile(name, step string) (path, written string, status int
 			return path, st.AI.Prompt, 0, nil
 		}
 	}
+	if c := s.componentNamed(name); c != nil {
+		if path, written, ok := componentPrompt(c, step); ok {
+			if !within(filepath.Dir(c.Path), path) {
+				return "", "", http.StatusForbidden, fmt.Errorf("%s is outside the component's folder, so the page does not open it", written)
+			}
+			return path, written, 0, nil
+		}
+	}
 	return "", "", http.StatusNotFound, fmt.Errorf("no ai step %s in a workflow named %s", step, name)
+}
+
+// componentNamed returns the component the page knows by name, or nil if
+// the name is a workflow's or nobody's.
+func (s *Server) componentNamed(name string) *workflow.Component {
+	components, _ := s.components()
+	return components[name]
 }
 
 // within reports whether the file at path is inside dir, wherever links lead.

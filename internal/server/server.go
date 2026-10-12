@@ -86,6 +86,11 @@ type Run struct {
 	// meet it, if it did. Such a run sends none of its http steps.
 	Test   string         `json:"test,omitempty"`
 	Checks []engine.Check `json:"checks,omitempty"`
+
+	// Gave is what a component gave back, in a run that is one of a
+	// component's tests. Workflow then holds the name the page knows the
+	// component by.
+	Gave any `json:"gave,omitempty"`
 }
 
 type Step struct {

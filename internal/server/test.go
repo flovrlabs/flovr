@@ -33,6 +33,9 @@ func (s *Server) test(req testRequest) (int, any) {
 	live := s.live.Load()
 	i := slices.IndexFunc(live.workflows, func(w *workflow.Workflow) bool { return w.Name == req.Workflow })
 	if i < 0 {
+		if components, _ := s.components(); components[req.Workflow] != nil {
+			return s.testComponent(components[req.Workflow], req)
+		}
 		return http.StatusNotFound, fail("no workflow is named %s", req.Workflow)
 	}
 	w := live.workflows[i]
@@ -92,7 +95,15 @@ func (s *Server) runTest(id string, w *workflow.Workflow, t workflow.Test) Run {
 		},
 	}
 	res, err := eng.Test(ctx, w, t)
-	run.Checks, run.Response = res.Checks, res.Response
+	run.Response = res.Response
+	s.finishTest(&run, res, err)
+	s.opts.Log("%s %s test %q %s in %s", id, w.Name, run.Test, run.Status, time.Duration(run.Millis)*time.Millisecond)
+	return run
+}
+
+// finishTest records how a test's run ended.
+func (s *Server) finishTest(run *Run, res engine.TestResult, err error) {
+	run.Checks = res.Checks
 	run.Status = "ok"
 	var unavailable *ai.UnavailableError
 	switch {
@@ -107,7 +118,30 @@ func (s *Server) runTest(id string, w *workflow.Workflow, t workflow.Test) Run {
 		run.Status = "failed"
 	}
 	run.Millis = time.Since(run.Started).Milliseconds()
-	s.history.put(run)
-	s.opts.Log("%s %s test %q %s in %s", id, w.Name, run.Test, run.Status, time.Duration(run.Millis)*time.Millisecond)
-	return run
+	s.history.put(*run)
+}
+
+// testComponent starts tests of a component, as test does for a workflow.
+func (s *Server) testComponent(c *workflow.Component, req testRequest) (int, any) {
+	tests, names := c.Tests, componentCaseNames(c)
+	switch {
+	case len(tests) == 0:
+		return http.StatusUnprocessableEntity, fail("%s has no tests. They are written under tests: in %s.", c.Name, c.Path)
+	case req.Test != nil && (*req.Test < 0 || *req.Test >= len(tests)):
+		return http.StatusUnprocessableEntity, fail("%s has no test at position %d", c.Name, *req.Test)
+	case req.Test != nil:
+		tests, names = tests[*req.Test:*req.Test+1], names[*req.Test:*req.Test+1]
+	}
+	runs := make([]started, len(tests))
+	for j := range tests {
+		runs[j] = started{Run: newID(), Test: names[j]}
+	}
+	s.running.Add(1)
+	go func() {
+		defer s.running.Done()
+		for j, t := range tests {
+			s.runComponentTest(runs[j].Run, c, t, names[j])
+		}
+	}()
+	return http.StatusAccepted, map[string]any{"runs": runs}
 }

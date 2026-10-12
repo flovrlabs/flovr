@@ -48,9 +48,35 @@ type Component struct {
 
 	// Path is the component file. Paths inside the file are relative to its
 	// directory.
-	Path string     `yaml:"-"`
-	root *yaml.Node // parsed document, kept for line numbers
+	Path    string              `yaml:"-"`
+	root    *yaml.Node          // parsed document, kept for line numbers
+	outputs map[string][]string // what can be read from each of its steps, by id
+	gives   []string            // what can be read from what it gives back
 }
+
+// Writable reports whether the text at path can be changed in the component
+// file without rewriting anything around it, as Workflow.Writable does.
+func (c *Component) Writable(path ...any) bool { return writable(c.root, path...) }
+
+// Reads lists what step i of a component made of steps refers to among the
+// input and the steps before it, in the order those are defined.
+func (c *Component) Reads(i int) []string {
+	return reads(c.Steps[i].expressions(), "input", c.Steps[:i])
+}
+
+// OutputReads lists what the output of a component made of steps refers to
+// among the input and its steps.
+func (c *Component) OutputReads() []string {
+	return reads(expr.Placeholders(c.Output), "input", c.Steps)
+}
+
+// Outputs lists what can be read from the step with the given id of a
+// component made of steps, as Workflow.Outputs does.
+func (c *Component) Outputs(id string) []string { return c.outputs[id] }
+
+// Gives lists what a step that uses the component can read from it, as the
+// fields to put behind the step's id.
+func (c *Component) Gives() []string { return c.gives }
 
 // ComponentTest runs a component on its own. The keys of Expect are
 // expressions over input and output, whose values are compared. For a
@@ -260,17 +286,26 @@ func ComponentsIn(dir string) []*Component {
 // LoadComponent reads the component at path, which is a component file or a
 // directory containing one, and checks everything that can be checked without
 // running it. The error is a *Problems when the file itself is at fault.
-func LoadComponent(path string) (*Component, error) { return loadComponent(path, nil) }
+func LoadComponent(path string) (*Component, error) { return loadComponent(path, nil, nil) }
+
+// LoadComponentWith is LoadComponent with the component files in files read
+// from there.
+func LoadComponentWith(path string, files Overlay) (*Component, error) {
+	return loadComponent(path, nil, files)
+}
 
 // loadComponent is LoadComponent for a component used by those in loading,
 // each used by the one before it.
-func loadComponent(path string, loading []string) (*Component, error) {
+func loadComponent(path string, loading []string, files Overlay) (*Component, error) {
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		path = filepath.Join(path, ComponentFile)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+	data, given := files[path]
+	if !given {
+		var err error
+		if data, err = os.ReadFile(path); err != nil {
+			return nil, err
+		}
 	}
 
 	comp := &Component{Path: path}
@@ -284,12 +319,17 @@ func loadComponent(path string, loading []string) (*Component, error) {
 		comp.root = doc.Content[0]
 	}
 
-	c := &checker{path: path, root: comp.root, loading: append(slices.Clone(loading), path)}
+	c := &checker{path: path, root: comp.root, loading: append(slices.Clone(loading), path), files: files}
 	c.component(comp)
 	if len(c.items) > 0 {
 		sort.SliceStable(c.items, func(i, j int) bool { return c.items[i].Line < c.items[j].Line })
 		return nil, &Problems{Path: path, Items: c.items}
 	}
+	comp.outputs = map[string][]string{}
+	for _, s := range comp.Steps {
+		comp.outputs[s.ID] = c.shapes[s.ID].paths()
+	}
+	comp.gives = comp.shape().paths()
 	return comp, nil
 }
 
@@ -486,7 +526,7 @@ func (c *checker) load(use string) (*Component, error) {
 	if slices.Contains(c.loading, path) {
 		return nil, fmt.Errorf("the component %s would use itself, which never ends", use)
 	}
-	comp, err := loadComponent(path, c.loading)
+	comp, err := loadComponent(path, c.loading, c.files)
 	var problems *Problems
 	switch {
 	case errors.Is(err, fs.ErrNotExist):

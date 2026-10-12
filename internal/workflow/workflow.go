@@ -240,7 +240,15 @@ func Load(path string) (*Workflow, error) {
 // Parse is Load for content that is already at hand: data is checked as the
 // workflow file at path, which need not hold it yet. The files that data
 // refers to are looked up from path's directory.
-func Parse(path string, data []byte) (*Workflow, error) {
+func Parse(path string, data []byte) (*Workflow, error) { return ParseWith(path, data, nil) }
+
+// Overlay holds content for component files, by path, to be used in place of
+// what the files hold. It lets a change to a component be checked, together
+// with everything that uses the component, before it is written.
+type Overlay map[string][]byte
+
+// ParseWith is Parse with the component files in files read from there.
+func ParseWith(path string, data []byte, files Overlay) (*Workflow, error) {
 	w := &Workflow{Path: path}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -252,7 +260,7 @@ func Parse(path string, data []byte) (*Workflow, error) {
 		w.root = doc.Content[0]
 	}
 
-	c := &checker{path: path, root: w.root, w: w}
+	c := &checker{path: path, root: w.root, w: w, files: files}
 	c.run()
 	if len(c.items) > 0 {
 		sort.SliceStable(c.items, func(i, j int) bool { return c.items[i].Line < c.items[j].Line })
@@ -363,35 +371,32 @@ func (w *Workflow) Outputs(id string) []string { return w.outputs[id] }
 // Reads lists what step i's expressions refer to among the trigger and the
 // steps before it, in the order those are defined.
 func (w *Workflow) Reads(i int) []string {
-	return w.reads(w.Steps[i].expressions(), w.Steps[:i])
+	return reads(w.Steps[i].expressions(), "trigger", w.Steps[:i])
 }
 
 // RespondReads lists what the answer to the caller refers to among the
 // trigger and the steps, in the order those are defined.
 func (w *Workflow) RespondReads() []string {
-	if reads := w.reads(w.Respond.expressions(), w.Steps); reads != nil {
-		return reads
-	}
-	return []string{}
+	return reads(w.Respond.expressions(), "trigger", w.Steps)
 }
 
-// reads lists which of the trigger and the given steps the expressions
-// refer to.
-func (w *Workflow) reads(exprs []string, steps []Step) []string {
+// reads lists which of given, the name of what steps are handed, and the
+// steps the expressions refer to. It is never nil.
+func reads(exprs []string, given string, steps []Step) []string {
 	var mentioned []string
 	for _, src := range exprs {
 		mentioned = append(mentioned, expr.Names(src)...)
 	}
-	var reads []string
-	if slices.Contains(mentioned, "trigger") {
-		reads = append(reads, "trigger")
+	out := []string{}
+	if slices.Contains(mentioned, given) {
+		out = append(out, given)
 	}
 	for _, step := range steps {
 		if slices.Contains(mentioned, step.ID) {
-			reads = append(reads, step.ID)
+			out = append(out, step.ID)
 		}
 	}
-	return reads
+	return out
 }
 
 // expressions returns every expression the step contains: its condition and

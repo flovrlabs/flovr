@@ -418,7 +418,8 @@ func TestStateDescribesWorkflowsAndRuns(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Commit != "abc1234" || state.Protected || len(state.Workflows) != 1 || len(state.Runs) != 1 {
+	// The workflow is followed by the one component it uses.
+	if state.Commit != "abc1234" || state.Protected || len(state.Workflows) != 2 || !state.Workflows[1].Component || len(state.Runs) != 1 {
 		t.Fatalf("state = %+v", state)
 	}
 
@@ -454,7 +455,8 @@ func TestStateDescribesWorkflowsAndRuns(t *testing.T) {
 			Reads: []string{"classify", "summarize"}, Fields: [][2]string{
 				{"component", "components/notify"},
 				{"request", "POST ${input.url}"},
-			}, Component: "notify", Uses: "components/notify", Outputs: []string{"body", "status"}},
+			}, Component: "notify", Uses: "components/notify", Target: "../../examples/triage-ticket/components/notify",
+			Outputs: []string{"body", "status"}},
 	}
 	for i, step := range want {
 		if got, _ := json.Marshal(w.Steps[i]); string(got) != mustJSON(step) {
