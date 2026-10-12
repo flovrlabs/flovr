@@ -35,6 +35,7 @@ const ICONS = {
   copy: ["M9 9h10.5v11H9z", "M5.5 15.5V4H16"],
   branch: ["M6 3.5v13", "M6 20.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z", "M18 3.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M18 7.5c0 5-12 3-12 9"],
   plus: ["M12 5v14", "M5 12h14"],
+  trash: ["M5 7h14", "M10 7V4.5h4V7", "M7 7l.8 12h8.4L17 7", "M10.5 11v5", "M13.5 11v5"],
   minus: ["M5 12h14"],
   response: ["M10 5 4 11l6 6", "M4 11h9a7 7 0 0 1 7 7v1"],
   fit: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"],
@@ -51,13 +52,14 @@ const KIND_NAMES = {
 const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", running: "Running", pending: "Not reached" };
 
 let state = { commit: "", protected: false, workflows: [], runs: [] };
-let selected = { workflow: null, run: null, node: null, changes: false };
+let selected = { workflow: null, run: null, node: null, changes: false, add: null };
 let detail = null;      // the selected run in full, with trigger and outputs
 let shown = "";         // what the page currently shows, to tell whether anything changed
 let view = null;        // the workflow and run now drawn, for redrawing on resize and zoom
 let zoom = null;        // null fits the drawing to the window
 let lastKey = "";       // which workflow, run and step were shown last time
 let enteredFor = null;  // the workflow whose cards last slid in
+let afterRender = null; // something to do once the page has been drawn, such as moving the focus
 
 const $ = (id) => document.getElementById(id);
 
@@ -113,21 +115,26 @@ function when(started) {
 const percent = (p) => (p * 100).toFixed(p >= 0.995 || p < 0.005 ? 1 : 0) + "%";
 const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 
-// The address is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>.
+// The address is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>,
+// or /a/<step> while a step is being added after that step ("trigger" for the
+// first place, "-" for the last).
 function readAddress() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   const found = {};
   for (let i = 0; i + 1 < parts.length; i += 2) found[parts[i]] = parts[i + 1];
-  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1" };
+  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null };
 }
 
 function go(change) {
   const next = { ...selected, ...change };
   // Picking anything else leaves the changes view, unless it is asked for.
   if (!("changes" in change)) next.changes = false;
+  // Nor does picking anything else keep the add-a-step form open.
+  if (!("add" in change)) next.add = null;
   let hash = "#/w/" + encodeURIComponent(next.workflow);
   if (next.run) hash += "/r/" + encodeURIComponent(next.run);
   if (next.node) hash += "/n/" + encodeURIComponent(next.node);
+  if (next.add) hash += "/a/" + encodeURIComponent(next.add);
   if (next.changes) hash += "/c/1";
   if (location.hash !== hash) location.hash = hash;
 }
@@ -178,7 +185,7 @@ const latestRun = (name) => state.runs.find((r) => r.workflow === name);
 
 function render() {
   if (!state.workflows.some((w) => w.name === selected.workflow)) {
-    selected = { workflow: state.workflows.length ? state.workflows[0].name : null, run: null, node: null, changes: false };
+    selected = { workflow: state.workflows.length ? state.workflows[0].name : null, run: null, node: null, changes: false, add: null };
     detail = null;
   }
   // Rebuilding the page drops the reader's focus and text selection, so it is
@@ -191,7 +198,7 @@ function render() {
   const focusId = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
 
   const w = state.workflows.find((x) => x.name === selected.workflow);
-  const key = [selected.workflow, selected.run, selected.node, selected.changes].join("|");
+  const key = [selected.workflow, selected.run, selected.node, selected.changes, selected.add].join("|");
   const moved = key !== lastKey;
   lastKey = key;
 
@@ -215,6 +222,7 @@ function render() {
     const back = document.querySelector('[data-focus="' + CSS.escape(focusId) + '"]');
     if (back && back !== document.activeElement) back.focus({ preventScroll: true });
   }
+  if (afterRender) { const run = afterRender; afterRender = null; run(); }
 }
 
 // ---- top bar ----
@@ -464,6 +472,7 @@ function renderCanvas(moved) {
     }
   }
 
+  const adding = canAdd(w) && !run;
   const cards = plan.nodes.map((node, i) => {
     const status = progress(run, node.id);
     const done = run ? run.steps.find((s) => s.id === node.id) : null;
@@ -497,7 +506,9 @@ function renderCanvas(moved) {
         el("span", { class: "foot", title: cond || (node.id === "trigger" && w.input ? "The body must match " + w.input : null) },
           cond ? [el("b", {}, "IF"), el("span", { class: "cond mono" }, cond)] : el("span", { class: "always" },
             node.id === "trigger" ? (w.input ? "Body: " + w.input.split("/").pop() : "Entry point") : node.id === "response" ? "Exit point" : "Always runs"),
-          took ? el("span", { class: "took" }, took) : null)));
+          took ? el("span", { class: "took" }, took) : null)),
+      // The place to put a step: right after this one in the file.
+      adding && node.id !== "response" ? addButton(node, plan, mid) : null);
   });
 
   const stage = el("div", { class: "stage", css: { width: plan.width + "px", height: plan.height + "px" } },
@@ -512,7 +523,8 @@ function renderCanvas(moved) {
     problemBanner(w),
     run ? runBar(run) : el("div", { class: "hint" },
       el("span", {}, "Steps run top to bottom in the order numbered."),
-      el("span", {}, state.editable && !w.problem ? "Select a step to edit it, or a run on the left to see what happened." : "Pick a run on the left to see what happened.")),
+      el("span", {}, state.editable && !w.problem ? "Select a step to edit it, or a run on the left to see what happened." : "Pick a run on the left to see what happened."),
+      adding ? el("button", { type: "button", class: "ghost addstep", "data-focus": "add-hint", onclick: () => openAdd() }, icon("plus", 13), "Add a step", el("kbd", {}, "A")) : null),
     scroller,
     el("div", { class: "tools", role: "group", "aria-label": "Zoom" },
       tool("minus", "Zoom out", () => setZoom(scale - 0.1)),
@@ -528,6 +540,28 @@ function renderCanvas(moved) {
     const card = scroller.querySelector('[data-node="' + CSS.escape(selected.node) + '"]');
     if (card) card.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
+}
+
+// canAdd: steps can only be added when the server edits files and the file is sound.
+const canAdd = (w) => !!w && state.editable && !w.problem;
+
+// addButton is the round plus under a box, where a step can be put after it.
+function addButton(node, plan, mid) {
+  const label = node.id === "trigger" ? "Add a step first, right after the trigger" : "Add a step after " + node.id;
+  return el("button", {
+      type: "button", class: "addbtn", "data-focus": "add:" + node.id, title: label, "aria-label": label,
+      css: { left: mid + portShift(node.kind, "out") - 11 + "px", top: CARD_H + 11 + "px" },
+      onclick: () => openAdd(node.id),
+    }, icon("plus", 13));
+}
+
+// openAdd opens the form for a new step after the given step ("trigger" for the
+// first place). Without one it follows the selection, or goes last.
+function openAdd(after) {
+  const w = view && view.w;
+  if (!canAdd(w)) return;
+  if (after === undefined) after = selected.node && (selected.node === "trigger" || w.steps.some((s) => s.id === selected.node)) ? selected.node : "-";
+  go({ add: after, node: null, run: null });
 }
 
 // answerWait says why a run has no answer.
@@ -642,8 +676,10 @@ function renderInspector(w, run, moved) {
   const onResponse = selected.node === "response" && !!w.respond;
   const fields = !canEdit ? null : selected.node === "trigger" ? w.edit : onResponse ? w.respond.edit : step ? step.edit : null;
   const hasForm = !!(fields && fields.length);
+  const adding = addMode(w);
   let parts;
-  if (selected.node === "trigger") parts = triggerDetails(w, run);
+  if (adding) parts = [header("workflow", "plus", "Add a step", "to " + w.name, true)];
+  else if (selected.node === "trigger") parts = triggerDetails(w, run);
   else if (onResponse) parts = responseDetails(w, run);
   else if (step) parts = stepDetails(w, step, run, hasForm);
   else if (run) parts = runDetails(w, run);
@@ -653,7 +689,13 @@ function renderInspector(w, run, moved) {
   const top = box.scrollTop;
   insp.head.replaceWith(head);
   insp.head = head;
-  showForm(w, hasForm ? selected.node : null, fields);
+  if (adding) {
+    showForm(w, null, null);
+    showAdder(w);
+  } else {
+    hideAdder();
+    showForm(w, hasForm ? selected.node : null, fields);
+  }
   insp.rest.replaceChildren(...sections);
   updateBar();
   box.scrollTop = moved ? 0 : top;
@@ -688,7 +730,8 @@ function workflowDetails(w) {
       state.commit ? ["Version", el("span", { class: "mono" }, state.commit)] : null,
     ])),
     section("Steps", outline(w), el("p", { class: "muted small" }, "A step with an IF condition is skipped when the condition is false."),
-      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger, a step" + (w.respond ? " or the response" : "") + " to edit it. Saved changes are written to " + w.path + ".") : null),
+      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger, a step" + (w.respond ? " or the response" : "") + " to edit it. Saved changes are written to " + w.path + ".") : null,
+      canAdd(w) ? el("button", { type: "button", class: "btn addstep", "data-focus": "add-outline", onclick: () => openAdd("-") }, icon("plus", 14), "Add a step", el("kbd", {}, "A")) : null),
     isWebhook(w) ? section("Try it", example(w), el("p", { class: "muted small" }, answerNote(w))) : null,
   ];
 }
@@ -777,7 +820,49 @@ function stepDetails(w, step, run, hasForm) {
     step.fields.length && !hasForm && !step.component ? section("Settings", pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)]))) : null,
     step.reads.length ? section("Reads from", el("div", { class: "chips" }, step.reads.map((name) =>
       el("button", { type: "button", class: "pill link mono", title: "Show " + name, onclick: () => go({ node: name }) }, name)))) : null,
+    canAdd(w) ? structureSection(w, step) : null,
   ];
+}
+
+// structureSection is where a step is added after this one, or removed.
+function structureSection(w, step) {
+  const lost = draftCountFor(w.name, step.id);
+  return section("Add or remove",
+    el("button", { type: "button", class: "btn addstep", "data-focus": "add-after", onclick: () => openAdd(step.id) }, icon("plus", 14), "Add a step after this one"),
+    removeButton(w, step),
+    el("p", { class: "muted small" }, "Removing takes the step out of " + w.path + ". Steps, the response and tests that still use its output must be changed first."
+      + (lost ? " Its " + plural(lost, "unsaved change") + " would be lost." : "")));
+}
+
+// removeButton asks twice, like Discard: the first click arms it, the second removes.
+function removeButton(w, step) {
+  const b = el("button", { type: "button", class: "btn danger", "data-focus": "remove:" + step.id }, icon("trash", 14), "Remove step");
+  const paint = () => {
+    const armed = uiOf(w.name).removeArmed === step.id;
+    b.classList.toggle("armed", armed);
+    b.replaceChildren(icon("trash", 14), armed ? "Remove " + step.id + "? Click again" : "Remove step");
+  };
+  paint();
+  b.addEventListener("click", () => {
+    const st = uiOf(w.name);
+    if (st.saving) return;
+    if (st.removeArmed !== step.id) {
+      st.removeArmed = step.id;
+      clearTimeout(st.removeTimer);
+      st.removeTimer = setTimeout(() => { if (st.removeArmed === step.id) { st.removeArmed = null; paint(); } }, 4000);
+      paint();
+      return;
+    }
+    clearTimeout(st.removeTimer);
+    st.removeArmed = null;
+    paint();
+    removeStep(w.name, step.id);
+  });
+  b.addEventListener("blur", () => {
+    const st = uiOf(w.name);
+    if (st.removeArmed === step.id) { st.removeArmed = null; clearTimeout(st.removeTimer); paint(); }
+  });
+  return b;
 }
 
 // responseDetails is the inspector for the way out. Without a run it says what
@@ -859,7 +944,9 @@ let uiTick = 0;         // bumped when something outside the data changes what i
 let formId = 0;
 let form = null;        // the form now on the page: { key, workflow, node, fields, controls, root }
 let flagSig = "";       // which steps had unsaved changes the last time the flags were drawn
-const drafts = {};      // workflow -> { fields: { pathKey: { path, value, node, label } }, prompts: { step: text } }
+const drafts = {};      // workflow -> { fields: { pathKey: { path, value, node, label, group } }, prompts: { step: text } }
+const adds = {};        // workflow -> the step being added: { after, component, id, idTouched, when, values }
+let adder = null;       // the add-a-step form now on the page
 const known = {};       // workflow -> the rev this page last saw
 const ui = {};          // workflow -> { saving, notice, conflicts, armed }
 const promptCache = {}; // "workflow|step" -> { state, file, text, rev, wfRev, inflight, error }
@@ -913,13 +1000,20 @@ function dirtyCount(name) {
   const d = drafts[name];
   return d ? Object.keys(d.fields).length + Object.keys(d.prompts).length : 0;
 }
+// draftCountFor counts the unsaved changes that belong to one step.
+function draftCountFor(name, node) {
+  const d = drafts[name];
+  if (!d) return 0;
+  return Object.values(d.fields).filter((e) => e.node === node).length + (d.prompts[node] !== undefined ? 1 : 0);
+}
 function dirtyNodes(name) {
   const d = drafts[name];
   if (!d) return [];
   return [...new Set([...Object.values(d.fields).map((e) => e.node), ...Object.keys(d.prompts)])];
 }
 const editedNodes = (w) => new Set(state.editable ? dirtyNodes(w.name) : []);
-const anyDirty = () => state.editable && state.workflows.some((w) => dirtyCount(w.name) > 0);
+const addTouched = (a) => !!a && (a.idTouched || a.when.trim() !== "" || Object.values(a.values).some((v) => v.trim() !== ""));
+const anyDirty = () => state.editable && state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name]));
 
 // adopt takes in a fresh answer from /api/state. A workflow whose file changed
 // without this page saving it keeps the person's drafts, on top of the new text.
@@ -937,19 +1031,64 @@ function adopt(fresh) {
   flagSig = "";
 }
 
+// A field is known by the step it belongs to, its group and its label, not by
+// its position in the file: positions move when a step is added or removed,
+// from this page or by someone editing the file. identities lists the fields
+// of a workflow both ways, by path and by that identity (the Nth field with
+// the same step, group and label counts as a different one).
+function identities(w) {
+  const byKey = new Map(), byId = new Map(), seen = new Map();
+  const add = (node, f) => {
+    const base = [node, f.group || "", f.label].join("\u0001");
+    const n = (seen.get(base) || 0) + 1;
+    seen.set(base, n);
+    const id = base + "\u0001" + n, key = pathKey(f.path);
+    byKey.set(key, id);
+    byId.set(id, { field: f, key, node });
+  };
+  (w.edit || []).forEach((f) => add("trigger", f));
+  if (w.respond) (w.respond.edit || []).forEach((f) => add("response", f));
+  w.steps.forEach((s) => (s.edit || []).forEach((f) => add(s.id, f)));
+  return { byKey, byId };
+}
+
+// reattach moves the drafts of a workflow from the paths they had in prev to
+// the paths the same fields have in w. A draft whose step or field is gone is
+// dropped, and returned so the person is told. Fields whose text changed in
+// the file meanwhile are marked as conflicts.
+function reattach(name, prev, w) {
+  const d = draftsOf(name), st = uiOf(name);
+  const dropped = [];
+  if (!prev) return dropped;
+  const was = identities(prev), now = identities(w);
+  const fields = {}, conflicts = {};
+  for (const [k, e] of Object.entries(st.conflicts)) {
+    const id = was.byKey.get(k), n = id && now.byId.get(id);
+    if (n) conflicts[n.key] = e;
+    else if (k.startsWith("prompt|")) conflicts[k] = e;
+  }
+  for (const [k, e] of Object.entries(d.fields)) {
+    const id = was.byKey.get(k), n = id && now.byId.get(id);
+    if (!n) { dropped.push({ node: e.node, label: e.label }); continue; }
+    fields[n.key] = { ...e, path: n.field.path, node: n.node, group: n.field.group };
+    const o = was.byId.get(id);
+    if (o && o.field.value !== n.field.value) conflicts[n.key] = n.field.value;
+  }
+  for (const step of Object.keys(d.prompts)) {
+    if (!w.steps.some((s) => s.id === step)) { dropped.push({ node: step, label: "Prompt" }); delete d.prompts[step]; }
+  }
+  d.fields = fields;
+  st.conflicts = conflicts;
+  return dropped;
+}
+
 function changedOutside(name, prev, w) {
   const st = uiOf(name), d = draftsOf(name);
-  const was = prev ? fieldIndex(prev) : new Map(), now = fieldIndex(w);
-  let kept = Object.keys(d.prompts).length;
-  for (const [k, e] of Object.entries(d.fields)) {
-    const n = now.get(k);
-    if (!n) { delete d.fields[k]; continue; }
-    kept++;
-    const o = was.get(k);
-    if (o && o.field.value !== n.field.value) st.conflicts[k] = n.field.value;
-  }
-  if (st.notice && st.notice.kind === "conflict") st.notice = { ...st.notice, kept };
-  else if (kept > 0 || (view && view.w.name === name && selected.node)) st.notice = { kind: "external", kept };
+  const dropped = reattach(name, prev, w);
+  const kept = Object.keys(d.fields).length + Object.keys(d.prompts).length;
+  const lost = [...(st.notice && st.notice.dropped ? st.notice.dropped : []), ...dropped];
+  if (st.notice && st.notice.kind === "conflict") st.notice = { ...st.notice, kept, dropped: lost.length ? lost : null };
+  else if (kept > 0 || lost.length || (view && view.w.name === name && selected.node)) st.notice = { kind: "external", kept, dropped: lost.length ? lost : null };
 }
 
 // ---- the form ----
@@ -1023,9 +1162,9 @@ function makeControl(f, field) {
     if (c.kind === "prompt") {
       if (value === c.base) delete d.prompts[c.node]; else d.prompts[c.node] = value;
     } else if (value === c.base) delete d.fields[c.key];
-    else d.fields[c.key] = { path: field.path, value, node: c.node, label: field.label };
+    else d.fields[c.key] = { path: field.path, value, node: c.node, label: field.label, group: field.group };
     if (!(c.kind === "prompt" ? d.prompts[c.node] !== undefined : d.fields[c.key])) delete st.conflicts[c.key];
-    if (st.notice && (st.notice.kind === "saved" || st.notice.kind === "external")) st.notice = null;
+    if (st.notice && (st.notice.kind === "saved" || st.notice.kind === "external") && !(st.notice.dropped && st.notice.dropped.length)) st.notice = null;
     autosize(box);
     paintRow(c);
     draftChanged(c.workflow);
@@ -1081,8 +1220,23 @@ function showForm(w, nodeId, fields) {
   if (form && form.key === key) {
     form.fields = fields;
   } else {
+    // The paths of the fields change when a step is added or removed. The form is
+    // rebuilt then, and the reader keeps their place in it.
+    let back = null;
+    if (form && form.workflow === w.name && form.node === nodeId && form.root.contains(document.activeElement)) {
+      const i = form.controls.findIndex((c) => c.input === document.activeElement);
+      const at = i >= 0 ? document.activeElement : null;
+      if (at) { try { back = [i, at.selectionStart, at.selectionEnd]; } catch (err) { back = [i, null, null]; } }
+    }
     form = buildForm(w, nodeId, fields, key);
     insp.formslot.replaceChildren(form.root);
+    syncForm(w);
+    if (back && form.controls[back[0]]) {
+      const box = form.controls[back[0]].input;
+      box.focus({ preventScroll: true });
+      if (back[1] != null) { try { box.setSelectionRange(back[1], back[2]); } catch (err) { /* not a text box */ } }
+    }
+    return;
   }
   syncForm(w);
 }
@@ -1229,9 +1383,28 @@ function updateBar() {
   const b = insp.bar;
   if (!b || !view) return;
   const w = view.w, st = uiOf(w.name), n = dirtyCount(w.name);
-  const on = state.editable && !w.problem && (form || n > 0 || st.notice);
+  const adding = addMode(w);
+  const on = state.editable && !w.problem && (adding || form || n > 0 || st.notice);
   b.root.hidden = !on;
   if (!on) return;
+  const key = isMac ? "⌘S" : "Ctrl+S";
+  if (adding) {
+    // The same bar serves the form for a new step: Cancel and Add step.
+    const comp = componentOf(w, addOf(w.name).component);
+    b.status.replaceChildren(...(st.saving ? ["Adding…"] : comp ? ["Adds a step to ", el("span", { class: "mono" }, w.path)] : [componentsOf(w).length ? "Choose a component to add." : "Nothing to add yet."]));
+    b.status.classList.remove("dirty");
+    b.save.setAttribute("aria-disabled", st.saving || !comp ? "true" : "false");
+    b.discard.setAttribute("aria-disabled", st.saving ? "true" : "false");
+    b.discard.classList.remove("armed");
+    b.discard.textContent = "Cancel";
+    if (b.save.dataset.mode !== "add") { b.save.dataset.mode = "add"; b.save.replaceChildren("Add step", el("kbd", {}, key)); }
+    if (b.shownNotice !== st.notice) {
+      b.shownNotice = st.notice;
+      b.slot.replaceChildren(...(st.notice ? [noticeView(st.notice, w)] : []));
+    }
+    return;
+  }
+  if (b.save.dataset.mode !== "save") { b.save.dataset.mode = "save"; b.save.replaceChildren("Save", el("kbd", {}, key)); }
   const names = dirtyNodes(w.name);
   const where = names.length > 3 ? names.slice(0, 3).join(", ") + " and " + (names.length - 3) + " more" : names.join(", ");
   b.status.replaceChildren(...(st.saving ? ["Saving…"]
@@ -1258,30 +1431,45 @@ function noticeView(n, w) {
   const tone = { saved: "ok", invalid: "bad", error: "bad", network: "bad", conflict: "warn", external: "warn" }[n.kind];
   const text = [];
   let title = "";
+  // What was being done: a plain save, or adding or removing a step.
+  const isAdd = n.did === "add", isRemove = n.did === "remove";
   if (n.kind === "saved") {
-    title = "Saved";
+    title = n.title || "Saved";
     text.push(el("p", {}, "Written to ", n.files.map((f, i) => [i ? ", " : "", el("span", { class: "mono" }, f)])), el("p", {},
       "These changes are saved in the file but not committed. ",
-      el("button", { type: "button", class: "linkbtn", onclick: () => go({ changes: true }) }, "See what changed")));
+      el("button", { type: "button", class: "linkbtn", onclick: () => go({ changes: true }) }, "See what changed")),
+      droppedView(n));
   } else if (n.kind === "invalid") {
-    title = "Not saved. The file was left as it was.";
+    title = isAdd ? "Not added. The file was left as it was." : isRemove ? "Not removed. The file was left as it was." : "Not saved. The file was left as it was.";
     if (n.saved && n.saved.length) text.push(el("p", {}, "Already written: ", n.saved.join(", "), "."));
     if (n.problems && n.problems.length) {
-      text.push(el("p", {}, "Fix this and save again:"), el("ul", { class: "problems" }, n.problems.map((p) => problemItem(p, w))));
+      const users = isRemove ? usersOf(n.problems) : [];
+      if (isRemove) text.push(el("p", {}, users.length ? [n.id + " is still used by ", users.join(", "), ". Change those first, then remove it again."] : "Something still depends on " + n.id + ". Change it first, then remove it again."));
+      text.push(el("p", {}, isRemove ? "What the server found:" : isAdd ? "Fix this and try again:" : "Fix this and save again:"),
+        el("ul", { class: "problems" }, n.problems.map((p) => problemItem(p, w, isAdd ? n.id : null))));
     } else text.push(el("p", {}, n.error || "The server did not accept the change."));
   } else if (n.kind === "conflict") {
-    title = "The file changed on disk, so nothing was saved";
-    text.push(el("p", {}, (n.what === "prompt" ? "The prompt file was changed after this page read it." : "The workflow file was changed after this page read it.")
-      + " The form now shows what is in the file" + (n.kept ? ", with your " + plural(n.kept, "unsaved edit") + " on top." : ".")),
-      el("p", {}, n.kept ? "Check your edits, then save again." : "Nothing of yours was lost."));
+    title = isAdd ? "The file changed on disk, so nothing was added" : isRemove ? "The file changed on disk, so nothing was removed"
+      : "The file changed on disk, so nothing was saved";
+    if (isAdd || isRemove) {
+      text.push(el("p", {}, "The workflow file was changed after this page read it. The page now shows the file as it is."),
+        el("p", {}, isAdd ? "Your entries are still in the form. Check the position, then add the step again." : "Look at the steps again, then remove it again if it is still what you want."));
+    } else {
+      text.push(el("p", {}, (n.what === "prompt" ? "The prompt file was changed after this page read it." : "The workflow file was changed after this page read it.")
+        + " The form now shows what is in the file" + (n.kept ? ", with your " + plural(n.kept, "unsaved edit") + " on top." : ".")),
+        el("p", {}, n.kept ? "Check your edits, then save again." : "Nothing of yours was lost."));
+    }
+    text.push(droppedView(n));
   } else if (n.kind === "external") {
     title = "The file was changed outside this page";
-    text.push(el("p", {}, "The form shows what is in the file now" + (n.kept ? ", with your " + plural(n.kept, "unsaved edit") + " kept on top." : ".")));
+    text.push(el("p", {}, "The form shows what is in the file now" + (n.kept ? ", with your " + plural(n.kept, "unsaved edit") + " kept on top, each on the step it was typed for." : ".")), droppedView(n));
   } else if (n.kind === "network") {
     title = "Could not reach the server";
-    text.push(el("p", {}, "Nothing was lost: your edits are still here. Try saving again when it is back."));
+    text.push(el("p", {}, isAdd ? "Nothing was lost: your entries are still in the form. Try again when it is back."
+      : isRemove ? "Nothing was removed. Try again when it is back."
+      : "Nothing was lost: your edits are still here. Try saving again when it is back."));
   } else {
-    title = "Not saved";
+    title = isAdd ? "Not added" : isRemove ? "Not removed" : "Not saved";
     text.push(el("p", {}, n.error || "The server answered " + n.status + "."));
   }
   const close = el("button", { type: "button", class: "x small", "aria-label": "Dismiss this message", title: "Dismiss" }, icon("close", 13));
@@ -1290,10 +1478,30 @@ function noticeView(n, w) {
     el("div", { class: "nhead" }, el("strong", {}, title), close), text);
 }
 
+// droppedView names the unsaved edits that could not be kept because the step
+// or field they were typed for is gone.
+function droppedView(n) {
+  if (!n.dropped || !n.dropped.length) return null;
+  return el("p", {}, plural(n.dropped.length, "unsaved edit was", "unsaved edits were"), " dropped, because the step or field they were for is gone: ",
+    n.dropped.slice(0, 6).map((x, i) => [i ? ", " : "", el("span", { class: "mono" }, x.node + " · " + x.label)]),
+    n.dropped.length > 6 ? " and " + (n.dropped.length - 6) + " more" : "", ".");
+}
+
+// usersOf lists the steps and tests a refusal names, once each.
+function usersOf(problems) {
+  const out = [];
+  for (const p of problems) {
+    const m = /^(step|test) "([^"]+)"/.exec(p.message || "");
+    const name = m ? (m[1] === "step" ? m[2] : "test “" + m[2] + "”") : /^respond\b/.test(p.message || "") ? "the response" : null;
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
 // A problem from the server reads like: step "summarize": when: Syntax error.
-function problemItem(p, w) {
+function problemItem(p, w, skip) {
   const m = /^step "([^"]+)"/.exec(p.message || "");
-  const node = m && w.steps.some((s) => s.id === m[1]) ? m[1] : w.respond && /^respond\b/.test(p.message || "") ? "response" : null;
+  const node = m && m[1] !== skip && w.steps.some((s) => s.id === m[1]) ? m[1] : w.respond && /^respond\b/.test(p.message || "") ? "response" : null;
   return el("li", {},
     p.line ? el("span", { class: "ln" }, "Line " + p.line) : null,
     el("span", { class: "msg" }, p.message),
@@ -1312,19 +1520,20 @@ function promptKey(name, step) {
   return f ? pathKey(f.path) : "prompt|" + step;
 }
 
-function failureOf(r, what) {
-  if (r.status === 422) return { kind: "invalid", error: r.body.error, problems: r.body.problems || [] };
-  if (r.status === 409) return { kind: "conflict", what };
-  return { kind: "error", status: r.status, error: r.body.error };
+function failureOf(r, what, extra) {
+  if (r.status === 422) return { kind: "invalid", error: r.body.error, problems: r.body.problems || [], ...extra };
+  if (r.status === 409) return { kind: "conflict", what, ...extra };
+  return { kind: "error", status: r.status, error: r.body.error, ...extra };
 }
 
 async function saveCurrent() {
   if (!view || !state.editable) return;
+  if (addMode(view.w)) return addStep();
   const name = view.w.name, st = uiOf(name);
   const w = workflowByName(name);
   if (st.saving || !w || w.problem) return;
   const d = draftsOf(name);
-  const fields = Object.values(d.fields).map((e) => ({ path: e.path, value: e.value }));
+  const fields = Object.values(d.fields).map((e) => ({ path: e.path, value: e.value, node: e.node }));
   const texts = Object.entries(d.prompts).map(([step, text]) => ({ step, text }));
   if (!fields.length && !texts.length) return;
 
@@ -1403,6 +1612,7 @@ async function saveCurrent() {
 
 function discardCurrent() {
   if (!view) return;
+  if (addMode(view.w)) return go({ add: null });
   const name = view.w.name, st = uiOf(name);
   if (st.saving || dirtyCount(name) === 0) return;
   if (!st.armed) {
@@ -1419,6 +1629,381 @@ function discardCurrent() {
   st.notice = null;
   if (form) syncForm(workflowByName(name));
   draftChanged(name, true);
+}
+
+// ---- adding and removing a step ----
+//
+// The form for a new step is a long-lived piece of the page, like the form for
+// a step's settings: the poll updates it in place (syncAdder) and what has been
+// typed lives in `adds`, so nothing typed is lost to a redraw, to a trip to
+// another step, or to a change of the file underneath.
+
+const ID_OK = /^[A-Za-z0-9_]+$/;
+const addOf = (name) => adds[name] || (adds[name] = { after: "", component: null, id: "", idTouched: false, when: "", values: {} });
+const componentsOf = (w) => w.components || [];
+const componentOf = (w, name) => componentsOf(w).find((c) => c.name === name) || null;
+const addMode = (w) => canAdd(w) && !!selected.add;
+const folderOf = (path) => path.replace(/\/[^/]*$/, "");
+
+// freeId suggests an id for a step made from a component that no step has yet.
+function freeId(w, base) {
+  const taken = new Set(["trigger", "response", ...w.steps.map((s) => s.id)]);
+  const stem = base.replace(/[^A-Za-z0-9_]/g, "_") || "step";
+  if (!taken.has(stem)) return stem;
+  for (let n = 2; ; n++) if (!taken.has(stem + "_" + n)) return stem + "_" + n;
+}
+
+// resolveAfter turns what the address says into a step to go after.
+function resolveAfter(w, v) {
+  if (v === "trigger") return "trigger";
+  if (v && v !== "-" && w.steps.some((s) => s.id === v)) return v;
+  return w.steps.length ? w.steps[w.steps.length - 1].id : "trigger";
+}
+
+// referencesFor lists what a step put after `after` can refer to: the trigger,
+// the steps before it, and the server's environment.
+function referencesFor(w, after) {
+  const rows = [];
+  const keys = w.sample && typeof w.sample === "object" && !Array.isArray(w.sample) ? Object.keys(w.sample).slice(0, 6) : [];
+  rows.push({ id: "trigger", kind: "trigger", chips: isWebhook(w) || !w.trigger
+    ? [{ text: "trigger.body" }, ...keys.map((k) => ({ text: "trigger.body." + k }))]
+    : [{ text: "trigger.time" }] });
+  const upto = after === "trigger" ? 0 : w.steps.findIndex((s) => s.id === after) + 1;
+  for (const s of w.steps.slice(0, upto)) {
+    rows.push({ id: s.id, kind: s.kind, chips: s.questions && s.questions.length
+      ? s.questions.map((q) => ({ text: s.id + "." + q.name + ".value", short: q.name + ".value" }))
+      : [{ text: s.id + ".", open: true, short: "field" }] });
+  }
+  rows.push({ id: "env", kind: null, chips: [{ text: "env.", open: true, short: "NAME" }] });
+  return rows;
+}
+
+function hideAdder() {
+  if (!adder) return;
+  adder = null;
+  insp.formslot.replaceChildren();
+}
+
+function showAdder(w) {
+  if (!adder || adder.workflow !== w.name) {
+    adder = buildAdder(w);
+    // What the last save said is not news in a new form.
+    const st = uiOf(w.name);
+    if (st.notice && st.notice.kind === "saved") st.notice = null;
+    insp.formslot.replaceChildren(adder.root);
+    syncAdder(w);
+    afterRender = focusAdder;
+  } else syncAdder(w);
+}
+
+function focusAdder() {
+  const A = adder;
+  if (!A) return;
+  const a = addOf(A.workflow);
+  const t = componentsOf(workflowByName(A.workflow) || { components: [] }).length === 0 ? insp.head.querySelector(".x")
+    : !a.component ? A.picker.querySelector("input[type=radio]")
+    : A.targets[1] || A.idBox;
+  if (t) t.focus({ preventScroll: false });
+}
+
+function buildAdder(w) {
+  const uid = ++formId;
+  const A = { workflow: w.name, from: undefined, posSig: "", compSig: "", detailKey: "", refSig: "", target: null, targets: [], uid, idBox: null };
+  const posId = "pos" + uid;
+  A.pos = el("select", { id: posId, class: "in" });
+  A.pos.addEventListener("change", () => {
+    addOf(A.workflow).after = A.pos.value;
+    const now = workflowByName(A.workflow);
+    if (now) syncAdder(now);
+    updateBar();
+  });
+  A.posWarn = el("p", { class: "conflict", hidden: true }, "The step it was to go after is no longer in the workflow. Choose a position.");
+  A.posField = el("div", { class: "field" },
+    el("div", { class: "lab" }, el("label", { for: posId }, "Position")),
+    A.pos,
+    el("p", { class: "hint-text" }, "Steps run in the order they have in the file, so this decides when it runs."),
+    A.posWarn);
+  A.choices = el("div", { class: "choices", role: "presentation" });
+  A.picker = el("fieldset", { class: "picker" }, el("legend", {}, "Component"), A.choices);
+  A.detail = el("div", { class: "adddetail" });
+  A.empty = el("div", { class: "emptystate" });
+  A.root = el("section", { class: "editform addform" }, A.empty, A.posField, A.picker, A.detail);
+  return A;
+}
+
+function pickComponent(name, comp) {
+  const a = addOf(name);
+  a.component = comp;
+  const w = workflowByName(name);
+  if (w) {
+    if (!a.idTouched) a.id = freeId(w, comp);
+    syncAdder(w);
+  }
+  updateBar();
+}
+
+function syncAdder(w) {
+  const A = adder, a = addOf(w.name);
+  if (!A || A.workflow !== w.name) return;
+  const comps = componentsOf(w);
+  if (A.from !== selected.add) { A.from = selected.add; a.after = resolveAfter(w, selected.add); }
+
+  // Nothing to add from: say where components come from.
+  A.empty.hidden = comps.length > 0;
+  A.posField.hidden = A.picker.hidden = A.detail.hidden = comps.length === 0;
+  if (!comps.length) {
+    if (!A.empty.firstChild) {
+      const folder = folderOf(w.path) + "/components/";
+      A.empty.replaceChildren(
+        el("div", { class: "etitle" }, "No components in this workflow yet"),
+        el("p", {}, "A step is added from a component: a step written once, with named inputs, that any workflow can use."),
+        el("p", {}, "Components live in ", el("span", { class: "mono" }, "components/<name>/component.yaml"), " in the workflow's folder, here ", el("span", { class: "mono" }, folder + "<name>/component.yaml"), "."),
+        el("p", { class: "muted small" }, "Write one in your editor and commit it. This page notices by itself, and it appears here."));
+    }
+    return;
+  }
+
+  // Position.
+  const valid = a.after === "trigger" || w.steps.some((s) => s.id === a.after);
+  const posSig = w.steps.map((s) => s.id).join(",") + (valid ? "" : "!");
+  if (posSig !== A.posSig) {
+    A.posSig = posSig;
+    A.pos.replaceChildren(
+      ...(valid ? [] : [el("option", { value: "", disabled: true }, "Choose a position")]),
+      el("option", { value: "trigger" }, w.steps.length ? "At the start, before " + w.steps[0].id : "As the first step"),
+      ...w.steps.map((s, i) => el("option", { value: s.id }, "After " + s.id + (i === w.steps.length - 1 ? " (last)" : ""))));
+  }
+  A.pos.value = valid ? a.after : "";
+  A.posWarn.hidden = valid;
+
+  // Components.
+  const compSig = JSON.stringify(comps.map((c) => [c.name, c.kind, c.description, (c.inputs || []).map((i) => i.name)]));
+  if (compSig !== A.compSig) {
+    A.compSig = compSig;
+    const group = "comp" + A.uid;
+    A.choiceEls = {};
+    A.choices.replaceChildren(...comps.map((c) => {
+      const input = el("input", { type: "radio", name: group, value: c.name });
+      input.addEventListener("change", () => { if (input.checked) pickComponent(w.name, c.name); });
+      const row = el("label", { class: "choice kind-" + c.kind },
+        input, kindTile(c.kind, 38),
+        el("span", { class: "ctext" },
+          el("span", { class: "chead" }, el("span", { class: "cname mono" }, c.name), el("span", { class: "ckind" }, KIND_LABEL[c.kind] || c.kind)),
+          c.description ? el("span", { class: "cdesc" }, c.description) : null,
+          el("span", { class: "cin mono" }, (c.inputs || []).length ? "Takes " + c.inputs.map((i) => i.name).join(", ") : "Takes no input")));
+      A.choiceEls[c.name] = { row, input };
+      return row;
+    }));
+  }
+  if (a.component && !componentOf(w, a.component)) a.component = null;
+  if (!a.component && comps.length === 1) { a.component = comps[0].name; if (!a.idTouched) a.id = freeId(w, a.component); }
+  for (const [name, c] of Object.entries(A.choiceEls)) {
+    c.input.checked = a.component === name;
+    c.row.classList.toggle("on", a.component === name);
+  }
+
+  // The step itself.
+  const comp = componentOf(w, a.component);
+  A.detail.hidden = !comp;
+  if (!comp) { A.detailKey = ""; return; }
+  const key = comp.name + "|" + JSON.stringify(comp.inputs || []);
+  if (key !== A.detailKey) { A.detailKey = key; buildDetail(A, w, comp); }
+  if (!a.idTouched) a.id = freeId(w, comp.name);
+  setValue(A.idBox, a.id);
+  setValue(A.whenBox, a.when);
+  (comp.inputs || []).forEach((inp, i) => setValue(A.targets[i + 1], a.values[inp.name] || ""));
+  idNote(A, w, a);
+  const sig = w.name + "|" + a.after + "|" + w.steps.map((s) => s.id).join(",") + "|" + JSON.stringify(w.sample || null);
+  if (sig !== A.refSig) { A.refSig = sig; buildRefs(A, w, a.after); }
+}
+
+// idNote warns, without stopping anything, about an id the server would refuse.
+function idNote(A, w, a) {
+  const id = a.id.trim();
+  let text = "";
+  if (id && !ID_OK.test(id)) text = "Use letters, digits and underscore only.";
+  else if (id === "trigger" || id === "response" || w.steps.some((s) => s.id === id)) text = "A step called " + id + " already exists in this workflow.";
+  A.idWarn.hidden = !text;
+  A.idWarn.textContent = text;
+}
+
+function plainField(A, label, tag, box, hint) {
+  return el("div", { class: "field" },
+    el("div", { class: "lab" }, el("label", { for: box.id }, label), tag),
+    box,
+    hint ? el("p", { class: "hint-text" }, hint) : null);
+}
+
+function buildDetail(A, w, comp) {
+  const a = addOf(w.name);
+  A.targets = [];
+  const noteInput = () => { updateBar(); };
+  const remember = (box) => box.addEventListener("focus", () => { A.target = box; });
+  const textBox = (id, props) => {
+    const box = el(props.rows ? "textarea" : "input", { id, ...props.attrs, class: "in" + (props.mono ? " mono" : ""), spellcheck: "false", autocomplete: "off", autocapitalize: "off", rows: props.rows ? 1 : null, type: props.rows ? null : "text" });
+    box.addEventListener("input", () => { props.set(box.value); autosize(box); noteInput(); });
+    // Enter in a one-line box adds the step; in a larger one it starts a new line.
+    if (!props.rows) box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); addStep(); } });
+    return box;
+  };
+
+  const idId = "sid" + A.uid + "x";
+  A.idBox = textBox(idId, { mono: true, set: (v) => { a.id = v; a.idTouched = true; const now = workflowByName(w.name); if (now) idNote(A, now, a); } });
+  A.idWarn = el("p", { class: "conflict", hidden: true });
+  const idField = el("div", { class: "field" },
+    el("div", { class: "lab" }, el("label", { for: idId }, "Step id")),
+    A.idBox,
+    el("p", { class: "hint-text" }, "Letters, digits and underscore. Other steps use it to read this step's result."),
+    A.idWarn);
+
+  const whenId = "swh" + A.uid + "x";
+  A.whenBox = textBox(whenId, { rows: true, mono: true, set: (v) => { a.when = v; } });
+  A.whenBox.dataset.raw = "1";
+  remember(A.whenBox);
+  const decide = w.steps.find((s) => s.questions && s.questions.length);
+  const whenField = plainField(A, "Run only when", el("span", { class: "tag", title: "A CEL expression" }, "CEL"), A.whenBox,
+    "Empty means the step always runs." + (decide ? " For example " + decide.id + "." + decide.questions[0].name + ".value == \"…\"." : ""));
+  A.targets.push(A.whenBox);
+
+  const fields = (comp.inputs || []).map((inp) => {
+    const id = "sin" + A.uid + "x" + inp.name.replace(/[^A-Za-z0-9_]/g, "_");
+    // One line, so that Enter adds the step; an expression for an object or a list may need more.
+    const long = inp.type === "object" || inp.type === "list" || inp.type === "any";
+    const box = textBox(id, { rows: long, mono: inp.type === "object" || inp.type === "list", set: (v) => { a.values[inp.name] = v; },
+      attrs: { inputmode: inp.type === "number" ? "numeric" : null } });
+    remember(box);
+    A.targets.push(box);
+    const hint = inp.type === "number" ? "A number, or an expression such as ${trigger.body.count}."
+      : inp.type === "boolean" ? "true or false, or an expression."
+      : inp.type === "object" || inp.type === "list" ? "Needs an expression, for example ${trigger.body}."
+      : null;
+    return plainField(A, inp.name, el("span", { class: "tag", title: "Type: " + inp.type }, inp.type), box, hint);
+  });
+  const inputs = fields.length
+    ? el("fieldset", { class: "group" }, el("legend", {}, "Inputs"), fields)
+    : el("p", { class: "muted small" }, comp.name + " takes no input.");
+
+  A.refs = el("div", { class: "refs" });
+  A.detail.replaceChildren(
+    el("h2", { class: "sub" }, "New " + (KIND_LABEL[comp.kind] || comp.kind) + " step from " + comp.name),
+    idField, A.refs, whenField, inputs);
+}
+
+// buildRefs shows what can be referred to at the chosen position. A click puts
+// the reference into the field being edited.
+function buildRefs(A, w, after) {
+  if (!A.refs) return;
+  const rows = referencesFor(w, after);
+  A.refs.replaceChildren(...[
+    el("div", { class: "rhead" }, el("strong", {}, "Refer to"), el("span", { class: "muted" }, "Click to put it in the field you are editing")),
+    ...rows.map((row) => el("div", { class: "rrow" },
+      el("span", { class: "rid mono" }, row.id),
+      el("span", { class: "rchips" }, row.chips.map((chip) => {
+        const b = el("button", { type: "button", class: "pill link mono", title: (chip.open ? "Put " + chip.text + " there, then type the rest" : "Put " + chip.text + " there") }, chip.short || chip.text.replace(/^trigger\./, ""));
+        // Keep the text field's caret and focus while the button is pressed.
+        b.addEventListener("mousedown", (e) => e.preventDefault());
+        b.addEventListener("click", () => insertRef(chip));
+        return b;
+      })))),
+  ]);
+}
+
+function insertRef(chip) {
+  const A = adder;
+  if (!A) return;
+  const t = A.target && A.target.isConnected ? A.target : A.targets[1] || A.targets[0];
+  if (!t) return;
+  const raw = t.dataset.raw === "1";
+  const text = raw ? chip.text : "${" + chip.text + "}";
+  t.focus();
+  const from = t.selectionStart == null ? t.value.length : t.selectionStart, to = t.selectionEnd == null ? from : t.selectionEnd;
+  t.setRangeText(text, from, to, "end");
+  // An unfinished reference leaves the caret where the rest is typed.
+  if (chip.open && !raw) { const at = from + text.length - 1; t.setSelectionRange(at, at); }
+  t.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+async function addStep() {
+  if (!view || !state.editable) return;
+  const name = view.w.name, w = workflowByName(name), st = uiOf(name), a = addOf(name);
+  if (!w || w.problem || st.saving) return;
+  const comp = componentOf(w, a.component);
+  if (!comp) return;
+  if (a.after !== "trigger" && !w.steps.some((s) => s.id === a.after)) {
+    st.notice = { kind: "error", did: "add", error: "The step this was to go after is no longer in the workflow. Choose a position and add it again." };
+    updateBar();
+    return;
+  }
+  const id = a.id.trim();
+  const given = {};
+  for (const inp of comp.inputs || []) {
+    const v = a.values[inp.name] || "";
+    if (v.trim() !== "") given[inp.name] = v;
+  }
+  st.saving = true;
+  st.notice = null;
+  updateBar();
+  let r = null, failure = null;
+  try {
+    r = await request("POST", "/api/steps", { workflow: name, rev: w.rev, add: { id, after: a.after, use: comp.use, when: a.when.trim(), with: given } });
+  } catch (err) {
+    failure = { kind: "network", did: "add", id };
+  }
+  st.saving = false;
+  if (!failure && r.ok && r.body.workflow) {
+    epoch++;
+    changesEpoch++;
+    const prev = workflowByName(name);
+    replaceWorkflow(r.body.workflow);
+    known[name] = r.body.workflow.rev;
+    const dropped = reattach(name, prev, r.body.workflow);
+    delete adds[name];
+    st.notice = { kind: "saved", did: "add", title: "Added " + id, files: [r.body.workflow.path || w.path], dropped: dropped.length ? dropped : null };
+    afterRender = () => {
+      const card = document.querySelector('#canvas [data-node="' + CSS.escape(id) + '"]');
+      if (card) card.focus({ preventScroll: true });
+    };
+    go({ add: null, node: id });
+    readAddress();
+  } else {
+    st.notice = failure || failureOf(r, "workflow", { did: "add", id });
+  }
+  await refresh();
+  uiTick++;
+  shown = "";
+  render();
+}
+
+async function removeStep(name, id) {
+  const w = workflowByName(name), st = uiOf(name);
+  if (!w || w.problem || st.saving) return;
+  st.saving = true;
+  st.notice = null;
+  updateBar();
+  let r = null, failure = null;
+  try {
+    r = await request("POST", "/api/steps", { workflow: name, rev: w.rev, remove: id });
+  } catch (err) {
+    failure = { kind: "network", did: "remove", id };
+  }
+  st.saving = false;
+  if (!failure && r.ok && r.body.workflow) {
+    epoch++;
+    changesEpoch++;
+    const prev = workflowByName(name);
+    replaceWorkflow(r.body.workflow);
+    known[name] = r.body.workflow.rev;
+    const dropped = reattach(name, prev, r.body.workflow);
+    st.notice = { kind: "saved", did: "remove", title: "Removed " + id, files: [r.body.workflow.path || w.path], dropped: dropped.length ? dropped : null };
+    go({ node: null });
+    readAddress();
+  } else {
+    st.notice = failure || failureOf(r, "workflow", { did: "remove", id });
+  }
+  await refresh();
+  uiTick++;
+  shown = "";
+  render();
 }
 
 // ---- the changes view ----
@@ -1503,10 +2088,17 @@ window.addEventListener("keydown", (event) => {
     saveCurrent();
     return;
   }
+  const typing = event.target.closest && event.target.closest("input, textarea, select, [contenteditable]");
+  if ((event.key === "a" || event.key === "A") && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && view && canAdd(view.w) && !selected.add && !selected.changes) {
+    event.preventDefault();
+    openAdd();
+    return;
+  }
   if (event.key !== "Escape") return;
   // In a form field Escape only leaves the field.
   if (event.target.closest && event.target.closest(".editform")) { event.target.blur(); return; }
-  if (selected.changes) go({ changes: false });
+  if (selected.add) go({ add: null });
+  else if (selected.changes) go({ changes: false });
   else if (selected.node) go({ node: null });
   else if (selected.run) go({ run: null });
 });
