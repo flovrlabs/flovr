@@ -26,12 +26,15 @@ const ComponentFile = "component.yaml"
 // input.NAME, and env. They see nothing of the workflow that uses it, so a
 // component does the same wherever it is used.
 type Component struct {
-	Name   string          `yaml:"name"`
-	Input  Params          `yaml:"input"`
-	AI     *AIStep         `yaml:"ai"`
-	Decide *DecideStep     `yaml:"decide"`
-	HTTP   *HTTPStep       `yaml:"http"`
-	Tests  []ComponentTest `yaml:"tests"`
+	Name string `yaml:"name"`
+	// Description says in a line what the component is for, to whoever
+	// chooses among components.
+	Description string          `yaml:"description"`
+	Input       Params          `yaml:"input"`
+	AI          *AIStep         `yaml:"ai"`
+	Decide      *DecideStep     `yaml:"decide"`
+	HTTP        *HTTPStep       `yaml:"http"`
+	Tests       []ComponentTest `yaml:"tests"`
 
 	// Path is the component file. Paths inside the file are relative to its
 	// directory.
@@ -178,6 +181,31 @@ func IsComponent(path string) bool {
 	}
 	_, err := os.Stat(filepath.Join(path, ComponentFile))
 	return err == nil
+}
+
+// ComponentsIn loads the components in dir and below it, ordered by path. It
+// skips hidden directories and testdata, as Discover does, and components
+// that are not valid, which no step could use.
+func ComponentsIn(dir string) []*Component {
+	var found []*Component
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if p != dir && (strings.HasPrefix(d.Name(), ".") || d.Name() == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == ComponentFile {
+			if c, err := LoadComponent(p); err == nil {
+				found = append(found, c)
+			}
+		}
+		return nil
+	})
+	return found
 }
 
 // LoadComponent reads the component at path, which is a component file or a

@@ -19,7 +19,7 @@ var ui embed.FS
 // page serves the web page and the JSON it shows and, if the server allows
 // editing, takes the changes the page makes.
 func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
-	if s.opts.Edit && r.Method == http.MethodPost && (r.URL.Path == "/api/edit" || r.URL.Path == "/api/prompt") {
+	if s.opts.Edit && r.Method == http.MethodPost && slices.Contains([]string{"/api/edit", "/api/steps", "/api/prompt"}, r.URL.Path) {
 		s.change(rw, r)
 		return
 	}
@@ -118,6 +118,10 @@ type workflowView struct {
 	Rev     string      `json:"rev,omitempty"`     // identifies the file's content; sent back with a change
 	Problem string      `json:"problem,omitempty"` // why what the file holds now is not being served
 	Edit    []fieldView `json:"edit,omitempty"`    // the values of the trigger
+
+	// Components are those a step can be added from: the ones in the
+	// workflow's folder.
+	Components []componentView `json:"components,omitempty"`
 }
 
 type stepView struct {
@@ -215,6 +219,7 @@ func (s *Server) view(w *workflow.Workflow) workflowView {
 		return view
 	}
 	view.Rev, view.Problem = src.rev, src.problem
+	view.Components = catalogue(w)
 	return view
 }
 

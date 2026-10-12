@@ -199,6 +199,13 @@ func (s *Server) change(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status, answer = s.edit(req)
+	} else if r.URL.Path == "/api/steps" {
+		var req stepsRequest
+		if err := json.Unmarshal(data, &req); err != nil || (req.Add == nil) == (req.Remove == "") {
+			reply(rw, http.StatusBadRequest, fail("the request body is not the JSON expected: it adds a step or removes one"))
+			return
+		}
+		status, answer = s.steps(req)
 	} else {
 		var req promptRequest
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -230,7 +237,73 @@ type editRequest struct {
 	Edits    []struct {
 		Path  []any  `json:"path"`
 		Value string `json:"value"`
+		// Node, if given, is what the page takes the value to belong to: a
+		// step's id, "trigger" or "response". Steps are found by position,
+		// and a position holds another step once steps are added or removed.
+		Node string `json:"node"`
 	} `json:"edits"`
+}
+
+// open finds the workflow a change is for and reads its file. It refuses, with
+// a status and the reason, if the file is not what the page read. The caller
+// holds s.mu.
+func (s *Server) open(name, rev string) (i int, w *workflow.Workflow, data []byte, status int, f failure) {
+	s.refresh()
+	live := s.live.Load()
+	i = slices.IndexFunc(live.workflows, func(w *workflow.Workflow) bool { return w.Name == name })
+	if i < 0 {
+		return 0, nil, nil, http.StatusNotFound, fail("no workflow is named %s", name)
+	}
+	w = live.workflows[i]
+	src := s.sources[w.Path]
+	data, err := os.ReadFile(w.Path)
+	switch {
+	case err != nil:
+		return 0, nil, nil, http.StatusInternalServerError, fail("%v", err)
+	case src.problem != "":
+		return 0, nil, nil, http.StatusConflict, fail("%s has a problem that must be fixed in the file before the page can change it: %s", w.Path, src.problem)
+	case revision(data) != src.rev:
+		// The file changed without its time or size showing it, so it is
+		// read again whatever they say.
+		src.files[0].size = -1
+		return 0, nil, nil, http.StatusConflict, fail(stale)
+	case rev != src.rev:
+		return 0, nil, nil, http.StatusConflict, fail(stale)
+	}
+	return i, w, data, 0, failure{}
+}
+
+// save replaces the content of workflow i's file with out, if out is a
+// workflow the server can go on serving, and serves it. what says what was
+// changed, for the log. The caller holds s.mu.
+func (s *Server) save(i int, out []byte, what string) (int, any) {
+	live := s.live.Load()
+	w := live.workflows[i]
+	fresh, err := workflow.Parse(w.Path, out)
+	if err == nil {
+		next := slices.Clone(live.workflows)
+		next[i] = fresh
+		if _, err = route(next, s.opts.Env); err == nil {
+			if err := writeFile(w.Path, out); err != nil {
+				return http.StatusInternalServerError, fail("%v", err)
+			}
+			*s.sources[w.Path] = *sourceOf(w.Path, out, fresh)
+			s.serve(next)
+			s.opts.Log("%s changed from the page: %s", fresh.Name, what)
+			return http.StatusOK, map[string]any{"workflow": s.view(fresh)}
+		}
+	}
+
+	f := fail("Nothing was saved, because the workflow would no longer be valid.")
+	var problems *workflow.Problems
+	if errors.As(err, &problems) {
+		for _, p := range problems.Items {
+			f.Problems = append(f.Problems, problemView{p.Line, p.Msg})
+		}
+	} else {
+		f.Problems = []problemView{{Message: err.Error()}}
+	}
+	return http.StatusUnprocessableEntity, f
 }
 
 // edit changes values in a workflow file. The file is written only if the
@@ -238,28 +311,9 @@ type editRequest struct {
 func (s *Server) edit(req editRequest) (int, any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.refresh()
-
-	live := s.live.Load()
-	i := slices.IndexFunc(live.workflows, func(w *workflow.Workflow) bool { return w.Name == req.Workflow })
-	if i < 0 {
-		return http.StatusNotFound, fail("no workflow is named %s", req.Workflow)
-	}
-	w := live.workflows[i]
-	src := s.sources[w.Path]
-	data, err := os.ReadFile(w.Path)
-	switch {
-	case err != nil:
-		return http.StatusInternalServerError, fail("%v", err)
-	case src.problem != "":
-		return http.StatusConflict, fail("%s has a problem that must be fixed in the file before the page can change it: %s", w.Path, src.problem)
-	case revision(data) != src.rev:
-		// The file changed without its time or size showing it, so it is
-		// read again whatever they say.
-		src.files[0].size = -1
-		return http.StatusConflict, fail(stale)
-	case req.Rev != src.rev:
-		return http.StatusConflict, fail(stale)
+	i, w, data, status, refused := s.open(req.Workflow, req.Rev)
+	if status != 0 {
+		return status, refused
 	}
 
 	view := describe(w)
@@ -287,6 +341,8 @@ func (s *Server) edit(req editRequest) (int, any) {
 		switch {
 		case !ok || f.Kind == kindPrompt:
 			return http.StatusUnprocessableEntity, fail("the page cannot change this value")
+		case e.Node != "" && e.Node != owner(w, path):
+			return http.StatusConflict, fail("The steps of the file changed after the page read it, so nothing was saved. The page now shows the file as it is.")
 		case f.Kind == kindChoice && !slices.Contains(f.Options, value):
 			return http.StatusUnprocessableEntity, fail("%s must be one of %s", f.Label, strings.Join(f.Options, ", "))
 		}
@@ -317,32 +373,160 @@ func (s *Server) edit(req editRequest) (int, any) {
 	if bytes.Equal(out, data) {
 		return http.StatusOK, map[string]any{"workflow": s.view(w)}
 	}
-	fresh, err := workflow.Parse(w.Path, out)
-	if err == nil {
-		next := slices.Clone(live.workflows)
-		next[i] = fresh
-		if _, err = route(next, s.opts.Env); err == nil {
-			err = writeFile(w.Path, out)
-			if err != nil {
-				return http.StatusInternalServerError, fail("%v", err)
-			}
-			*src = *sourceOf(w.Path, out, fresh)
-			s.serve(next)
-			s.opts.Log("%s changed from the page: %s", fresh.Name, strings.Join(changed, ", "))
-			return http.StatusOK, map[string]any{"workflow": s.view(fresh)}
+	return s.save(i, out, strings.Join(changed, ", "))
+}
+
+// owner names what the value at path belongs to, as the page names it: a
+// step's id, "trigger" or "response".
+func owner(w *workflow.Workflow, path []any) string {
+	switch path[0] {
+	case "trigger":
+		return "trigger"
+	case "respond":
+		return "response"
+	case "steps":
+		if i, ok := path[1].(int); len(path) > 1 && ok && i >= 0 && i < len(w.Steps) {
+			return w.Steps[i].ID
 		}
+	}
+	return ""
+}
+
+// stepsRequest adds a step to a workflow, or removes one.
+type stepsRequest struct {
+	Workflow string `json:"workflow"`
+	Rev      string `json:"rev"` // the file as the page last saw it
+	Add      *struct {
+		ID string `json:"id"`
+		// After is the step the new one comes after, "trigger" to make it
+		// the first step, or empty to make it the last.
+		After string            `json:"after"`
+		Use   string            `json:"use"`  // the component it uses, as the workflow's list names it
+		When  string            `json:"when"` // may be empty
+		With  map[string]string `json:"with"` // what it gives the component, by input
+	} `json:"add"`
+	Remove string `json:"remove"` // the id of the step to remove
+}
+
+// steps adds a step that uses a component to a workflow file, or removes a
+// step from it. As with edit, the file is written only if the result is a
+// workflow the server can go on serving.
+func (s *Server) steps(req stepsRequest) (int, any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, w, data, status, refused := s.open(req.Workflow, req.Rev)
+	if status != 0 {
+		return status, refused
+	}
+	position := func(id string) int {
+		return slices.IndexFunc(w.Steps, func(st workflow.Step) bool { return st.ID == id })
 	}
 
-	f := fail("Nothing was saved, because the workflow would no longer be valid.")
-	var problems *workflow.Problems
-	if errors.As(err, &problems) {
-		for _, p := range problems.Items {
-			f.Problems = append(f.Problems, problemView{p.Line, p.Msg})
+	if add := req.Add; add != nil {
+		at := len(w.Steps)
+		switch {
+		case add.After == "trigger":
+			at = 0
+		case add.After != "":
+			if at = position(add.After) + 1; at == 0 {
+				return http.StatusUnprocessableEntity, fail("there is no step %s to put the new step after", add.After)
+			}
 		}
-	} else {
-		f.Problems = []problemView{{Message: err.Error()}}
+		// The page adds steps only from the components it was shown.
+		components := catalogue(w)
+		c := slices.IndexFunc(components, func(c componentView) bool { return c.Use == add.Use })
+		if c < 0 {
+			return http.StatusUnprocessableEntity, fail("%s is not one of this workflow's components", add.Use)
+		}
+		pairs := []yamledit.Pair{{Key: "id", Value: strings.TrimSpace(add.ID)}}
+		if when := strings.TrimSpace(add.When); when != "" {
+			pairs = append(pairs, yamledit.Pair{Key: "when", Value: when})
+		}
+		pairs = append(pairs, yamledit.Pair{Key: "use", Value: add.Use})
+		var with []yamledit.Pair
+		for _, input := range components[c].Inputs {
+			if text, given := add.With[input.Name]; given {
+				with = append(with, yamledit.Pair{Key: input.Name, Value: written(strings.TrimSpace(text), input.Type)})
+			}
+		}
+		pairs = append(pairs, yamledit.Pair{Key: "with", Value: with})
+
+		text, err := yamledit.Mapping(pairs)
+		if err != nil {
+			return http.StatusUnprocessableEntity, fail("%v", err)
+		}
+		out, err := yamledit.InsertItem(data, []any{"steps"}, at, text)
+		if err != nil {
+			return http.StatusUnprocessableEntity, fail("%v", err)
+		}
+		return s.save(i, out, fmt.Sprintf("step %s added, using %s", add.ID, add.Use))
 	}
-	return http.StatusUnprocessableEntity, f
+
+	at := position(req.Remove)
+	if at < 0 {
+		return http.StatusUnprocessableEntity, fail("there is no step %s to remove", req.Remove)
+	}
+	out, err := yamledit.RemoveItem(data, []any{"steps"}, at)
+	if err != nil {
+		return http.StatusUnprocessableEntity, fail("%v", err)
+	}
+	return s.save(i, out, fmt.Sprintf("step %s removed", req.Remove))
+}
+
+// written is how a value typed into the page is put in the file for an input
+// of the given type: a number or a yes/no as such, anything else as text,
+// which may be an expression.
+func written(text, kind string) any {
+	switch kind {
+	case "number":
+		if n, err := strconv.Atoi(text); err == nil {
+			return n
+		}
+		if f, err := strconv.ParseFloat(text, 64); err == nil {
+			return f
+		}
+	case "boolean":
+		if b, err := strconv.ParseBool(text); err == nil && (text == "true" || text == "false") {
+			return b
+		}
+	}
+	return text
+}
+
+// componentView is a component that a step can be added from.
+type componentView struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	Use         string      `json:"use"`  // how a step of the workflow names it
+	Kind        string      `json:"kind"` // what it does: "ai", "decide" or "http"
+	Inputs      []inputView `json:"inputs"`
+}
+
+type inputView struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// catalogue lists the components in the workflow's folder, which are those
+// its steps can use.
+func catalogue(w *workflow.Workflow) []componentView {
+	dir := filepath.Dir(w.Path)
+	views := []componentView{}
+	for _, c := range workflow.ComponentsIn(dir) {
+		use, err := filepath.Rel(dir, filepath.Dir(c.Path))
+		if err != nil {
+			continue
+		}
+		view := componentView{
+			Name: c.Name, Description: c.Description, Use: filepath.ToSlash(use), Kind: c.Kind(),
+			Inputs: []inputView{},
+		}
+		for _, p := range c.Input {
+			view.Inputs = append(view.Inputs, inputView{p.Name, p.Type})
+		}
+		views = append(views, view)
+	}
+	return views
 }
 
 // pathKey writes a path as text, to compare paths and to name them in the log.

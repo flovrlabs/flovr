@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -373,35 +374,9 @@ func trailingComment(text string, nodes ...*yaml.Node) string {
 // verify reads the edited document back and checks that it differs from the
 // original in the edited value alone, and that no comment was lost.
 func verify(before, after []byte, e Edit) error {
-	var was, is yaml.Node
-	var want, got any
-	if err := yaml.Unmarshal(before, &was); err != nil {
-		return err
-	}
-	if err := yaml.Unmarshal(after, &is); err != nil {
-		return errInPlace
-	}
-	if was.Decode(&want) != nil || is.Decode(&got) != nil {
-		return errInPlace
-	}
-	want, ok := change(plain(want), e.Path, e.Value, e.Remove)
-	a, errA := json.Marshal(want)
-	b, errB := json.Marshal(plain(got))
-	if !ok || errA != nil || errB != nil || !bytes.Equal(a, b) {
-		return errInPlace
-	}
-
-	if !e.Remove {
-		had, has := map[string]int{}, map[string]int{}
-		comments(&was, had)
-		comments(&is, has)
-		for c, n := range had {
-			if has[c] < n {
-				return errInPlace
-			}
-		}
-	}
-	return nil
+	return check(before, after, func(root any) (any, bool) {
+		return change(root, e.Path, e.Value, e.Remove)
+	}, !e.Remove)
 }
 
 // plain turns the maps a YAML decoder produces into ones with string keys.
@@ -487,4 +462,296 @@ func pathString(path []any) string {
 		}
 	}
 	return sb.String()
+}
+
+// InsertItem returns src with a new item in the list at path. The item is
+// given as the text of its mapping, written from the first column, and
+// becomes the item at position at, counted from 0; the items from there on
+// move down. Items of a list that are set apart by blank lines stay so.
+func InsertItem(src []byte, path []any, at int, item string) ([]byte, error) {
+	out, err := insertItem(src, path, at, item)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", pathString(path), err)
+	}
+	return out, nil
+}
+
+// RemoveItem returns src without the item at position at of the list at path,
+// and without the comment lines directly above it, which describe it.
+func RemoveItem(src []byte, path []any, at int) ([]byte, error) {
+	out, err := removeItem(src, path, at)
+	if err != nil {
+		return nil, fmt.Errorf("%s[%d]: %w", pathString(path), at, err)
+	}
+	return out, nil
+}
+
+// list finds the list at path and checks that its items can be told apart by
+// line: it is written in indented form, one item starting per "- ".
+func list(src []byte, path []any) (*yaml.Node, []line, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(src, &doc); err != nil {
+		return nil, nil, err
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil, errors.New("the document is empty")
+	}
+	seq, err := find(doc.Content[0], path)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch {
+	case seq.Kind != yaml.SequenceNode:
+		return nil, nil, errors.New("is not a list")
+	case seq.Style&yaml.FlowStyle != 0:
+		return nil, nil, errors.New("is written inline as [...], which " + errInPlace.Error())
+	case len(seq.Content) == 0:
+		return nil, nil, errors.New("is empty, which " + errInPlace.Error())
+	}
+	lines := split(src)
+	for _, it := range seq.Content {
+		if _, ok := dash(lines, it); !ok {
+			return nil, nil, errInPlace
+		}
+	}
+	return seq, lines, nil
+}
+
+// dash returns the column of the "- " that starts the list item it, which
+// must stand on the line the item's content starts on.
+func dash(lines []line, it *yaml.Node) (int, bool) {
+	col := it.Column - 1
+	if it.Line < 1 || it.Line > len(lines) || col < 2 || col > len(lines[it.Line-1].text) {
+		return 0, false
+	}
+	before := lines[it.Line-1].text[:col]
+	if !strings.HasSuffix(before, "- ") || !blank(before[:len(before)-2]) {
+		return 0, false
+	}
+	return len(before) - 2, true
+}
+
+// itemExtent returns the lines [start, end) of a list item: the line of its
+// "- " and the more deeply indented lines after it, without the blank lines
+// that follow, and with the comment lines directly above it.
+func itemExtent(lines []line, it *yaml.Node) (start, end int) {
+	depth, _ := dash(lines, it)
+	start = it.Line - 1
+	for end = start + 1; end < len(lines); end++ {
+		if text := lines[end].text; !blank(text) && indent(text) <= depth {
+			break
+		}
+	}
+	for end > start+1 && blank(lines[end-1].text) {
+		end--
+	}
+	for start > 0 {
+		above := lines[start-1].text
+		if indent(above) != depth || !strings.HasPrefix(above[depth:], "#") {
+			break
+		}
+		start--
+	}
+	return start, end
+}
+
+func insertItem(src []byte, path []any, at int, item string) ([]byte, error) {
+	seq, lines, err := list(src, path)
+	if err != nil {
+		return nil, err
+	}
+	if at < 0 || at > len(seq.Content) {
+		return nil, fmt.Errorf("has no position %d", at)
+	}
+	var value any
+	if err := yaml.Unmarshal([]byte(item), &value); err != nil {
+		return nil, fmt.Errorf("the new item is not valid: %w", err)
+	}
+	if _, ok := plain(value).(map[string]any); !ok {
+		return nil, errors.New("the new item must be a mapping")
+	}
+
+	depth, _ := dash(lines, seq.Content[0])
+	var entry []string
+	for i, text := range strings.Split(strings.TrimRight(item, "\n"), "\n") {
+		switch {
+		case i == 0:
+			text = strings.Repeat(" ", depth) + "- " + text
+		case !blank(text):
+			text = strings.Repeat(" ", depth+2) + text
+		}
+		entry = append(entry, text)
+	}
+
+	// Items set apart by blank lines get one between the new item and its
+	// neighbour too. A list of one item is taken to be such a list if a
+	// blank line follows it.
+	apart := false
+	for i := range seq.Content {
+		if i+1 < len(seq.Content) || len(seq.Content) == 1 {
+			_, end := itemExtent(lines, seq.Content[i])
+			apart = apart || end < len(lines) && blank(lines[end].text)
+		}
+	}
+	var pos int
+	if at == len(seq.Content) {
+		_, pos = itemExtent(lines, seq.Content[at-1])
+		if apart {
+			entry = append([]string{""}, entry...)
+		}
+	} else {
+		pos, _ = itemExtent(lines, seq.Content[at])
+		if apart {
+			entry = append(entry, "")
+		}
+	}
+	out := join(splice(lines, pos, pos, entry))
+
+	return out, check(src, out, func(root any) (any, bool) {
+		return changeList(root, path, func(items []any) []any {
+			return slices.Insert(slices.Clone(items), at, plain(value))
+		})
+	}, true)
+}
+
+func removeItem(src []byte, path []any, at int) ([]byte, error) {
+	seq, lines, err := list(src, path)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case at < 0 || at >= len(seq.Content):
+		return nil, errors.New("there is no such item")
+	case len(seq.Content) == 1:
+		return nil, errors.New("is the only item of its list, so it cannot be removed")
+	}
+	start, end := itemExtent(lines, seq.Content[at])
+	// The blank line that set the item apart goes with it: the one after it,
+	// so that the next item takes its place, or for the last item the one
+	// before, so that what follows the list keeps its distance.
+	if at == len(seq.Content)-1 {
+		if start > 0 && blank(lines[start-1].text) {
+			start--
+		}
+	} else if end < len(lines) && blank(lines[end].text) {
+		end++
+	}
+	out := join(splice(lines, start, end, nil))
+
+	return out, check(src, out, func(root any) (any, bool) {
+		return changeList(root, path, func(items []any) []any {
+			return slices.Delete(slices.Clone(items), at, at+1)
+		})
+	}, false)
+}
+
+// changeList makes a change to the list at path of a decoded document. It
+// reports false if the path does not lead to a list.
+func changeList(root any, path []any, change func([]any) []any) (any, bool) {
+	if len(path) == 0 {
+		items, ok := root.([]any)
+		if !ok {
+			return nil, false
+		}
+		return change(items), true
+	}
+	switch p := path[0].(type) {
+	case string:
+		m, ok := root.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		child, ok := changeList(m[p], path[1:], change)
+		if ok {
+			m[p] = child
+		}
+		return m, ok
+	case int:
+		l, ok := root.([]any)
+		if !ok || p < 0 || p >= len(l) {
+			return nil, false
+		}
+		child, ok := changeList(l[p], path[1:], change)
+		if ok {
+			l[p] = child
+		}
+		return l, ok
+	}
+	return nil, false
+}
+
+// check reads an edited document back and compares it with what the change
+// should have made of the original. With keepComments it also checks that no
+// comment was lost.
+func check(before, after []byte, change func(root any) (any, bool), keepComments bool) error {
+	var was, is yaml.Node
+	var want, got any
+	if err := yaml.Unmarshal(before, &was); err != nil {
+		return err
+	}
+	if err := yaml.Unmarshal(after, &is); err != nil {
+		return errInPlace
+	}
+	if was.Decode(&want) != nil || is.Decode(&got) != nil {
+		return errInPlace
+	}
+	want, ok := change(plain(want))
+	a, errA := json.Marshal(want)
+	b, errB := json.Marshal(plain(got))
+	if !ok || errA != nil || errB != nil || !bytes.Equal(a, b) {
+		return errInPlace
+	}
+	if keepComments {
+		had, has := map[string]int{}, map[string]int{}
+		comments(&was, had)
+		comments(&is, has)
+		for c, n := range had {
+			if has[c] < n {
+				return errInPlace
+			}
+		}
+	}
+	return nil
+}
+
+// Pair is one "key: value" of a mapping to be written. The value is a string,
+// bool, number or nil, or a []Pair holding a mapping below it.
+type Pair struct {
+	Key   string
+	Value any
+}
+
+// Mapping writes pairs as the text of a mapping, from the first column and
+// in the order given, as InsertItem takes it.
+func Mapping(pairs []Pair) (string, error) {
+	lines, err := mapping(pairs, 0)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(lines, "\n") + "\n", nil
+}
+
+func mapping(pairs []Pair, depth int) ([]string, error) {
+	var lines []string
+	pad := strings.Repeat(" ", depth)
+	for _, p := range pairs {
+		if below, ok := p.Value.([]Pair); ok {
+			inner, err := mapping(below, depth+2)
+			if err != nil {
+				return nil, err
+			}
+			if len(inner) == 0 {
+				lines = append(lines, pad+scalar(p.Key, 0)+": {}")
+				continue
+			}
+			lines = append(append(lines, pad+scalar(p.Key, 0)+":"), inner...)
+			continue
+		}
+		entry, err := render(pad, p.Key, 0, p.Value, 0, depth)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", p.Key, err)
+		}
+		lines = append(lines, entry...)
+	}
+	return lines, nil
 }

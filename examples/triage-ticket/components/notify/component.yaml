@@ -1,6 +1,7 @@
 # Tells a team about an urgent ticket. Every team is told the same way, so
 # the workflow uses this once per team instead of repeating the request.
 name: notify
+description: Tells a team about an urgent ticket by sending it a summary.
 
 input:
   url: string

@@ -368,3 +368,215 @@ func TestApplyOnEveryValueOfTheExample(t *testing.T) {
 		}
 	}
 }
+
+const steps = `name: x
+
+steps:
+  # First.
+  - id: a
+    http:
+      method: GET
+      url: http://a
+
+  # Second,
+  # in two lines.
+  - id: b
+    when: a.status == 200
+    http: {method: GET, url: "http://b"}
+
+  - id: c
+    use: components/notify
+    with:
+      text: |
+        Two
+
+        paragraphs.
+
+# After the list.
+tests: []
+`
+
+const added = "id: new\nuse: components/notify\nwith:\n  text: hello\n"
+
+func TestInsertItem(t *testing.T) {
+	tests := []struct {
+		name string
+		at   int
+		old  string // what the new lines are put in place of
+		new  string
+	}{
+		{"last", 3,
+			"        paragraphs.\n\n# After",
+			"        paragraphs.\n\n  - id: new\n    use: components/notify\n    with:\n      text: hello\n\n# After"},
+		{"between, above the comment of what follows", 1,
+			"      url: http://a\n\n  # Second,",
+			"      url: http://a\n\n  - id: new\n    use: components/notify\n    with:\n      text: hello\n\n  # Second,"},
+		{"first", 0,
+			"steps:\n  # First.",
+			"steps:\n  - id: new\n    use: components/notify\n    with:\n      text: hello\n\n  # First."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := InsertItem([]byte(steps), []any{"steps"}, tt.at, added)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := strings.Replace(steps, tt.old, tt.new, 1); string(out) != want {
+				t.Errorf("got:\n%s\nwant:\n%s", out, want)
+			}
+			// Taking it out again leaves the file as it was.
+			back, err := RemoveItem(out, []any{"steps"}, tt.at)
+			if err != nil || string(back) != steps {
+				t.Errorf("after removing it again (%v):\n%s", err, back)
+			}
+		})
+	}
+}
+
+func TestRemoveItem(t *testing.T) {
+	tests := []struct {
+		name string
+		at   int
+		old  string
+		new  string
+	}{
+		{"first, with its comment", 0,
+			"steps:\n  # First.\n  - id: a\n    http:\n      method: GET\n      url: http://a\n\n", "steps:\n"},
+		{"between, with its comment of two lines", 1,
+			"      url: http://a\n\n  # Second,\n  # in two lines.\n  - id: b\n    when: a.status == 200\n    http: {method: GET, url: \"http://b\"}\n", "      url: http://a\n"},
+		{"last, keeping what follows at its distance", 2,
+			"\n  - id: c\n    use: components/notify\n    with:\n      text: |\n        Two\n\n        paragraphs.\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(steps, tt.old) {
+				t.Fatalf("the document does not contain %q", tt.old)
+			}
+			out, err := RemoveItem([]byte(steps), []any{"steps"}, tt.at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := strings.Replace(steps, tt.old, tt.new, 1); string(out) != want {
+				t.Errorf("got:\n%s\nwant:\n%s", out, want)
+			}
+		})
+	}
+}
+
+func TestItemsOfAListWrittenTightStayTight(t *testing.T) {
+	src := "a:\n  list:\n  - id: one\n    v: 1\n  - id: two\nb: 2\n"
+	out, err := InsertItem([]byte(src), []any{"a", "list"}, 1, "id: new\nv: x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "a:\n  list:\n  - id: one\n    v: 1\n  - id: new\n    v: x\n  - id: two\nb: 2\n"; string(out) != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+	out, err = InsertItem([]byte(src), []any{"a", "list"}, 2, "id: new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "a:\n  list:\n  - id: one\n    v: 1\n  - id: two\n  - id: new\nb: 2\n"; string(out) != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+	out, err = RemoveItem([]byte(src), []any{"a", "list"}, 0)
+	if err != nil || string(out) != "a:\n  list:\n  - id: two\nb: 2\n" {
+		t.Errorf("after removing the first: %q, %v", out, err)
+	}
+}
+
+func TestItemsAreRefusedWhereTheyCannotBeChangedInPlace(t *testing.T) {
+	tests := []struct {
+		name string
+		do   func() ([]byte, error)
+		want string
+	}{
+		{"an inline list", func() ([]byte, error) { return InsertItem([]byte("a: [{b: 1}]\n"), []any{"a"}, 0, "b: 2") }, "written inline"},
+		{"not a list", func() ([]byte, error) { return InsertItem([]byte(steps), []any{"name"}, 0, "b: 2") }, "is not a list"},
+		{"no such list", func() ([]byte, error) { return InsertItem([]byte(steps), []any{"other"}, 0, "b: 2") }, "there is no other"},
+		{"a position beyond the end", func() ([]byte, error) { return InsertItem([]byte(steps), []any{"steps"}, 4, added) }, "has no position 4"},
+		{"an item that is not a mapping", func() ([]byte, error) { return InsertItem([]byte(steps), []any{"steps"}, 0, "just text") }, "must be a mapping"},
+		{"an item that is not YAML", func() ([]byte, error) { return InsertItem([]byte(steps), []any{"steps"}, 0, "a: [") }, "is not valid"},
+		{"an empty list", func() ([]byte, error) { return InsertItem([]byte(steps), []any{"tests"}, 0, "b: 2") }, "written inline"},
+		{"removing what is not there", func() ([]byte, error) { return RemoveItem([]byte(steps), []any{"steps"}, 3) }, "no such item"},
+		{"removing the only item", func() ([]byte, error) { return RemoveItem([]byte("a:\n  - b: 1\n"), []any{"a"}, 0) }, "only item"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := tt.do()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want one containing %q; output:\n%s", err, tt.want, out)
+			}
+		})
+	}
+}
+
+// Steps can be added to and taken from both examples with nothing else moving.
+func TestItemsOnTheExamples(t *testing.T) {
+	for _, file := range []string{"../../examples/triage-ticket/workflow.yaml", "../../examples/moderate-comment/workflow.yaml"} {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct{ Steps []any }
+		if err := yaml.Unmarshal(src, &doc); err != nil {
+			t.Fatal(err)
+		}
+		for at := 0; at <= len(doc.Steps); at++ {
+			out, err := InsertItem(src, []any{"steps"}, at, added)
+			if err != nil {
+				t.Errorf("%s: inserting at %d: %v", file, at, err)
+				continue
+			}
+			if got, removed := changed(string(src), string(out)); len(removed) != 0 || len(got) != 5 {
+				t.Errorf("%s: inserting at %d added %d lines and removed %d, want 5 and 0:\n%s", file, at, len(got), len(removed), strings.Join(got, "\n"))
+			}
+			if back, err := RemoveItem(out, []any{"steps"}, at); err != nil || string(back) != string(src) {
+				t.Errorf("%s: removing what was inserted at %d does not restore the file (%v)", file, at, err)
+			}
+		}
+	}
+}
+
+func TestMapping(t *testing.T) {
+	text, err := Mapping([]Pair{
+		{"id", "tell"},
+		{"when", `!(a.status == 200)`},
+		{"use", "components/notify"},
+		{"with", []Pair{
+			{"url", "${env.TEAM_URL}"},
+			{"count", 3},
+			{"urgent", true},
+			{"text", "First line.\nSecond: with a colon."},
+			{"long", strings.Repeat("many words ", 20) + "end"},
+			{"nothing", []Pair{}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `id: tell
+when: '!(a.status == 200)'
+use: components/notify
+with:
+  url: ${env.TEAM_URL}
+  count: 3
+  urgent: true
+  text: |-
+    First line.
+    Second: with a colon.
+  long: ` + strings.Repeat("many words ", 20) + `end
+  nothing: {}
+`
+	if text != want {
+		t.Errorf("got:\n%s\nwant:\n%s", text, want)
+	}
+	// What it writes goes into a list as it is.
+	out, err := InsertItem([]byte(steps), []any{"steps"}, 3, text)
+	if err != nil || !strings.Contains(string(out), "  - id: tell\n    when: '!(a.status == 200)'\n    use: components/notify\n    with:\n      url: ${env.TEAM_URL}\n") {
+		t.Errorf("inserted (%v):\n%s", err, out)
+	}
+	if _, err := Mapping([]Pair{{"a", []string{"x"}}}); err == nil {
+		t.Error("a value that cannot be written was accepted")
+	}
+}
