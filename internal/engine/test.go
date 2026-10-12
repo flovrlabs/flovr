@@ -21,6 +21,19 @@ type TestResult struct {
 	Failures []string // why the test failed; empty if it passed
 	Steps    []StepResult
 	Duration time.Duration
+
+	// Checks holds every expectation of the test, met or not, in the order
+	// of their keys. It is empty if the run failed before they were looked at.
+	Checks []Check
+	// Response is what the workflow answered, if it has respond.
+	Response *Response
+}
+
+// Check is one thing a test expects and, if the run did not meet it, how.
+type Check struct {
+	Key     string `json:"key"`
+	Want    any    `json:"want"`
+	Failure string `json:"failure,omitempty"`
 }
 
 // Test runs the workflow with t's fixture as the trigger and compares the
@@ -52,7 +65,12 @@ func (e *Engine) Test(ctx context.Context, w *workflow.Workflow, t workflow.Test
 		Model:    e.Model,
 		Env:      env,
 		StubHTTP: true,
-		OnStep:   func(r StepResult) { res.Steps = append(res.Steps, r) },
+		OnStep: func(r StepResult) {
+			res.Steps = append(res.Steps, r)
+			if e.OnStep != nil {
+				e.OnStep(r)
+			}
+		},
 	}
 
 	start := time.Now()
@@ -79,8 +97,21 @@ func (e *Engine) Test(ctx context.Context, w *workflow.Workflow, t workflow.Test
 	if resp != nil {
 		given = append(given, "response")
 	}
-	res.Failures, err = unmet(t.Expect, res.Steps, vars, given...)
+	res.Response = resp
+	res.Checks, err = check(t.Expect, res.Steps, vars, given...)
+	res.Failures = failures(res.Checks)
 	return res, err
+}
+
+// failures lists how the checks that were not met failed.
+func failures(checks []Check) []string {
+	var out []string
+	for _, c := range checks {
+		if c.Failure != "" {
+			out = append(out, c.Failure)
+		}
+	}
+	return out
 }
 
 // TestComponent runs the component on its own with t's input and compares
@@ -126,13 +157,14 @@ func (e *Engine) TestComponent(ctx context.Context, c *workflow.Component, t wor
 	// Expectations see the input, the output and, of a component made of
 	// steps, each step.
 	vars["output"] = step.Output
-	res.Failures, err = unmet(t.Expect, step.Steps, vars, "input", "output")
+	res.Checks, err = check(t.Expect, step.Steps, vars, "input", "output")
+	res.Failures = failures(res.Checks)
 	return res, err
 }
 
-// unmet lists the expectations that the finished run does not meet. given
-// names what expressions can read besides the steps.
-func unmet(expect map[string]any, steps []StepResult, vars map[string]any, given ...string) ([]string, error) {
+// check holds the finished run against each expectation. given names what
+// expressions can read besides the steps.
+func check(expect map[string]any, steps []StepResult, vars map[string]any, given ...string) ([]Check, error) {
 	status := map[string]Status{}
 	names := slices.Clone(given)
 	for _, s := range steps {
@@ -144,18 +176,19 @@ func unmet(expect map[string]any, steps []StepResult, vars map[string]any, given
 		return nil, err
 	}
 
-	var failures []string
+	var checks []Check
 	for _, key := range slices.Sorted(maps.Keys(expect)) {
-		want := expect[key]
+		c := Check{Key: key, Want: expect[key]}
 
 		if st, isStep := status[key]; isStep {
 			got := workflow.Called
 			if st == Skipped {
 				got = workflow.Skipped
 			}
-			if got != want {
-				failures = append(failures, fmt.Sprintf("%s: expected %v, but it was %s", key, want, got))
+			if got != c.Want {
+				c.Failure = fmt.Sprintf("%s: expected %v, but it was %s", key, c.Want, got)
 			}
+			checks = append(checks, c)
 			continue
 		}
 
@@ -164,12 +197,13 @@ func unmet(expect map[string]any, steps []StepResult, vars map[string]any, given
 			if id, _, _ := strings.Cut(key, "."); status[id] == Skipped {
 				err = fmt.Errorf("step %q was skipped", id)
 			}
-			failures = append(failures, fmt.Sprintf("%s: %v", key, err))
-		} else if g, w := jsonText(got), jsonText(want); g != w {
-			failures = append(failures, fmt.Sprintf("%s: expected %s, got %s", key, w, g))
+			c.Failure = fmt.Sprintf("%s: %v", key, err)
+		} else if g, w := jsonText(got), jsonText(c.Want); g != w {
+			c.Failure = fmt.Sprintf("%s: expected %s, got %s", key, w, g)
 		}
+		checks = append(checks, c)
 	}
-	return failures, nil
+	return checks, nil
 }
 
 // jsonText renders v as JSON, which gives values that came from YAML and

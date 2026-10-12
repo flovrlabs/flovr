@@ -80,6 +80,12 @@ type Run struct {
 	// Response is what the caller was answered with, for a workflow that
 	// has respond.
 	Response *engine.Response `json:"response,omitempty"`
+
+	// For a run that is one of the workflow's tests, started from the page:
+	// the test's name and what it expected, each with how the run failed to
+	// meet it, if it did. Such a run sends none of its http steps.
+	Test   string         `json:"test,omitempty"`
+	Checks []engine.Check `json:"checks,omitempty"`
 }
 
 type Step struct {

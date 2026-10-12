@@ -19,7 +19,7 @@ var ui embed.FS
 // page serves the web page and the JSON it shows and, if the server allows
 // editing, takes the changes the page makes.
 func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
-	if s.opts.Edit && r.Method == http.MethodPost && slices.Contains([]string{"/api/edit", "/api/steps", "/api/prompt"}, r.URL.Path) {
+	if s.opts.Edit && r.Method == http.MethodPost && slices.Contains([]string{"/api/edit", "/api/steps", "/api/prompt", "/api/test"}, r.URL.Path) {
 		s.change(rw, r)
 		return
 	}
@@ -122,6 +122,37 @@ type workflowView struct {
 	// Components are those a step can be added from: the ones in the
 	// workflow's folder.
 	Components []componentView `json:"components,omitempty"`
+
+	// Cases are the workflow's tests, which the page can start.
+	Cases []caseView `json:"cases,omitempty"`
+}
+
+// caseView is one of a workflow's tests.
+type caseView struct {
+	Name    string       `json:"name"`
+	Fixture string       `json:"fixture"`
+	Expect  []expectView `json:"expect"` // ordered by key
+}
+
+type expectView struct {
+	Key  string `json:"key"`
+	Want any    `json:"want"`
+}
+
+// cases describes the tests of a workflow.
+func cases(w *workflow.Workflow) []caseView {
+	var views []caseView
+	for _, t := range w.Tests {
+		view := caseView{Name: t.Name, Fixture: t.Fixture, Expect: []expectView{}}
+		if view.Name == "" {
+			view.Name = t.Fixture
+		}
+		for _, key := range slices.Sorted(maps.Keys(t.Expect)) {
+			view.Expect = append(view.Expect, expectView{key, t.Expect[key]})
+		}
+		views = append(views, view)
+	}
+	return views
 }
 
 type stepView struct {
@@ -230,7 +261,7 @@ func (s *Server) view(w *workflow.Workflow) workflowView {
 		return view
 	}
 	view.Rev, view.Problem = src.rev, src.problem
-	view.Components = catalogue(w)
+	view.Components, view.Cases = catalogue(w), cases(w)
 	return view
 }
 
