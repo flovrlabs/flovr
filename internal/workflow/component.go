@@ -298,6 +298,12 @@ func (c *checker) component(comp *Component) {
 	for _, name := range undeclared {
 		c.addf(c.line(comp.Kind()), "%s: reads input.%s, which is not listed under input", label, name)
 	}
+	// Reading a field of an input that is a single value is a mistake too.
+	// An input that is not listed was reported just above.
+	given := inputShape(comp.Input)
+	given.open = true
+	c.shapes = map[string]*shape{"input": given, "output": outputShape(c.path, comp.AI, comp.Decide, comp.HTTP)}
+	c.reads(c.line(comp.Kind()), label, placeholders(comp.AI, comp.Decide, comp.HTTP), map[string]*shape{"input": given})
 
 	results, err := expr.Vars("input", "output")
 	if err != nil {
@@ -320,8 +326,11 @@ func (c *checker) component(comp *Component) {
 			c.addf(at, "%s: input: %v", label, err)
 		}
 		for key := range t.Expect {
+			at := c.line("tests", i, "expect", key)
 			if err := results.CheckExpr(key); err != nil {
-				c.addf(c.line("tests", i, "expect", key), "%s: expect.%s: %v", label, key, err)
+				c.addf(at, "%s: expect.%s: %v", label, key, err)
+			} else {
+				c.reads(at, label+": expect", []string{key}, c.shapes)
 			}
 		}
 	}

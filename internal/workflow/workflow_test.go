@@ -470,3 +470,25 @@ func TestDiscover(t *testing.T) {
 		t.Errorf("Discover with an invalid workflow: error = %v, want its problems", err)
 	}
 }
+
+// A folder may have a name that would mean something else in a URL.
+func TestSchemaInAFolderWithAnOddName(t *testing.T) {
+	for _, name := range []string{"plain", "with space", "issue #12", "50% off", "a?b"} {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "s.json"), []byte(`{"type": "object", "required": ["a"]}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		w := &Workflow{Path: filepath.Join(dir, FileName)}
+		schema, doc, err := w.Schema("s.json")
+		if err != nil || doc["type"] != "object" {
+			t.Errorf("%q: %v", name, err)
+			continue
+		}
+		if err := schema.Validate(map[string]any{}); err == nil {
+			t.Errorf("%q: the schema does not check what it should", name)
+		}
+	}
+}

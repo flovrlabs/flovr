@@ -69,7 +69,7 @@ tests:
     input: case.json
     expect:
       output.summary: Something else.
-      output.missing.field: x
+      input.audience: engineers
 `,
 	"components/summarize/prompt.md":   "Summarize the ticket for its audience.",
 	"components/summarize/schema.json": `{"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}`,
@@ -191,7 +191,7 @@ func TestComponentIsTestedOnItsOwn(t *testing.T) {
 	}
 	res, err = eng.TestComponent(context.Background(), summarize, summarize.Tests[1])
 	want := []string{
-		"output.missing.field: no such key: missing",
+		`input.audience: expected "engineers", got "support"`,
 		`output.summary: expected "Something else.", got "Dashboard is down."`,
 	}
 	if err != nil || !reflect.DeepEqual(res.Failures, want) {

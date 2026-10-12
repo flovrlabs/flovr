@@ -30,6 +30,7 @@ type checker struct {
 	items []Problem
 
 	components map[string]*Component // those loaded so far, by path
+	shapes     map[string]*shape     // what is known of the values expressions read, by name
 }
 
 func (c *checker) addf(line int, format string, args ...any) {
@@ -51,6 +52,14 @@ func (c *checker) run() {
 	c.trigger()
 	if len(w.Steps) == 0 {
 		c.addf(c.line("steps"), "at least one step is required")
+	}
+
+	// What a request body must match says what steps can read from it.
+	c.shapes = map[string]*shape{}
+	if t := w.Trigger; t != nil && t.Input != "" {
+		if _, doc, err := loadSchema(c.path, t.Input); err == nil {
+			c.shapes["trigger"] = &shape{open: true, fields: map[string]*shape{"body": schemaShape(doc, false)}}
+		}
 	}
 
 	// ids holds the steps a later step may refer to.
@@ -108,8 +117,14 @@ func (c *checker) run() {
 			c.addf(c.under(base, "with"), "%s: with is only for a step that has use", label)
 		}
 
+		c.reads(line, label, s.expressions(), c.shapes)
 		if usable {
 			ids = append(ids, s.ID)
+			if comp := w.Steps[i].component; comp != nil {
+				c.shapes[s.ID] = outputShape(comp.Path, comp.AI, comp.Decide, comp.HTTP)
+			} else {
+				c.shapes[s.ID] = outputShape(c.path, s.AI, s.Decide, s.HTTP)
+			}
 		}
 	}
 	c.respond(ids)
@@ -142,6 +157,8 @@ func (c *checker) respond(ids []string) {
 	if err := env.Check(r.Body); err != nil {
 		c.addf(c.line("respond", "body"), "respond: body: %v", err)
 	}
+	c.reads(c.line("respond"), "respond", r.expressions(), c.shapes)
+	c.shapes["response"] = responseShape(r)
 }
 
 func (c *checker) trigger() {
@@ -351,6 +368,8 @@ func (c *checker) tests(ids []string) {
 				}
 			} else if err := env.CheckExpr(key); err != nil {
 				c.addf(at, "%s: expect.%s: %v", label, key, err)
+			} else {
+				c.reads(at, label+": expect", []string{key}, c.shapes)
 			}
 		}
 	}

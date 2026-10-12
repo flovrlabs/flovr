@@ -46,7 +46,7 @@ tests:
     fixture: ok.json
     expect:
       response.status: 200
-      response.body.reason: spam
+      response.body.reported: true
 `,
 	"comment.json": `{"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}`,
 	"ok.json":      `{"body": {"text": "Nice work.", "author": "dana"}}`,
@@ -138,7 +138,7 @@ func TestTestsCanExpectThingsOfTheResponse(t *testing.T) {
 	}
 	res, err = eng.Test(context.Background(), w, w.Tests[1])
 	want := []string{
-		"response.body.reason: no such key: reason",
+		"response.body.reported: expected true, got false",
 		"response.status: expected 200, got 201",
 	}
 	if err != nil || !reflect.DeepEqual(res.Failures, want) {

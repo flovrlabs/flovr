@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -295,7 +296,10 @@ func loadSchema(file, rel string) (*jsonschema.Schema, map[string]any, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	compiled, err := jsonschema.NewCompiler().Compile(abs)
+	// The compiler takes a location, in which a # or a space in a folder's
+	// name would mean something else unless it is written as a URL.
+	location := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	compiled, err := jsonschema.NewCompiler().Compile(location.String())
 	if err != nil {
 		return nil, nil, err
 	}

@@ -343,3 +343,22 @@ func closing(src string, from int) int {
 	}
 	return -1
 }
+
+// Reads returns, for each place the bare expression src reads fields of a
+// named value, that name followed by the fields: ["classify", "priority",
+// "value"] for classify.priority.value. A chain of fields is also listed
+// by each of its beginnings.
+func Reads(src string) [][]string {
+	var paths [][]string
+	visit(src, func(e celast.Expr) {
+		var fields []string
+		for e.Kind() == celast.SelectKind {
+			fields = append([]string{e.AsSelect().FieldName()}, fields...)
+			e = e.AsSelect().Operand()
+		}
+		if len(fields) > 0 && e.Kind() == celast.IdentKind {
+			paths = append(paths, append([]string{e.AsIdent()}, fields...))
+		}
+	})
+	return paths
+}

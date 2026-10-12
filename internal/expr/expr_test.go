@@ -147,3 +147,27 @@ func TestCondition(t *testing.T) {
 		t.Error("EvalCondition accepted a non-bool result")
 	}
 }
+
+func TestReads(t *testing.T) {
+	tests := map[string][]string{
+		`classify.priority.value == "high"`:               {"classify.priority.value", "classify.priority"},
+		`a.x > 1 && !(b.y.z in ["p", "q"])`:               {"a.x", "b.y.z", "b.y"},
+		`has(summarize.summary) ? summarize.summary : ""`: {"summarize.summary", "summarize.summary"},
+		`trigger.body.items.exists(i, i.price > env.MAX)`: {"trigger.body.items", "trigger.body", "i.price", "env.MAX"},
+		`a.list[0].name + a.map["key"].name`:              {"a.list", "a.map"},
+		`a == b`:                                          nil,
+		`size(a.items) > 0`:                               {"a.items"},
+		`not an expression (`:                             nil,
+	}
+	for src, want := range tests {
+		var got []string
+		for _, path := range Reads(src) {
+			got = append(got, strings.Join(path, "."))
+		}
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("Reads(%q) = %v, want %v", src, got, want)
+		}
+	}
+}
