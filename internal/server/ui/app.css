@@ -36,6 +36,8 @@
   --ai-soft: var(--sunken);
   --http: var(--text);
   --http-soft: var(--sunken);
+  --flow: var(--text);
+  --flow-soft: var(--sunken);
   --response: var(--text);
   --response-soft: var(--sunken);
   --code-bg: #f3f3f6;
@@ -397,6 +399,7 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .kind-decide { --kind: var(--decide); --kind-soft: var(--decide-soft); }
 .kind-ai { --kind: var(--ai); --kind-soft: var(--ai-soft); }
 .kind-http { --kind: var(--http); --kind-soft: var(--http-soft); }
+.kind-flow { --kind: var(--flow); --kind-soft: var(--flow-soft); }
 .kind-response { --kind: var(--response); --kind-soft: var(--response-soft); }
 .kind-workflow { --kind: var(--accent); --kind-soft: var(--accent-soft); }
 
@@ -426,6 +429,12 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .shape path { fill: none; }
 .shape .bg { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; pointer-events: all; }
 .shape .sep { stroke: var(--border); stroke-width: 1; }
+.shape .bars { stroke: var(--faint); stroke-width: 1.5; stroke-linecap: round; }
+.card:hover .bars { stroke: var(--muted); }
+.card.skipped .bars, .card.pending .bars { opacity: 0.6; }
+.card.running .bars { stroke: var(--running); }
+.card.failed .bars { stroke: var(--failed); }
+.card[aria-pressed="true"] .bars { stroke: var(--accent); }
 .shape .halo { stroke: transparent; stroke-width: 11; }
 .shape .ring { stroke: transparent; stroke-width: 5; }
 .card:hover { transform: translateY(-1px); }
@@ -465,6 +474,8 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .card.shape-ai .head { padding: 0 14px 0 12px; }
 .card.shape-response .head { padding: 0 34px 0 21px; }
 .card.shape-response .foot { padding: 0 30px 0 24px; }
+.card.shape-flow .head { padding: 0 22px 0 22px; }
+.card.shape-flow .foot { padding: 0 20px; }
 .card.shape-http .head { padding: 0 26px 0 22px; }
 .card.shape-http .foot { padding: 0 24px 0 14px; }
 .card .head { display: flex; align-items: center; gap: 11px; flex: 1; min-height: 0; padding: 0 12px 0 11px; }
@@ -498,6 +509,26 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .card.failed .foot .took { color: var(--failed); }
 .card.skipped .foot .took, .card.pending .foot .took { color: var(--faint); font-weight: 500; }
 .card.skipped .head, .card.pending .head { opacity: 0.6; }
+
+/* The steps inside a flow step, as small icons joined in order. */
+.card .foot .pips { flex: 1; display: inline-flex; align-items: center; min-width: 0; }
+.pip {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--sunken);
+  color: var(--muted);
+}
+.pip.ok { border-color: var(--ok); color: var(--ok); }
+.pip.failed { border-color: var(--failed); background: var(--failed-soft); color: var(--failed); }
+.pip.skipped, .pip.pending { border-style: dashed; color: var(--faint); }
+.pip.running { border-color: var(--running); color: var(--running); }
+.pips .link { flex: none; width: 6px; height: 0; border-top: 1.5px solid var(--border-strong); }
+.pips .more { margin-left: 5px; color: var(--muted); font-weight: 650; }
 
 .tile {
   position: relative;
@@ -940,3 +971,60 @@ pre.diff:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; 
 .emptystate { margin: 0 0 14px; padding: 14px 15px; border: 1px dashed var(--border-strong); border-radius: 12px; background: var(--raised); }
 .emptystate .etitle { margin-bottom: 6px; font-size: 14px; font-weight: 650; }
 .emptystate p { overflow-wrap: anywhere; }
+
+/* ---- Flow steps: a component made of steps. ---- */
+
+/* The steps inside, in the details. */
+.inside { margin: 0; padding: 0; list-style: none; }
+.irow { position: relative; padding: 7px 0 7px 0; border-top: 1px solid var(--border); }
+.irow:first-child { border-top: 0; padding-top: 0; }
+.ihead {
+  display: grid;
+  grid-template-columns: auto 24px minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 2px 6px 2px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+}
+.ihead.plain { grid-template-columns: 24px minmax(0, 1fr) auto; padding-left: 4px; }
+button.ihead { cursor: pointer; }
+button.ihead:hover { background: var(--raised); }
+.ihead .mark { width: 16px; height: 16px; }
+.ihead .mark svg { width: 10px; height: 10px; }
+.ihead .tile.kt { width: 24px; height: 24px; }
+.iname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.itag { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.ims { color: var(--text); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ims.failed { color: var(--failed); }
+.ims.skipped, .ims.pending { color: var(--faint); }
+.ihead .chev { display: grid; place-items: center; color: var(--muted); transition: transform 0.15s; }
+.ihead[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.irow.skipped .tile, .irow.pending .tile, .irow.skipped .iname, .irow.pending .iname { opacity: 0.6; }
+.idetail { margin: 2px 6px 0 40px; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.idetail:not(.mono) { font-family: var(--sans); font-size: 12px; }
+.icond { display: flex; align-items: baseline; gap: 7px; margin: 3px 6px 0 40px; min-width: 0; font-size: 11.5px; }
+.icond b { flex: none; padding: 0 5px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font: 700 9.5px/16px var(--sans); letter-spacing: 0.06em; }
+.icond span { color: var(--accent); overflow-wrap: anywhere; }
+.irow pre.error { margin: 6px 0 0 40px; font-size: 11.5px; }
+.iout { margin: 6px 0 0 40px; }
+.iout pre { max-height: 240px; }
+
+/* Steps inside a flow step, nested under it in the step list and the timeline. */
+.outline li, .waterfall li { min-width: 0; }
+.nest { margin: 0 0 3px 17px; padding: 0 0 0 11px; border-left: 1.5px solid var(--border-strong); list-style: none; }
+.nest .nrow { display: grid; align-items: center; min-height: 22px; color: var(--muted); font-size: 12px; }
+.outline .nest .nrow { grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; padding: 1px 8px; }
+.outline .nest .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outline .nest .tag { color: var(--faint); font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.waterfall .nest .nrow { grid-template-columns: minmax(0, 76px) minmax(0, 1fr) 64px; gap: 8px; padding: 1px 8px 1px 0; }
+.waterfall .nest .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.waterfall .nest .lane { position: relative; height: 6px; border-radius: 3px; background: var(--sunken); }
+.waterfall .nest .lane.skipped, .waterfall .nest .lane.pending { background: none; border-top: 1px dashed var(--border-strong); height: 0; border-radius: 0; }
+.waterfall .nest .bar { height: 6px; border-radius: 3px; }
+
+.addform .flownote { margin: -4px 0 12px; }

@@ -24,6 +24,8 @@ const ICONS = {
   decide: ["M6 3v18", "M6 15c8 0 12-2 12-9", "M14.5 8.5 18 5l3.5 3.5"],
   ai: ["M11 4l1.9 5.1L18 11l-5.1 1.9L11 18l-1.9-5.1L4 11l5.1-1.9z", "M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"],
   http: ["M4 12h15", "M13 6l6 6-6 6"],
+  flow: ["M12 3.5 3.5 8 12 12.5 20.5 8z", "M3.5 12 12 16.5 20.5 12", "M3.5 16 12 20.5 20.5 16"],
+  chevron: ["M9 6l6 6-6 6"],
   workflow: ["M4 6h6v5H4z", "M14 13h6v5h-6z", "M10 8.5h3a2 2 0 0 1 2 2V13"],
   run: ["M7 4.5v15l12-7.5z"],
   ok: ["M5 12.5l4.5 4.5L19 7.5"],
@@ -41,15 +43,19 @@ const ICONS = {
   fit: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"],
 };
 
-const KIND_LABEL = { trigger: "Trigger", decide: "Decide", ai: "AI", http: "HTTP", response: "Response" };
+const KIND_LABEL = { trigger: "Trigger", decide: "Decide", ai: "AI", http: "HTTP", flow: "Flow", response: "Response" };
 const KIND_NAMES = {
   trigger: "Trigger: starts the workflow",
   decide: "Decision step: a model answers typed questions",
   ai: "AI step: a model writes structured output",
   http: "HTTP step: sends a request",
+  flow: "Flow step: runs a component made of steps",
   response: "Response: answers the caller",
 };
 const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", running: "Running", pending: "Not reached" };
+
+// Which inner steps of a flow step the person has opened in the details, by run, step and inner step.
+const openInner = new Set();
 
 let state = { commit: "", protected: false, workflows: [], runs: [] };
 let selected = { workflow: null, run: null, node: null, changes: false, add: null };
@@ -181,6 +187,19 @@ function progress(run, id) {
   return done ? done.status : "pending";
 }
 
+// innerRun pairs the steps inside a flow step with what a run recorded for
+// them. One with no record has not been reached, unless the whole flow step was
+// skipped, which skipped them with it.
+function innerRun(step, done, status) {
+  const recs = done && done.steps ? done.steps : [];
+  return (step.inner || []).map((s) => {
+    const rec = recs.find((r) => r.id === s.id) || null;
+    return { s, rec, status: rec ? rec.status : status === "skipped" ? "skipped" : "pending" };
+  });
+}
+
+const failedInside = (rows) => rows.find((r) => r.status === "failed") || null;
+
 const latestRun = (name) => state.runs.find((r) => r.workflow === name);
 
 function render() {
@@ -309,7 +328,10 @@ function renderSide(w) {
 // outcome says in a few words what a run did.
 function outcome(r) {
   const failed = r.steps.find((s) => s.status === "failed");
-  if (failed) return "Failed at " + failed.id;
+  if (failed) {
+    const inner = (failed.steps || []).find((s) => s.status === "failed");
+    return "Failed at " + failed.id + (inner ? " › " + inner.id : "");
+  }
   const ran = r.steps.filter((s) => s.status === "ok").map((s) => s.id);
   if (r.status === "running") return ran.length ? "Done: " + ran.join(", ") : "Starting";
   return ran.length ? ran.join(" → ") : "No step ran";
@@ -367,6 +389,16 @@ function silhouette(kind, w, h) {
     return { d: roundedPath([[LEAN, m], [w - m, m], [w - LEAN, h - m], [m, h - m]], [11, 11, 11, 11]),
       sep: [(LEAN * (h - cut)) / h + 1, w - (LEAN * cut) / h - 1] };
   }
+  if (kind === "flow") {
+    // A box with a bar down each side, the flowchart sign for "a process
+    // with steps of its own". The bars are part of the outline's family:
+    // same stroke, and they stop where the rounded corner begins.
+    const r = 12, b = Math.min(11, w * 0.19);
+    const dy = b < r ? r - Math.sqrt(r * r - (r - b) * (r - b)) : 0;
+    const y1 = m + dy + 0.5, y2 = h - m - dy - 0.5;
+    return { d: roundedPath([[m, m], [w - m, m], [w - m, h - m], [m, h - m]], [r, r, r, r]), sep: [b, w - b],
+      bars: `M${b} ${y1}V${y2}M${w - b} ${y1}V${y2}` };
+  }
   return { d: roundedPath([[m, m], [w - m, m], [w - m, h - m], [m, h - m]], [12, 12, 12, 12]), sep: [1, w - 1] };
 }
 
@@ -384,6 +416,7 @@ function shapeSVG(kind, w, h) {
     svg("path", { class: "halo", d: s.d }),
     svg("path", { class: "ring", d: s.d }),
     svg("path", { class: "bg", d: s.d }),
+    s.bars ? svg("path", { class: "bars", d: s.bars }) : null,
     svg("path", { class: "sep", d: "M" + s.sep[0] + " " + (h - FOOT) + "H" + s.sep[1] }));
 }
 
@@ -391,7 +424,7 @@ function shapeSVG(kind, w, h) {
 function kindTile(kind, size) {
   const s = silhouette(kind, size, size);
   return el("span", { class: "tile kt" },
-    svg("svg", { class: "kshape", width: size, height: size, viewBox: "0 0 " + size + " " + size, "aria-hidden": "true" }, svg("path", { d: s.d })),
+    svg("svg", { class: "kshape", width: size, height: size, viewBox: "0 0 " + size + " " + size, "aria-hidden": "true" }, svg("path", { d: s.d }), s.bars ? svg("path", { class: "bars", d: s.bars }) : null),
     icon(kind, Math.round(size * 0.52)));
 }
 
@@ -482,8 +515,11 @@ function renderCanvas(moved) {
     else if (node.id === "response") took = run ? (run.response ? String(run.response.status) : answerWait(run)) : String(w.respond.status);
     else if (done && done.status === "ok") took = duration(done.ms);
     else if (done) took = done.status === "failed" ? "failed" : done.status;
-    else if (run) took = run.status === "running" ? "waiting" : "not reached";
-    const label = node.title + ", " + KIND_LABEL[node.kind] + (node.order ? ", step " + node.order : "") + (status ? ", " + (node.id === "response" && run.response ? "answered " + run.response.status : (STATUS_TEXT[status] || status).toLowerCase()) : "");
+    else if (run) took = run.status === "running" ? "waiting" : run.status === "ok" ? "no record" : "not reached";
+    // A flow step holds steps of its own: how many, what they are, and in a run how each went.
+    const inside = node.kind === "flow" && node.step ? innerRun(node.step, done, status) : null;
+    const brokeAt = inside && status === "failed" ? failedInside(inside) : null;
+    const label = node.title + ", " + KIND_LABEL[node.kind] + (inside ? ", " + plural(inside.length, "step") + " inside" : "") + (node.order ? ", step " + node.order : "") + (status ? ", " + (node.id === "response" && run.response ? "answered " + run.response.status : (STATUS_TEXT[status] || status).toLowerCase()) : "") + (brokeAt ? ", failed at " + brokeAt.s.id : "");
     const isEdited = edited.has(node.id);
     return el("div", {
         class: "slot" + (animate ? " enter" : ""),
@@ -499,12 +535,12 @@ function renderCanvas(moved) {
         el("span", { class: "head" },
           el("span", { class: "tile" }, icon(node.kind, 20), node.order ? el("i", { class: "num", title: "Runs " + ordinal(node.order) }, node.order) : null),
           el("span", { class: "text" },
-            el("span", { class: "eyebrow" }, KIND_LABEL[node.kind]),
+            el("span", { class: "eyebrow" }, KIND_LABEL[node.kind] + (inside ? " · " + plural(inside.length, "step") : "")),
             el("span", { class: "title" }, node.title),
-            el("span", { class: "sub mono" }, node.subtitle)),
+            el("span", { class: "sub mono" }, brokeAt ? "failed at " + brokeAt.s.id : node.subtitle)),
           status && node.id !== "trigger" ? statusMark(status, 12) : null),
-        el("span", { class: "foot", title: cond || (node.id === "trigger" && w.input ? "The body must match " + w.input : null) },
-          cond ? [el("b", {}, "IF"), el("span", { class: "cond mono" }, cond)] : el("span", { class: "always" },
+        el("span", { class: "foot", title: cond || (inside ? "Steps inside: " + inside.map((r) => r.s.id).join(", ") : null) || (node.id === "trigger" && w.input ? "The body must match " + w.input : null) },
+          cond ? [el("b", {}, "IF"), el("span", { class: "cond mono" }, cond)] : inside ? pips(inside, !!run) : el("span", { class: "always" },
             node.id === "trigger" ? (w.input ? "Body: " + w.input.split("/").pop() : "Entry point") : node.id === "response" ? "Exit point" : "Always runs"),
           took ? el("span", { class: "took" }, took) : null)),
       // The place to put a step: right after this one in the file.
@@ -540,6 +576,19 @@ function renderCanvas(moved) {
     const card = scroller.querySelector('[data-node="' + CSS.escape(selected.node) + '"]');
     if (card) card.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
+}
+
+// pips are the steps inside a flow step as a row of small kind icons, in order,
+// coloured by how each went in a run. Past four they are counted.
+function pips(rows, ran) {
+  const shown = rows.slice(0, 4);
+  const out = [];
+  shown.forEach((r, i) => {
+    if (i) out.push(el("i", { class: "link" }));
+    out.push(el("span", { class: "pip " + (ran ? r.status : "") }, icon(r.s.kind, 11)));
+  });
+  if (rows.length > shown.length) out.push(el("span", { class: "more" }, "+" + (rows.length - shown.length)));
+  return el("span", { class: "pips", "aria-hidden": "true" }, out);
 }
 
 // canAdd: steps can only be added when the server edits files and the file is sound.
@@ -709,7 +758,10 @@ function outline(w) {
       el("span", { class: "n" }, i + 1),
       kindTile(s.kind, 26),
       el("span", { class: "name mono" }, s.id),
-      el("span", { class: "tag" }, KIND_LABEL[s.kind])))));
+      el("span", { class: "tag" }, KIND_LABEL[s.kind])),
+    // The steps inside a flow step, small and not clickable: they belong to its component.
+    s.kind === "flow" && (s.inner || []).length ? el("ol", { class: "nest", "aria-label": "Steps inside " + s.id },
+      s.inner.map((x) => el("li", { class: "nrow kind-" + x.kind }, icon(x.kind, 12), el("span", { class: "name mono" }, x.id), el("span", { class: "tag" }, KIND_LABEL[x.kind] || x.kind)))) : null)));
 }
 
 // showResponse is a link to the response node, where the answer is shown in full.
@@ -746,13 +798,28 @@ function waterfall(w, run) {
     const start = offset;
     if (done) offset += done.ms;
     const ran = done && (status === "ok" || status === "failed" || status === "running");
+    // What the steps inside a flow step did, on the same axis, within its span.
+    let nested = null;
+    if (step.kind === "flow" && ran) {
+      let at = start;
+      nested = el("ol", { class: "nest", "aria-label": "Steps inside " + step.id }, innerRun(step, done, status).map((r) => {
+        const from = at, took = r.rec && r.rec.status !== "skipped" ? r.rec.ms : 0;
+        if (r.rec) at += r.rec.ms;
+        const went = r.rec && (r.status === "ok" || r.status === "failed" || r.status === "running");
+        return el("li", { class: "nrow kind-" + r.s.kind },
+          el("span", { class: "name mono" }, r.s.id),
+          el("span", { class: "lane " + r.status }, went ? el("span", { class: "bar " + r.status, css: { left: (from / total) * 100 + "%", width: Math.max(1.5, (took / total) * 100) + "%" } }) : null),
+          el("span", { class: "ms " + r.status }, went ? duration(r.rec.ms) : innerWord(r.status, run)));
+      }));
+    }
     return el("li", {}, el("button", { type: "button", class: "kind-" + step.kind + (editedNodes(w).has(step.id) ? " edited" : ""), "data-node": step.id, onclick: () => go({ node: step.id }) },
       el("span", { class: "n" }, i + 1),
       el("span", { class: "name mono" }, step.id),
       el("span", { class: "lane " + status }, ran
         ? el("span", { class: "bar " + status, css: { left: (start / total) * 100 + "%", width: Math.max(1.5, (done.ms / total) * 100) + "%" } })
         : null),
-      el("span", { class: "ms " + status }, ran ? duration(done.ms) : status === "pending" ? "not reached" : status)));
+      el("span", { class: "ms " + status }, ran ? duration(done.ms) : status === "pending" ? (run.status === "ok" ? "no record" : "not reached") : status)),
+    nested);
   }));
 }
 
@@ -791,6 +858,59 @@ function triggerDetails(w, run) {
   ];
 }
 
+// innerWord says in a word why a step inside a flow step has no time.
+function innerWord(status, run) {
+  return status === "skipped" ? "skipped" : run.status === "running" ? "waiting" : run.status === "ok" ? "no record" : "not reached";
+}
+
+// insideSection lists the steps inside a flow step. Without a run they are
+// plain rows; in a run each shows how it went, and one with an output opens to
+// show it. What is open is remembered here, not in the page, so a redraw keeps it.
+function insideSection(step, run, done, status) {
+  const rows = innerRun(step, done, status);
+  const items = rows.map((r, i) => {
+    if (!run) {
+      return el("li", { class: "irow kind-" + r.s.kind },
+        el("div", { class: "ihead plain" }, kindTile(r.s.kind, 24),
+          el("span", { class: "iname mono" }, r.s.id),
+          el("span", { class: "itag" }, KIND_LABEL[r.s.kind] || r.s.kind)),
+        r.s.subtitle ? el("div", { class: "idetail mono" }, r.s.subtitle) : null,
+        r.s.when ? el("div", { class: "icond" }, el("b", {}, "IF"), el("span", { class: "mono" }, r.s.when)) : null);
+    }
+    const key = run.run + "|" + step.id + "|" + r.s.id;
+    const out = r.rec && r.rec.output !== undefined ? r.rec.output : undefined;
+    const openable = out !== undefined;
+    const went = r.rec && (r.status === "ok" || r.status === "failed" || r.status === "running");
+    const body = openable ? el("div", { class: "iout", id: "iout-" + step.id + "-" + i, hidden: !openInner.has(key) }, jsonView(out)) : null;
+    const head = el(openable ? "button" : "div", {
+        class: "ihead",
+        type: openable ? "button" : null,
+        "aria-expanded": openable ? (openInner.has(key) ? "true" : "false") : null,
+        "aria-controls": openable ? "iout-" + step.id + "-" + i : null,
+        "data-focus": openable ? "i:" + key : null,
+      },
+      statusMark(r.status, 10), kindTile(r.s.kind, 24),
+      el("span", { class: "iname mono" }, r.s.id),
+      el("span", { class: "ims " + r.status }, went ? duration(r.rec.ms) : innerWord(r.status, run)),
+      openable ? el("span", { class: "chev" }, icon("chevron", 14)) : el("span", { class: "chev none" }));
+    if (openable) head.addEventListener("click", () => {
+      const now = !openInner.has(key);
+      if (now) openInner.add(key); else openInner.delete(key);
+      head.setAttribute("aria-expanded", now ? "true" : "false");
+      body.hidden = !now;
+    });
+    return el("li", { class: "irow kind-" + r.s.kind + " " + r.status },
+      head,
+      r.rec && r.rec.detail ? el("div", { class: "idetail mono" }, r.rec.detail) : r.status === "pending" && run.status !== "ok" ? el("div", { class: "idetail" }, status === "failed" ? "An earlier step inside failed first." : "The run did not get this far.") : null,
+      r.rec && r.rec.error ? el("pre", { class: "error" }, r.rec.error) : null,
+      body);
+  });
+  return section("Steps inside",
+    el("ol", { class: "inside" }, items),
+    el("p", { class: "muted small" }, "These steps are written in " + step.uses + ", the component's file, and are changed there."
+      + (rows.some((r) => r.rec && r.rec.output !== undefined) ? " Open a step to read what it produced." : "")));
+}
+
 function stepDetails(w, step, run, hasForm) {
   const status = progress(run, step.id);
   const done = run ? run.steps.find((s) => s.id === step.id) : null;
@@ -804,19 +924,21 @@ function stepDetails(w, step, run, hasForm) {
         done && done.status === "failed" && done.ms > 0 ? el("div", { class: "muted" }, "failed after " + duration(done.ms)) : null,
         done && done.status === "running" ? el("div", { class: "muted" }, "in progress") : null,
         status === "skipped" ? el("div", { class: "muted" }, "Its IF condition was false.") : null,
-        status === "pending" ? el("div", { class: "muted" }, run.status === "failed" ? "An earlier step failed first." : "The run did not get this far.") : null),
+        status === "pending" ? el("div", { class: "muted" }, run.status === "failed" ? "An earlier step failed first." : run.status === "ok" ? "This run has no record of this step: it was recorded before the step was added." : "The run did not get this far.") : null),
       done && done.detail ? el("p", { class: "detail mono" }, done.detail) : null,
       done && done.error ? el("pre", { class: "error" }, done.error) : null) : null,
+    step.kind === "flow" ? insideSection(step, run, done, status) : null,
     step.questions && output ? section("Answers", step.questions.map((q) => question(q, output[q.name]))) : null,
     step.questions && !output && !hasForm ? section("Questions", step.questions.map((q) => question(q, null))) : null,
-    output !== null && !step.questions ? section("Output", jsonView(output)) : null,
+    output !== null && !step.questions ? section(step.kind === "flow" ? "Gives back" : "Output", jsonView(output),
+      step.kind === "flow" ? el("p", { class: "muted small" }, "Only what the component gives back. What each step inside produced is under Steps inside.") : null) : null,
     hasForm ? null : section("Runs when",
       step.when ? el("pre", { class: "cond-pre" }, step.when) : el("p", { class: "muted" }, "Always, once the steps before it have finished."),
       el("p", { class: "muted small" }, "Step " + order + " of " + w.steps.length + " in file order.")),
     // What a component does is set in its own file, so it is shown, not edited.
     step.component ? section("Component",
       pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)])),
-      el("p", { class: "muted small" }, "Written once in " + step.uses + " and shared by every step that uses it. This step only chooses its input.")) : null,
+      step.kind === "flow" ? null : el("p", { class: "muted small" }, "Written once in " + step.uses + " and shared by every step that uses it. This step only chooses its input.")) : null,
     step.fields.length && !hasForm && !step.component ? section("Settings", pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)]))) : null,
     step.reads.length ? section("Reads from", el("div", { class: "chips" }, step.reads.map((name) =>
       el("button", { type: "button", class: "pill link mono", title: "Show " + name, onclick: () => go({ node: name }) }, name)))) : null,
@@ -1670,7 +1792,9 @@ function referencesFor(w, after) {
     : [{ text: "trigger.time" }] });
   const upto = after === "trigger" ? 0 : w.steps.findIndex((s) => s.id === after) + 1;
   for (const s of w.steps.slice(0, upto)) {
-    rows.push({ id: s.id, kind: s.kind, chips: s.questions && s.questions.length
+    rows.push({ id: s.id, kind: s.kind, chips: s.outputs && s.outputs.length
+      ? s.outputs.map((o) => ({ text: s.id + "." + o, short: o }))
+      : s.questions && s.questions.length
       ? s.questions.map((q) => ({ text: s.id + "." + q.name + ".value", short: q.name + ".value" }))
       : [{ text: s.id + ".", open: true, short: "field" }] });
   }
@@ -1813,7 +1937,7 @@ function syncAdder(w) {
   setValue(A.whenBox, a.when);
   (comp.inputs || []).forEach((inp, i) => setValue(A.targets[i + 1], a.values[inp.name] || ""));
   idNote(A, w, a);
-  const sig = w.name + "|" + a.after + "|" + w.steps.map((s) => s.id).join(",") + "|" + JSON.stringify(w.sample || null);
+  const sig = w.name + "|" + a.after + "|" + w.steps.map((s) => s.id + ":" + (s.outputs || []).join("+")).join(",") + "|" + JSON.stringify(w.sample || null);
   if (sig !== A.refSig) { A.refSig = sig; buildRefs(A, w, a.after); }
 }
 
@@ -1886,6 +2010,7 @@ function buildDetail(A, w, comp) {
   A.refs = el("div", { class: "refs" });
   A.detail.replaceChildren(
     el("h2", { class: "sub" }, "New " + (KIND_LABEL[comp.kind] || comp.kind) + " step from " + comp.name),
+    comp.kind === "flow" ? el("p", { class: "muted small flownote" }, "Runs steps of its own, written in the component's file. This step only chooses what goes in.") : null,
     idField, A.refs, whenField, inputs);
 }
 
