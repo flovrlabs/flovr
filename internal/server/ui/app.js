@@ -1481,7 +1481,8 @@ let uiTick = 0;         // bumped when something outside the data changes what i
 let formId = 0;
 let form = null;        // the form now on the page: { key, workflow, node, fields, controls, root }
 let flagSig = "";       // which steps had unsaved changes the last time the flags were drawn
-const drafts = {};      // workflow -> { fields: { pathKey: { path, value, node, label, group } }, prompts: { step: text } }
+const drafts = {};      // workflow -> { fields: { pathKey: { path, value, node, label, group } }, prompts: { step: text }, schemas: { step: { fields } or { text } } }
+const schemaCache = {}; // "workflow|step" -> { state, file, text, rev, fields, wfRev, inflight, error }: an AI step's answer fields
 const adds = {};        // workflow -> the step being added: { after, component, id, idTouched, when, values }
 let adder = null;       // the add-a-step form now on the page
 let making = null;      // the workflow being made: { root, name, trigger, path, pathTouched, cron, step } (step as in adds)
@@ -1494,7 +1495,7 @@ let changesEpoch = 0;   // bumped by every save, so the diff is fetched again
 const insp = { head: null, body: null, formslot: null, rest: null, bar: null };
 
 const pathKey = (path) => JSON.stringify(path);
-const draftsOf = (name) => drafts[name] || (drafts[name] = { fields: {}, prompts: {} });
+const draftsOf = (name) => drafts[name] || (drafts[name] = { fields: {}, prompts: {}, schemas: {} });
 const uiOf = (name) => ui[name] || (ui[name] = { saving: false, notice: null, conflicts: {}, armed: false, armTimer: 0 });
 const workflowByName = (name) => state.workflows.find((x) => x.name === name);
 const plural = (n, one, many) => n + " " + (n === 1 ? one : many || one + "s");
@@ -1545,25 +1546,29 @@ function pruneDrafts(w) {
     const p = promptCache[w.name + "|" + step];
     if (!w.steps.some((s) => s.id === step) || (p && p.state === "ready" && p.text === text)) delete d.prompts[step];
   }
+  for (const [step, draft] of Object.entries(d.schemas)) {
+    const c = schemaCache[schemaKey(w.name, step)];
+    if (!w.steps.some((s) => s.id === step) || (c && c.state === "ready" && schemaSame(draft, c))) delete d.schemas[step];
+  }
 }
 
 function dirtyCount(name) {
   const d = drafts[name];
-  return d ? Object.keys(d.fields).length + Object.keys(d.prompts).length : 0;
+  return d ? Object.keys(d.fields).length + Object.keys(d.prompts).length + Object.keys(d.schemas).length : 0;
 }
 // draftCountFor counts the unsaved changes that belong to one step.
 function draftCountFor(name, node) {
   const d = drafts[name];
   if (!d) return 0;
-  return Object.values(d.fields).filter((e) => e.node === node).length + (d.prompts[node] !== undefined ? 1 : 0);
+  return Object.values(d.fields).filter((e) => e.node === node).length + (d.prompts[node] !== undefined ? 1 : 0) + (d.schemas[node] !== undefined ? 1 : 0);
 }
 function dirtyNodes(name) {
   const d = drafts[name];
   if (!d) return [];
-  return [...new Set([...Object.values(d.fields).map((e) => e.node), ...Object.keys(d.prompts)])];
+  return [...new Set([...Object.values(d.fields).map((e) => e.node), ...Object.keys(d.prompts), ...Object.keys(d.schemas)])];
 }
 const editedNodes = (w) => new Set(state.editable ? dirtyNodes(w.name) : []);
-const addTouched = (a) => !!a && (a.idTouched || a.when.trim() !== "" || Object.values(a.values).some((v) => v.trim() !== ""));
+const addTouched = (a) => !!a && (a.edited || a.idTouched || a.when.trim() !== "" || Object.values(a.values).some((v) => v.trim() !== ""));
 const anyDirty = () => state.editable && (state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name])) || Object.values(keeps).some((k) => k.touched) || makeTouched());
 
 // adopt takes in a fresh answer from /api/state. A workflow whose file changed
@@ -1627,6 +1632,9 @@ function reattach(name, prev, w) {
   for (const step of Object.keys(d.prompts)) {
     if (!w.steps.some((s) => s.id === step)) { dropped.push({ node: step, label: "Prompt" }); delete d.prompts[step]; }
   }
+  for (const step of Object.keys(d.schemas)) {
+    if (!w.steps.some((s) => s.id === step)) { dropped.push({ node: step, label: "Answer fields" }); delete d.schemas[step]; }
+  }
   d.fields = fields;
   st.conflicts = conflicts;
   return dropped;
@@ -1635,7 +1643,7 @@ function reattach(name, prev, w) {
 function changedOutside(name, prev, w) {
   const st = uiOf(name), d = draftsOf(name);
   const dropped = reattach(name, prev, w);
-  const kept = Object.keys(d.fields).length + Object.keys(d.prompts).length;
+  const kept = dirtyCount(name);
   const lost = [...(st.notice && st.notice.dropped ? st.notice.dropped : []), ...dropped];
   if (st.notice && st.notice.kind === "conflict") st.notice = { ...st.notice, kept, dropped: lost.length ? lost : null };
   else if (kept > 0 || lost.length || (view && view.w.name === name && selected.node)) st.notice = { kind: "external", kept, dropped: lost.length ? lost : null };
@@ -1982,8 +1990,8 @@ function updateBar() {
   }
   if (adding) {
     // The same bar serves the form for a new step: Cancel and Add step.
-    const comp = componentOf(w, addOf(w.name).component);
-    b.status.replaceChildren(...(st.saving ? ["Adding…"] : comp ? ["Adds a step to ", el("span", { class: "mono" }, w.path)] : [componentsOf(w).length ? "Choose a component to add." : "Nothing to add yet."]));
+    const comp = chosenOf(w, addOf(w.name));
+    b.status.replaceChildren(...(st.saving ? ["Adding…"] : comp ? comp.kind === "ai" && BUILTIN.ai === comp ? ["Adds the step, with a prompt file and a schema file."] : ["Adds a step to ", el("span", { class: "mono" }, w.path)] : ["Choose what kind of step to add."]));
     b.status.classList.remove("dirty");
     b.save.setAttribute("aria-disabled", st.saving || !comp ? "true" : "false");
     b.discard.setAttribute("aria-disabled", st.saving ? "true" : "false");
@@ -2054,7 +2062,7 @@ function noticeView(n, w) {
               ? "Nothing was written, so the " + plural(usesOf(w), "step") + " that use" + (usesOf(w) === 1 ? "s" : "") + " " + compTitle(w) + " still work as before."
               : compTitle(w) + " is shared by " + plural(usesOf(w), "step") + ", and the server checks them with it, so a change that breaks one of them is refused. Nothing was written."));
       }
-      if (isMake && n.error) text.push(el("p", {}, n.error));
+      if ((isMake || n.why === "schema") && n.error) text.push(el("p", {}, n.error));
       text.push(el("p", {}, isRemove ? "What the server found:" : isAdd ? "Fix this and try again:" : "Fix this and save again:"),
         el("ul", { class: "problems" }, n.problems.map((p) => problemItem(p, w, n.did === "add" ? n.id : null))));
     } else text.push(el("p", {}, n.error || "The server did not accept the change."));
@@ -2068,7 +2076,7 @@ function noticeView(n, w) {
           : isUntest ? "Look at the tests again, then remove it again if it is still what you want."
           : "Look at the steps again, then remove it again if it is still what you want."));
     } else {
-      text.push(el("p", {}, (n.what === "prompt" ? "The prompt file was changed after this page read it." : "The workflow file was changed after this page read it.")
+      text.push(el("p", {}, (n.what === "prompt" ? "The prompt file was changed after this page read it." : n.what === "schema" ? "The schema file was changed after this page read it." : "The workflow file was changed after this page read it.")
         + " The form now shows what is in the file" + (n.kept ? ", with your " + plural(n.kept, "unsaved edit") + " on top." : ".")),
         el("p", {}, n.kept ? "Check your edits, then save again." : "Nothing of yours was lost."));
     }
@@ -2165,7 +2173,8 @@ async function saveCurrent() {
   // The server calls a component's way out "output"; here its id cannot be a step's.
   const fields = Object.values(d.fields).map((e) => ({ path: e.path, value: e.value, node: e.node === OUT ? "output" : e.node }));
   const texts = Object.entries(d.prompts).map(([step, text]) => ({ step, text }));
-  if (!fields.length && !texts.length) return;
+  const schemas = Object.entries(d.schemas);
+  if (!fields.length && !texts.length && !schemas.length) return;
 
   st.saving = true;
   st.notice = null;
@@ -2215,6 +2224,30 @@ async function saveCurrent() {
         }
       }
     }
+    // The answer's fields go last, once the file that names the schema is as it should be.
+    if (!failure) {
+      for (const [step, draft] of schemas) {
+        const key = schemaKey(name, step), cached = schemaCache[key];
+        if (!cached || cached.state !== "ready") { failure = { kind: "error", error: "The answer's fields of " + step + " have not been read yet, so they were not saved." }; break; }
+        const body = { workflow: name, step, rev: cached.rev };
+        if (draft.text !== undefined) body.text = draft.text; else body.fields = draft.fields;
+        const r = await request("POST", "/api/schema", body);
+        if (r.ok) {
+          epoch++;
+          changesEpoch++;
+          schemaCache[key] = { state: "ready", file: r.body.file, text: r.body.text, rev: r.body.rev, fields: r.body.fields, wfRev: (workflowByName(name) || w).rev };
+          if (d.schemas[step] === draft) delete d.schemas[step];
+          files.push(folderOf(w.path) + "/" + r.body.file);
+        } else {
+          failure = failureOf(r, "schema", { why: "schema" });
+          if (r.status === 409) {
+            await loadSchema(workflowByName(name) || w, step, true);
+            failure.kept = dirtyCount(name);
+          }
+          break;
+        }
+      }
+    }
   } catch (err) {
     failure = { kind: "network" };
   }
@@ -2225,7 +2258,7 @@ async function saveCurrent() {
   } else st.notice = { kind: "saved", files };
 
   if (failure && failure.kind === "conflict" && failure.what === "workflow") {
-    st.notice = { ...failure, kept: Object.keys(d.fields).length + Object.keys(d.prompts).length };
+    st.notice = { ...failure, kept: dirtyCount(name) };
     await refresh();
     // The poll noticed the new file and counted the edits on top of it.
   } else {
@@ -2256,7 +2289,7 @@ function discardCurrent() {
   }
   clearTimeout(st.armTimer);
   st.armed = false;
-  drafts[name] = { fields: {}, prompts: {} };
+  drafts[name] = { fields: {}, prompts: {}, schemas: {} };
   st.conflicts = {};
   st.notice = null;
   if (form) syncForm(workflowByName(name));
@@ -2271,7 +2304,248 @@ function discardCurrent() {
 // another step, or to a change of the file underneath.
 
 const ID_OK = /^[A-Za-z0-9_]+$/;
-const addOf = (name) => adds[name] || (adds[name] = { after: "", component: null, id: "", idTouched: false, when: "", values: {} });
+const addOf = (name) => adds[name] || (adds[name] = {
+  after: "", component: null, kind: null, id: "", idTouched: false, when: "", values: {}, edited: false,
+  method: "POST", url: "", input: "${trigger.body}", prompt: "",
+  models: { decide: "openrouter/cloudflare/clef", ai: "openrouter/deepseek/deepseek-v4.1-flash" },
+  questions: [blankQuestion()], fields: [blankField()],
+});
+
+// The kinds of step that do their own work. The chooser offers them next to the
+// components, and the form for one is made from the same parts.
+const BUILTIN = {
+  ai: { use: "@ai", kind: "ai", name: "AI", idBase: "ai", group: "Ask a model", text: "Write or extract, in fields you define", inputs: [] },
+  decide: { use: "@decide", kind: "decide", name: "Decide", idBase: "decide", group: "Ask a model", text: "Yes or no, one of a list, or a score", inputs: [] },
+  http: { use: "@http", kind: "http", name: "HTTP request", idBase: "request", group: "Act", text: "Send to any API", inputs: [] },
+};
+const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+// chosenOf is what the form is for: a kind of step that does its own work, or a component.
+const chosenOf = (w, a) => (a.kind ? BUILTIN[a.kind] : componentOf(w, a.component));
+
+// ---- the answer's fields and a decision's questions ----
+//
+// Two editors made of plain rows: the table of fields an AI step answers with,
+// which the node editor uses for an existing step as well, and the cards of the
+// questions of a decision. Each edits an array of rows in place and says so by
+// calling onChange; neither knows where the rows are kept.
+
+const FIELD_TYPES = [["text", "Text"], ["number", "Number"], ["whole number", "Whole number"], ["yes or no", "Yes or no"], ["list of text", "List of text"], ["one of", "One of a list"]];
+const QUESTION_TYPES = [["yes or no", "Yes or no", "Is it urgent?"], ["one of", "One of a list", "Which language?"], ["score", "A score", "How risky is it?"]];
+const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function blankField() { return { name: "", type: "text", required: true, description: "", options: "" }; }
+function blankQuestion() { return { name: "", ask: "", type: "yes or no", yesIf: "", noIf: "", answers: [] }; }
+const splitOptions = (text) => String(text || "").split(",").map((x) => x.trim()).filter(Boolean);
+const rowOfField = (f) => ({ name: f.name, type: f.type, required: !!f.required, description: f.description || "", options: (f.options || []).join(", ") });
+const isBlankField = (r) => r.name.trim() === "" && r.description.trim() === "" && r.options.trim() === "";
+
+// fieldsOut is the rows as the server takes them. A row with nothing in it is left out.
+function fieldsOut(list) {
+  return list.filter((r) => !isBlankField(r)).map((r) => {
+    const f = { name: r.name.trim(), type: r.type, required: !!r.required };
+    if (r.description.trim()) f.description = r.description.trim();
+    if (r.type === "one of") f.options = splitOptions(r.options);
+    return f;
+  });
+}
+
+// fieldProblems says what the server would refuse, so that it can be told before.
+function fieldProblems(list) {
+  const out = [], seen = new Set();
+  for (const f of fieldsOut(list)) {
+    if (!f.name) out.push("A field has no name.");
+    else if (!NAME_RE.test(f.name)) out.push("“" + f.name + "” is not a field name: use letters, digits and _, and do not start with a digit.");
+    else if (seen.has(f.name)) out.push("There are two fields called " + f.name + ".");
+    seen.add(f.name);
+    if (f.type === "one of" && f.options.length < 2) out.push((f.name ? f.name : "A field") + " is one of a list, which needs at least two options.");
+  }
+  return out;
+}
+
+function questionProblems(list) {
+  const out = [], seen = new Set();
+  list.forEach((q, i) => {
+    const who = q.name.trim() || "Question " + (i + 1);
+    if (!q.name.trim()) out.push(who + " has no name.");
+    else if (!NAME_RE.test(q.name.trim())) out.push("“" + q.name.trim() + "” is not a question name: use letters, digits and _, and do not start with a digit.");
+    else if (seen.has(q.name.trim())) out.push("There are two questions called " + q.name.trim() + ".");
+    seen.add(q.name.trim());
+    if (!q.ask.trim()) out.push(who + " has nothing to ask.");
+    if (q.type === "yes or no") { if (!!q.yesIf.trim() !== !!q.noIf.trim()) out.push(who + ": give both “Yes if” and “No if”, or neither."); }
+    else if (q.answers.filter((a) => a.name.trim()).length < 2) out.push(who + " needs at least two answers.");
+  });
+  return out;
+}
+
+const problemList = (box, problems) => {
+  box.hidden = !problems.length;
+  box.replaceChildren(...problems.map((t) => el("div", {}, t)));
+};
+
+function textIn(props, value, onInput) {
+  const box = el("input", { type: "text", class: "in" + (props.mono ? " mono" : ""), spellcheck: "false", autocomplete: "off", autocapitalize: "off", id: props.id, placeholder: props.placeholder, "aria-label": props.label });
+  box.value = value;
+  box.addEventListener("input", () => onInput(box.value));
+  return box;
+}
+
+// buildFieldTable: one row for each field of the answer: name, type, whether the
+// model must give it, and what goes in it. A type of "One of a list" brings a
+// row for its options.
+function buildFieldTable(list, onChange, uid) {
+  const T = { list };
+  let n = 0;
+  const body = el("div", { class: "frows" });
+  const warn = el("p", { class: "conflict fwarn", hidden: true, role: "status" });
+  // What is wrong is not said before anything has been typed.
+  let touched = false;
+  const repaint = () => problemList(warn, touched ? fieldProblems(list) : []);
+  const changed = (kind) => { if (kind === "input") touched = true; repaint(); onChange(kind); };
+  const add = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add field");
+  const row = (r, i) => {
+    const id = "ff" + uid + "x" + (++n);
+    const name = textIn({ mono: true, id: id + "n", placeholder: "field_name", label: "Name of field " + (i + 1) }, r.name, (v) => { r.name = v; repaint(); changed("input"); });
+    const type = el("select", { id: id + "t", class: "in", "aria-label": "Type of field " + (i + 1) }, FIELD_TYPES.map(([v, t]) => el("option", { value: v }, t)));
+    type.value = r.type;
+    const req = el("input", { type: "checkbox", id: id + "r" });
+    req.checked = r.required;
+    const desc = textIn({ id: id + "d", placeholder: "What goes in it", label: "What goes in field " + (i + 1) }, r.description, (v) => { r.description = v; repaint(); changed("input"); });
+    const opts = textIn({ mono: true, id: id + "o", placeholder: "Options, separated by commas", label: "Options of field " + (i + 1) }, r.options, (v) => { r.options = v; repaint(); changed("input"); });
+    const optRow = el("div", { class: "fopts", hidden: r.type !== "one of" }, opts);
+    type.addEventListener("change", () => { r.type = type.value; optRow.hidden = r.type !== "one of"; repaint(); changed("input"); });
+    req.addEventListener("change", () => { r.required = req.checked; changed("input"); });
+    const rm = el("button", { type: "button", class: "fremove", title: "Remove this field", "aria-label": "Remove field " + (i + 1) + (r.name.trim() ? ", " + r.name.trim() : "") }, icon("trash", 14));
+    rm.addEventListener("click", () => {
+      list.splice(list.indexOf(r), 1);
+      T.rebuild();
+      changed("struct");
+      add.focus();
+    });
+    return el("div", { class: "frow" }, name, type, el("label", { class: "freq" }, req, el("span", {}, "Required")), desc, rm, optRow);
+  };
+  T.rebuild = () => { body.replaceChildren(...list.map(row)); repaint(); };
+  add.addEventListener("click", () => {
+    list.push(blankField());
+    T.rebuild();
+    const last = body.lastElementChild && body.lastElementChild.querySelector("input");
+    if (last) last.focus();
+    changed("struct");
+  });
+  T.root = el("div", { class: "ftable" },
+    el("div", { class: "fhead", "aria-hidden": "true" }, el("span", {}, "Field"), el("span", {}, "Type"), el("span", {}, "Required"), el("span", {}, "What goes in it"), el("span")),
+    body, el("div", { class: "factions" }, add, el("span", { class: "fnote" }, "The model must answer with these fields and no others.")), warn);
+  T.rebuild();
+  return T;
+}
+
+// buildQuestionList: a card for each question of a decision. It asks, then says
+// how it is answered: yes or no, one of a list, or a score, which are
+// answers from lowest to highest.
+function buildQuestionList(list, onChange, uid) {
+  const T = { list };
+  let n = 0;
+  const holder = el("div", { class: "qcards" });
+  const warn = el("p", { class: "conflict fwarn", hidden: true, role: "status" });
+  let touched = false;
+  const repaint = () => problemList(warn, touched ? questionProblems(list) : []);
+  const changed = (kind) => { if (kind === "input") touched = true; repaint(); onChange(kind); };
+  const add = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add question");
+  const card = (q, qi) => {
+    const id = "fq" + uid + "x" + (++n);
+    const answers = el("div", { class: "qanswers" });
+    const yn = el("div", { class: "qyn" });
+    const kindBtns = QUESTION_TYPES.map(([v, text]) => {
+      const b = el("button", { type: "button", role: "radio", class: "qtype", "data-type": v }, text);
+      b.addEventListener("click", () => {
+        if (q.type === v) return;
+        q.type = v;
+        if (v !== "yes or no") while (q.answers.length < 2) q.answers.push({ name: "", meaning: "" });
+        paint();
+        changed("struct");
+        b.focus();
+      });
+      return b;
+    });
+    const name = textIn({ mono: true, id: id + "n", placeholder: "angry" }, q.name, (v) => { q.name = v; repaint(); changed("input"); });
+    const ask = textIn({ id: id + "a", placeholder: QUESTION_TYPES.find((t) => t[0] === q.type)[2] }, q.ask, (v) => { q.ask = v; repaint(); changed("input"); });
+    const yes = textIn({ id: id + "y", placeholder: "For example: they say they will cancel" }, q.yesIf, (v) => { q.yesIf = v; repaint(); changed("input"); });
+    const no = textIn({ id: id + "z", placeholder: "For example: they only ask a question" }, q.noIf, (v) => { q.noIf = v; repaint(); changed("input"); });
+    const field = (label, box, hint) => el("div", { class: "field" }, el("div", { class: "lab" }, el("label", { for: box.id }, label)), box, hint ? el("p", { class: "hint-text" }, hint) : null);
+    yn.append(field("Yes if", yes), field("No if", no), el("p", { class: "hint-text qhint" }, "Optional. Say what means yes and what means no, both or neither."));
+    const scored = () => q.type === "score";
+    const paintAnswers = () => {
+      answers.replaceChildren(
+        el("div", { class: "qahead" }, el("span", {}, "Answer"), el("span", {}, scored() ? "Means, lowest to highest" : "Means"), el("span")),
+        ...q.answers.map((a, ai) => {
+          const aid = id + "a" + ai;
+          const nm = textIn({ mono: true, id: aid + "n", placeholder: scored() ? (ai === 0 ? "low" : ai === q.answers.length - 1 ? "high" : "medium") : "answer", label: "Name of answer " + (ai + 1) + " of " + (q.name.trim() || "question " + (qi + 1)) }, a.name, (v) => { a.name = v; repaint(); changed("input"); });
+          const mn = textIn({ id: aid + "m", placeholder: "What it means", label: "What answer " + (ai + 1) + " means" }, a.meaning, (v) => { a.meaning = v; changed("input"); });
+          const rm = el("button", { type: "button", class: "fremove", title: "Remove this answer", "aria-label": "Remove answer " + (ai + 1) }, icon("trash", 14));
+          rm.addEventListener("click", () => { q.answers.splice(ai, 1); paintAnswers(); repaint(); changed("struct"); addA.focus(); });
+          return el("div", { class: "qarow" }, nm, mn, rm);
+        }),
+        addA);
+    };
+    const addA = el("button", { type: "button", class: "btn small qadd" }, icon("plus", 12), "Add answer");
+    addA.addEventListener("click", () => {
+      q.answers.push({ name: "", meaning: "" });
+      paintAnswers();
+      const rows = answers.querySelectorAll(".qarow");
+      const last = rows[rows.length - 1];
+      if (last) last.querySelector("input").focus();
+      repaint();
+      changed("struct");
+    });
+    const paint = () => {
+      for (const b of kindBtns) b.setAttribute("aria-checked", b.dataset.type === q.type ? "true" : "false");
+      for (const b of kindBtns) b.tabIndex = b.dataset.type === q.type ? 0 : -1;
+      yn.hidden = q.type !== "yes or no";
+      answers.hidden = q.type === "yes or no";
+      ask.placeholder = QUESTION_TYPES.find((t) => t[0] === q.type)[2];
+      if (!answers.hidden) paintAnswers();
+      repaint();
+    };
+    const group = el("div", { class: "qtypes", role: "radiogroup", "aria-label": "Answer with, for question " + (qi + 1) }, kindBtns);
+    group.addEventListener("keydown", (e) => {
+      const d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+      if (!d) return;
+      e.preventDefault();
+      const at = QUESTION_TYPES.findIndex((t) => t[0] === q.type), next = QUESTION_TYPES[(at + d + 3) % 3][0];
+      kindBtns.find((b) => b.dataset.type === next).click();
+    });
+    const rm = el("button", { type: "button", class: "fremove", title: "Remove this question", "aria-label": "Remove question " + (qi + 1) + (q.name.trim() ? ", " + q.name.trim() : "") }, icon("trash", 14));
+    rm.addEventListener("click", () => { list.splice(list.indexOf(q), 1); T.rebuild(); changed("struct"); add.focus(); });
+    const el2 = el("div", { class: "ned-q qcard" },
+      el("div", { class: "ned-qhead" }, el("span", { class: "qnum" }, "Question " + (qi + 1)), el("span", { class: "grow" }), rm),
+      field("Name", name, qi === 0 ? "A later step reads the answer as step_id.name.value." : null),
+      field("Ask", ask),
+      el("div", { class: "field" }, el("div", { class: "lab" }, el("span", { class: "qlab", id: id + "g" }, "Answer with")), group),
+      yn, answers);
+    paint();
+    return el2;
+  };
+  T.rebuild = () => { holder.replaceChildren(...list.map(card)); repaint(); };
+  add.addEventListener("click", () => {
+    list.push(blankQuestion());
+    T.rebuild();
+    const last = holder.lastElementChild && holder.lastElementChild.querySelector("input");
+    if (last) last.focus();
+    changed("struct");
+  });
+  T.root = el("div", { class: "qlist" }, holder, el("div", { class: "factions" }, add), warn);
+  T.rebuild();
+  return T;
+}
+
+// A question with its answers, as the server takes it.
+function questionsOut(list) {
+  return list.map((q) => {
+    const o = { name: q.name.trim(), ask: q.ask.trim(), type: q.type };
+    if (q.type === "yes or no") {
+      if (q.yesIf.trim() || q.noIf.trim()) { o.yesIf = q.yesIf.trim(); o.noIf = q.noIf.trim(); }
+    } else o.answers = q.answers.filter((a) => a.name.trim() || a.meaning.trim()).map((a) => ({ name: a.name.trim(), meaning: a.meaning.trim() }));
+    return o;
+  });
+}
 const componentsOf = (w) => w.components || [];
 // A workflow is offered components from other folders too, so two can share a
 // name: one is told from another by its use, the path it is used by.
@@ -2337,15 +2611,13 @@ function focusAdder() {
   const A = adder;
   if (!A) return;
   const a = addOf(A.workflow);
-  const t = componentsOf(workflowByName(A.workflow) || { components: [] }).length === 0 ? insp.head.querySelector(".x")
-    : !a.component ? A.picker.querySelector("input[type=radio]")
-    : A.targets[1] || A.idBox;
+  const t = !a.component && !a.kind ? A.search : A.targets[1] || A.idBox;
   if (t) t.focus({ preventScroll: false });
 }
 
 function buildAdder(w) {
   const uid = ++formId;
-  const A = { workflow: w.name, from: undefined, posSig: "", compSig: "", detailKey: "", refSig: "", target: null, targets: [], uid, idBox: null };
+  const A = { workflow: w.name, from: undefined, posSig: "", compSig: "", detailKey: "", refSig: "", target: null, targets: [], uid, idBox: null, query: "", expanded: true, summarySig: "" };
   const posId = "pos" + uid;
   A.pos = el("select", { id: posId, class: "in" });
   A.pos.addEventListener("change", () => {
@@ -2360,26 +2632,92 @@ function buildAdder(w) {
     A.pos,
     el("p", { class: "hint-text" }, "Steps run in the order they have in the file, so this decides when it runs."),
     A.posWarn);
+
+  // The chooser: a search box, then the kinds of step in groups.
+  const group = "comp" + uid;
+  A.search = el("input", { id: "find" + uid, type: "text", class: "in find", placeholder: "What happens next?", autocomplete: "off", spellcheck: "false" });
+  A.search.addEventListener("input", () => { A.query = A.search.value; filterChoices(A); });
+  A.search.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      const first = A.groups.querySelector(".choice:not([hidden]) input");
+      if (first) first.click();
+    }
+  });
+  A.builtinEls = {};
+  const builtinRow = (b) => {
+    const input = el("input", { type: "radio", name: group, value: b.use });
+    input.addEventListener("change", () => { if (input.checked) pickKind(A.workflow, b.kind); });
+    const row = el("label", { class: "choice kind-" + b.kind },
+      input, kindTile(b.kind, 38),
+      el("span", { class: "ctext" }, el("span", { class: "chead" }, el("span", { class: "cname" }, b.name), el("span", { class: "ckind" }, KIND_LABEL[b.kind])), el("span", { class: "cdesc" }, b.text)));
+    A.builtinEls[b.kind] = { row, input };
+    return row;
+  };
+  const cgroup = (title, ...rows) => el("div", { class: "cgroup" }, el("div", { class: "cgroup-h" }, title), el("div", { class: "choices", role: "presentation" }, rows));
+  A.gModel = cgroup("Ask a model", builtinRow(BUILTIN.ai), builtinRow(BUILTIN.decide));
+  A.gAct = cgroup("Act", builtinRow(BUILTIN.http));
   A.choices = el("div", { class: "choices", role: "presentation" });
-  A.picker = el("fieldset", { class: "picker" }, el("legend", {}, "Component"), A.choices);
+  A.noComps = el("p", { class: "muted small nocomps" }, "None yet. A component is a step written once, with named inputs, in components/<name>/component.yaml in the workflow's folder.");
+  A.gComp = el("div", { class: "cgroup" }, el("div", { class: "cgroup-h" }, "Your components"), A.choices, A.noComps);
+  A.noMatch = el("p", { class: "muted small", hidden: true, role: "status" });
+  A.groups = el("div", { class: "cgroups" }, A.gModel, A.gAct, A.gComp, A.noMatch);
+  A.finder = el("div", { class: "finder" }, el("label", { class: "vh", for: "find" + uid }, "Find a kind of step"), A.search);
+  // Once a kind is chosen the chooser folds into one line, to be opened again by Change.
+  A.summary = el("div", { class: "chosen", hidden: true });
+  A.picker = el("fieldset", { class: "picker chooser" }, el("legend", {}, "Kind of step"), A.summary, A.finder, A.groups);
   A.detail = el("div", { class: "adddetail" });
-  A.empty = el("div", { class: "emptystate" });
-  A.root = el("section", { class: "editform addform" }, A.empty, A.posField, A.picker, A.detail);
+  A.root = el("section", { class: "editform addform" }, A.posField, A.picker, A.detail);
   A.pick = (use) => pickComponent(A.workflow, use);
   A.submit = () => addStep();
   return A;
 }
 
+// filterChoices hides what the search does not match, and a group with nothing left.
+function filterChoices(A) {
+  const q = A.query.trim().toLowerCase();
+  let shown = 0;
+  for (const g of [A.gModel, A.gAct, A.gComp]) {
+    let any = 0;
+    for (const row of g.querySelectorAll(".choice")) {
+      const on = !q || row.textContent.toLowerCase().includes(q);
+      row.hidden = !on;
+      if (on) any++;
+    }
+    g.hidden = !any && !(g === A.gComp && !q && !g.querySelector(".choice"));
+    shown += any;
+  }
+  A.noMatch.hidden = !(q && !shown);
+  A.noMatch.textContent = "Nothing is called “" + A.query.trim() + "”.";
+}
+
+function pickKind(name, kind) {
+  const a = addOf(name);
+  a.kind = kind;
+  a.component = null;
+  const w = workflowByName(name);
+  if (!a.idTouched && w) a.id = freeId(w, BUILTIN[kind].idBase);
+  const A = adder;
+  if (A) A.expanded = false;
+  if (w) syncAdder(w);
+  updateBar();
+  if (A && (A.targets[1] || A.idBox)) (A.targets[1] || A.idBox).focus();
+}
+
 function pickComponent(name, use) {
   const a = addOf(name);
   a.component = use;
+  a.kind = null;
   const w = workflowByName(name);
+  const A = adder;
+  if (A) A.expanded = false;
   if (w) {
     const comp = componentOf(w, use);
     if (!a.idTouched) a.id = freeId(w, comp ? comp.name : use);
     syncAdder(w);
   }
   updateBar();
+  if (A && (A.targets[1] || A.idBox)) (A.targets[1] || A.idBox).focus();
 }
 
 // settleChoice keeps the component chosen one that is still offered, and picks
@@ -2423,10 +2761,11 @@ function syncChoices(A, comps, current, far) {
 function syncDetail(A, w, comp, a, sig) {
   const key = comp.use + "|" + JSON.stringify(comp.inputs || []);
   if (key !== A.detailKey) { A.detailKey = key; A.refSig = ""; buildDetail(A, w, comp); }
-  if (!a.idTouched) a.id = freeId(w, comp.name);
+  if (!a.idTouched) a.id = freeId(w, comp.idBase || comp.name);
   setValue(A.idBox, a.id);
   setValue(A.whenBox, a.when);
   (comp.inputs || []).forEach((inp, i) => setValue(A.targets[i + 1], a.values[inp.name] || ""));
+  if (comp.kind && BUILTIN[comp.kind] === comp && A.kindSync) A.kindSync(a);
   idNote(A, w, a);
   if (sig !== A.refSig) { A.refSig = sig; buildRefs(A, w, a.after); }
 }
@@ -2436,21 +2775,6 @@ function syncAdder(w) {
   if (!A || A.workflow !== w.name) return;
   const comps = componentsOf(w);
   if (A.from !== selected.add) { A.from = selected.add; a.after = resolveAfter(w, selected.add); }
-
-  // Nothing to add from: say where components come from.
-  A.empty.hidden = comps.length > 0;
-  A.posField.hidden = A.picker.hidden = A.detail.hidden = comps.length === 0;
-  if (!comps.length) {
-    if (!A.empty.firstChild) {
-      const folder = folderOf(w.path) + "/components/";
-      A.empty.replaceChildren(
-        el("div", { class: "etitle" }, "No components in this workflow yet"),
-        el("p", {}, "A step is added from a component: a step written once, with named inputs, that any workflow can use."),
-        el("p", {}, "Components live in ", el("span", { class: "mono" }, "components/<name>/component.yaml"), " in the workflow's folder, here ", el("span", { class: "mono" }, folder + "<name>/component.yaml"), "."),
-        el("p", { class: "muted small" }, "Write one in your editor and commit it. This page notices by itself, and it appears here."));
-    }
-    return;
-  }
 
   // Position.
   const valid = a.after === "trigger" || w.steps.some((s) => s.id === a.after);
@@ -2465,12 +2789,33 @@ function syncAdder(w) {
   A.pos.value = valid ? a.after : "";
   A.posWarn.hidden = valid;
 
-  // Components.
-  settleChoice(w, comps, a);
+  // What to add: a component that is no longer offered is let go.
+  if (a.component && !comps.some((c) => c.use === a.component)) a.component = null;
   syncChoices(A, comps, a.component, (c) => c.use.startsWith("../"));
+  for (const [kind, c] of Object.entries(A.builtinEls)) {
+    c.input.checked = a.kind === kind;
+    c.row.classList.toggle("on", a.kind === kind);
+  }
+  A.noComps.hidden = comps.length > 0;
+  const comp = chosenOf(w, a);
+  if (!comp) A.expanded = true;
+  A.groups.hidden = A.finder.hidden = !A.expanded;
+  A.summary.hidden = A.expanded;
+  filterChoices(A);
+  if (comp) {
+    const sig = comp.use + "|" + comp.name + "|" + (comp.kind || "");
+    if (sig !== A.summarySig) {
+      A.summarySig = sig;
+      const change = el("button", { type: "button", class: "linkbtn" }, "Change");
+      change.addEventListener("click", () => { A.expanded = true; A.search.value = ""; A.query = ""; const now = workflowByName(A.workflow); if (now) syncAdder(now); A.search.focus(); });
+      A.summary.replaceChildren(kindTile(comp.kind, 34),
+        el("span", { class: "ctext" }, el("span", { class: "cname" + (comp.use.startsWith("@") ? "" : " mono") }, comp.name), el("span", { class: "ckind" }, comp.use.startsWith("@") ? comp.text : (KIND_LABEL[comp.kind] || comp.kind) + " component")),
+        change);
+      A.summary.className = "chosen kind-" + comp.kind;
+    }
+  } else A.summarySig = "";
 
   // The step itself.
-  const comp = componentOf(w, a.component);
   A.detail.hidden = !comp;
   if (!comp) { A.detailKey = ""; return; }
   syncDetail(A, w, comp, a, w.name + "|" + a.after + "|" + w.steps.map((s) => s.id + ":" + (s.outputs || []).join("+")).join(",") + "|" + JSON.stringify(w.sample || null));
@@ -2527,7 +2872,8 @@ function buildDetail(A, w, comp) {
     "Empty means the step always runs." + (decide ? " For example " + decide.id + "." + decide.questions[0].name + ".value == \"…\"." : ""));
   A.targets.push(A.whenBox);
 
-  const fields = (comp.inputs || []).map((inp) => {
+  A.kindSync = null;
+  const fields = BUILTIN[comp.kind] === comp ? [] : (comp.inputs || []).map((inp) => {
     const id = "sin" + A.uid + "x" + inp.name.replace(/[^A-Za-z0-9_]/g, "_");
     // One line, so that Enter adds the step; an expression for an object or a list may need more.
     const long = inp.type === "object" || inp.type === "list" || inp.type === "any";
@@ -2541,15 +2887,72 @@ function buildDetail(A, w, comp) {
       : null;
     return plainField(A, inp.name, el("span", { class: "tag", title: "Type: " + inp.type }, inp.type), box, hint);
   });
-  const inputs = fields.length
+  const inputs = BUILTIN[comp.kind] === comp ? buildKindFields(A, w, a, comp.kind, textBox, remember)
+    : fields.length
     ? el("fieldset", { class: "group" }, el("legend", {}, "Inputs"), fields)
     : el("p", { class: "muted small" }, comp.name + " takes no input.");
 
   A.refs = el("div", { class: "refs" });
   A.detail.replaceChildren(...[
-    el("h2", { class: "sub" }, "New " + (KIND_LABEL[comp.kind] || comp.kind) + " step from " + comp.name),
+    el("h2", { class: "sub" }, BUILTIN[comp.kind] === comp ? "New " + comp.name + " step" : "New " + (KIND_LABEL[comp.kind] || comp.kind) + " step from " + comp.name),
     comp.kind === "flow" ? el("p", { class: "muted small flownote" }, "Runs steps of its own, written in the component's file. This step only chooses what goes in.") : null,
     idField, A.refs, whenField, inputs].filter(Boolean));
+}
+
+// buildKindFields makes the fields of a step that does its own work, and
+// A.kindSync, which puts what has been typed (kept in `a`) back into them.
+function buildKindFields(A, w, a, kind, textBox, remember) {
+  const edit = (apply) => (v) => { apply(v); a.edited = true; };
+  const sync = [];
+  const field = (label, box, hint, tag) => plainField(A, label, tag || null, box, hint);
+  const out = [];
+  const modelBox = () => {
+    const id = "smd" + A.uid + "x";
+    const box = textBox(id, { mono: true, set: edit((v) => { a.models[kind] = v; }) });
+    sync.push(() => setValue(box, a.models[kind]));
+    return field("Model", box, "As the server names it: provider, then the model.");
+  };
+  // A field that takes a whole key: a key clicked above replaces what is there.
+  const inputBox = () => {
+    const id = "sin" + A.uid + "xread";
+    const box = textBox(id, { mono: true, set: edit((v) => { a.input = v; }) });
+    box.dataset.whole = "1";
+    remember(box);
+    A.targets.push(box);
+    sync.push(() => setValue(box, a.input));
+    return field("What it reads", box, "A key, such as ${trigger.body}. Click one above to put it here.");
+  };
+  if (kind === "http") {
+    const mid = "smt" + A.uid + "x";
+    const method = el("select", { id: mid, class: "in" }, METHODS.map((m) => el("option", { value: m }, m)));
+    method.addEventListener("change", () => { a.method = method.value; a.edited = true; updateBar(); });
+    sync.push(() => { method.value = a.method; });
+    const uid = "sur" + A.uid + "x";
+    const url = textBox(uid, { mono: true, set: edit((v) => { a.url = v; }) });
+    remember(url);
+    A.targets.push(url);
+    sync.push(() => setValue(url, a.url));
+    out.push(el("div", { class: "field" }, el("div", { class: "lab" }, el("label", { for: mid }, "Method")), method),
+      field("URL", url, "For example ${env.BILLING_URL}. Click a key above to put it here."));
+  } else if (kind === "decide") {
+    A.questions = buildQuestionList(a.questions, () => { a.edited = true; updateBar(); }, A.uid);
+    out.push(modelBox(), inputBox(),
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Questions")),
+      A.questions.root);
+  } else if (kind === "ai") {
+    const pid = "spr" + A.uid + "x";
+    const prompt = el("textarea", { id: pid, class: "in mono prompt", rows: 10, spellcheck: "false", placeholder: "Tell the model what to do with what it reads." });
+    prompt.addEventListener("input", () => { a.prompt = prompt.value; a.edited = true; updateBar(); });
+    sync.push(() => setValue(prompt, a.prompt));
+    A.fieldTable = buildFieldTable(a.fields, () => { a.edited = true; updateBar(); }, A.uid);
+    out.push(modelBox(), inputBox(),
+      el("div", { class: "field" }, el("div", { class: "lab" }, el("label", { for: pid }, "Instructions")), prompt,
+        el("p", { class: "hint-text" }, "Written to prompts/<step id>.md and sent as it is: the model gets what it reads apart from it, so no ${...} goes here.")),
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "The answer has these fields")),
+      A.fieldTable.root);
+  }
+  A.kindSync = () => sync.forEach((f) => f());
+  return el("div", { class: "kindfields" }, out);
 }
 
 // buildRefs shows what can be referred to at the chosen position. A click puts
@@ -2577,6 +2980,8 @@ function insertRef(A, chip) {
   const raw = t.dataset.raw === "1";
   const text = raw ? chip.text : "${" + chip.text + "}";
   t.focus();
+  // A field that takes one key has it replaced, not added to.
+  if (t.dataset.whole === "1" && (t.value.trim() === "" || WHOLE_REF.test(t.value.trim())) && !chip.open) t.select();
   const from = t.selectionStart == null ? t.value.length : t.selectionStart, to = t.selectionEnd == null ? from : t.selectionEnd;
   t.setRangeText(text, from, to, "end");
   // An unfinished reference leaves the caret where the rest is typed.
@@ -2588,7 +2993,7 @@ async function addStep() {
   if (!view || !state.editable) return;
   const name = view.w.name, w = workflowByName(name), st = uiOf(name), a = addOf(name);
   if (!w || w.problem || st.saving) return;
-  const comp = componentOf(w, a.component);
+  const comp = chosenOf(w, a);
   if (!comp) return;
   if (a.after !== "trigger" && !w.steps.some((s) => s.id === a.after)) {
     st.notice = { kind: "error", did: "add", error: "The step this was to go after is no longer in the workflow. Choose a position and add it again." };
@@ -2601,12 +3006,18 @@ async function addStep() {
     const v = a.values[inp.name] || "";
     if (v.trim() !== "") given[inp.name] = v;
   }
+  // A kind that does its own work says what it does; a component says which one and what goes in.
+  const add = { id, after: a.after, when: a.when.trim() };
+  if (a.kind === "http") Object.assign(add, { kind: "http", method: a.method, url: a.url.trim() });
+  else if (a.kind === "decide") Object.assign(add, { kind: "decide", model: a.models.decide.trim(), input: a.input.trim(), questions: questionsOut(a.questions) });
+  else if (a.kind === "ai") Object.assign(add, { kind: "ai", model: a.models.ai.trim(), input: a.input.trim(), prompt: a.prompt, fields: fieldsOut(a.fields) });
+  else Object.assign(add, { use: comp.use, with: given });
   st.saving = true;
   st.notice = null;
   updateBar();
   let r = null, failure = null;
   try {
-    r = await request("POST", "/api/steps", { workflow: name, rev: w.rev, add: { id, after: a.after, use: comp.use, when: a.when.trim(), with: given } });
+    r = await request("POST", "/api/steps", { workflow: name, rev: w.rev, add });
   } catch (err) {
     failure = { kind: "network", did: "add", id };
   }
@@ -4191,6 +4602,7 @@ function syncEditor(w, step) {
   if (key !== ed.formKey) rebuildForm(w, step, key);
   else { ed.form.fields = step.edit; syncForm(w, ed.form); }
   paintHead();
+  paintSchema();
   // What it reads and what it gave only change when the run or the file does.
   const ran = runShown();
   const sig = JSON.stringify([ran ? [ran.run, ran.status, ran.ms, (ran.steps || []).length] : null, step, w.rev]);
@@ -4204,6 +4616,7 @@ function syncEditorValues() {
   const w = workflowByName(ed.workflow);
   if (w) syncForm(w, ed.form);
   paintHead();
+  paintSchema();
 }
 
 function rebuildForm(w, step, key) {
@@ -4217,7 +4630,9 @@ function rebuildForm(w, step, key) {
   ed.form = buildEditorForm(w, step, key);
   ed.panels.params.replaceChildren(...ed.form.params);
   ed.panels.settings.replaceChildren(...ed.form.settings);
+  ed.schemaSig = "";
   syncForm(w, ed.form);
+  paintSchema();
   if (back && ed.form.controls[back[0]]) {
     const box = ed.form.controls[back[0]].input;
     box.focus({ preventScroll: true });
@@ -4379,12 +4794,10 @@ function buildEditorForm(w, step, key) {
   if (role.model) { relabel(role.model, "Model"); params.push(role.model.row); }
   if (role.input) { relabel(role.input, step.kind === "decide" ? "What it reads" : "Input"); params.push(role.input.row); }
   if (role.prompt) params.push(role.prompt.row);
+  // The fields the model answers with are edited here, as a table. Which file holds them is a setting.
   if (role.output) {
-    relabel(role.output, "Output schema");
-    const fields = step.outputs || [];
-    params.push(el("div", { class: "ned-schema" }, role.output.row,
-      el("p", { class: "ned-plain" }, fields.length ? "The model answers with " : "The fields come from the schema file.", fields.map((n) => el("span", { class: "ned-fieldchip mono" }, n)),
-        fields.length ? " and no others. They are set in the schema file." : "")));
+    f.schemaBox = el("div", { class: "ned-schema" });
+    params.push(f.schemaBox);
   }
   if (step.kind === "decide" && step.questions && step.questions.length) {
     params.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Questions"), el("span", { class: "ned-count" }, String(step.questions.length))));
@@ -4409,6 +4822,11 @@ function buildEditorForm(w, step, key) {
   if (!params.length) params.push(el("p", { class: "ned-plain" }, "This step has nothing the page can change. What it does is set in its component."));
 
   const settings = [];
+  if (role.output) {
+    relabel(role.output, "Output schema file");
+    role.output.row.classList.add("ned-schemafile");
+    settings.push(role.output.row, el("p", { class: "ned-words" }, "The JSON Schema file the model's answer must fit. Its fields are edited under Parameters."));
+  }
   if (role.when) {
     relabel(role.when, "Run only when");
     const words = el("p", { class: "ned-words", "aria-live": "polite" });
@@ -4441,6 +4859,135 @@ function paintHead() {
   const running = !!t && t.state === "running";
   ed.testBtn.setAttribute("aria-disabled", running ? "true" : "false");
   ed.testBtn.replaceChildren(icon("run", 13), running ? "Testing…" : "Test step");
+}
+
+// ---- the middle: what an AI step answers with ----
+//
+// The fields of the answer are kept in a schema file of their own. They are
+// read from the server when the editor opens a step and edited as drafts, like
+// every other field: a draft is { fields } for the table or { text } for the
+// file's text, and Save writes it after the workflow's own lines.
+
+const schemaKey = (name, step) => name + "|" + step;
+const baseFields = (c) => (c.fields ? fieldsOut(c.fields.map(rowOfField)) : null);
+const schemaDraftOf = (name, step) => (drafts[name] && drafts[name].schemas[step]) || null;
+function schemaSame(draft, base) {
+  return draft.text !== undefined ? draft.text === base.text : !!base.fields && JSON.stringify(draft.fields) === JSON.stringify(baseFields(base));
+}
+
+function loadSchema(w, step, force) {
+  const key = schemaKey(w.name, step);
+  const prev = schemaCache[key];
+  if (prev && prev.inflight && !force) return Promise.resolve();
+  schemaCache[key] = { ...(prev || { state: "loading" }), inflight: true, wfRev: w.rev };
+  return request("GET", "/api/schema?workflow=" + encodeURIComponent(w.name) + "&step=" + encodeURIComponent(step))
+    .then((r) => {
+      schemaCache[key] = r.ok
+        ? { state: "ready", file: r.body.file, text: r.body.text, rev: r.body.rev, fields: r.body.fields || null, wfRev: w.rev }
+        : { state: "error", error: r.body.error || "the server answered " + r.status, wfRev: w.rev };
+    })
+    .catch(() => { schemaCache[key] = { state: "error", error: "the server cannot be reached", wfRev: w.rev }; })
+    .then(() => {
+      const now = workflowByName(w.name);
+      if (!now) return;
+      pruneDrafts(now);
+      if (ed && ed.workflow === w.name) paintSchema();
+      draftChanged(w.name, true);
+    });
+}
+
+function setSchemaDraft(name, step, draft) {
+  const d = draftsOf(name), st = uiOf(name);
+  if (draft) d.schemas[step] = draft; else delete d.schemas[step];
+  if (st.notice && (st.notice.kind === "saved" || st.notice.kind === "external") && !(st.notice.dropped && st.notice.dropped.length)) st.notice = null;
+}
+
+// paintSchema draws the answer's fields of the step being edited. The table is
+// only built again when what it shows is no longer what the draft says, so a
+// poll does not take the focus out of a box being typed in.
+function paintSchema() {
+  if (!ed || !ed.form || !ed.form.schemaBox) return;
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const box = ed.form.schemaBox, key = schemaKey(w.name, step.id);
+  let c = schemaCache[key];
+  if (!c || (c.wfRev !== w.rev && !c.inflight && c.state !== "error")) { loadSchema(w, step.id); c = schemaCache[key]; }
+  const draft = schemaDraftOf(w.name, step.id);
+  const ready = c.state === "ready";
+  const asText = ready && (!c.fields || ed.schemaText || (draft && draft.text !== undefined));
+  const sig = [c.state, asText ? "text" : "fields", ready ? c.rev : c.error || "", ready ? c.file : ""].join("|");
+  const shown = draft ? (asText ? draft.text : JSON.stringify(draft.fields)) : ready ? (asText ? c.text : JSON.stringify(baseFields(c))) : "";
+  if (sig === ed.schemaSig) {
+    if (asText) { if (ed.schemaText$ && ed.schemaText$.value !== shown) setValue(ed.schemaText$, shown); box.classList.toggle("edited", !!draft); return paintSchemaHead(c, draft, asText); }
+    if (shown === ed.schemaShown) { box.classList.toggle("edited", !!draft); return paintSchemaHead(c, draft, asText); }
+  }
+  ed.schemaSig = sig;
+  ed.schemaShown = shown;
+  ed.schemaText$ = null;
+  ed.schemaHead = el("div", { class: "ned-schemahead" });
+  const body = el("div", { class: "ned-schemabody" });
+  box.classList.toggle("edited", !!draft);
+  box.replaceChildren(ed.schemaHead, body);
+  if (c.state === "loading") body.append(el("p", { class: "ned-plain", role: "status" }, "Reading the answer's fields…"));
+  else if (c.state === "error") {
+    const again = el("button", { type: "button", class: "linkbtn" }, "Try again");
+    again.addEventListener("click", () => { schemaCache[key] = { state: "loading", wfRev: w.rev }; loadSchema(w, step.id, true); paintSchema(); });
+    body.append(el("p", { class: "ned-bad" }, "The answer's fields could not be read"), el("p", { class: "ned-plain" }, c.error + " ", again));
+  } else if (asText) {
+    const id = "nst" + ++formId;
+    const area = el("textarea", { id, class: "in mono prompt ned-schematext", rows: 14, spellcheck: "false", "aria-label": "The schema, as JSON text" });
+    area.value = shown;
+    const bad = el("p", { class: "conflict", hidden: true, role: "status" });
+    const check = () => {
+      let msg = "";
+      try { const v = JSON.parse(area.value); if (!v || typeof v !== "object" || Array.isArray(v)) msg = "A schema is a JSON object."; } catch (err) { msg = "Not valid JSON yet: " + err.message; }
+      bad.hidden = !msg;
+      bad.textContent = msg;
+    };
+    area.addEventListener("input", () => {
+      const base = schemaCache[key];
+      setSchemaDraft(w.name, step.id, base && area.value !== base.text ? { text: area.value } : null);
+      ed.schemaShown = area.value;
+      check();
+      draftChanged(w.name);
+    });
+    ed.schemaText$ = area;
+    body.append(area, bad, el("p", { class: "ned-plain" }, c.fields ? "This is the file as text. Whatever it says is saved as written." : "This schema says more than a list of fields can, so it is edited as text. Whatever it says is saved as written."));
+  } else {
+    const list = (draft ? draft.fields : baseFields(c)).map((f) => ({ ...f, options: (f.options || []).join(", "), description: f.description || "" }));
+    ed.schemaList = list;
+    const table = buildFieldTable(list, () => {
+      const base = schemaCache[key], out = fieldsOut(list);
+      setSchemaDraft(w.name, step.id, base && base.fields && JSON.stringify(out) === JSON.stringify(baseFields(base)) ? null : { fields: out });
+      ed.schemaShown = JSON.stringify(out);
+      draftChanged(w.name);
+    }, ++formId);
+    body.append(table.root);
+  }
+  paintSchemaHead(c, draft, asText);
+}
+
+// The line above the fields: what they are, which file they are in, and how to change the way they are edited.
+function paintSchemaHead(c, draft, asText) {
+  const { w, step } = curOf();
+  if (!w || !step || !ed.schemaHead) return;
+  const head = ed.schemaHead, ready = c.state === "ready";
+  const parts = [el("span", { class: "ned-h" }, "The answer has these fields")];
+  if (ready) parts.push(el("span", { class: "ned-fieldchip mono", title: "The schema file" }, c.file));
+  parts.push(el("span", { class: "grow" }));
+  if (draft) {
+    const back = el("button", { type: "button", class: "linkbtn", title: "Put back what the file says" }, "Revert");
+    back.addEventListener("click", () => { setSchemaDraft(w.name, step.id, null); paintSchema(); draftChanged(w.name, true); });
+    parts.push(back);
+  }
+  if (ready && c.fields) {
+    const to = el("button", { type: "button", class: "linkbtn" }, asText ? "Edit as fields" : "Edit as text");
+    // The table and the text are two views of the same file; a change made in one is not carried to the other.
+    if (draft && (asText ? draft.text !== undefined : draft.fields !== undefined)) { to.disabled = true; to.title = "Save or revert what you changed first"; }
+    to.addEventListener("click", () => { ed.schemaText = !asText; paintSchema(); });
+    parts.push(to);
+  }
+  head.replaceChildren(...parts);
 }
 
 // ---- the left: what the step can read ----
@@ -4741,7 +5288,7 @@ async function testStep() {
 const wordsFor = (e, step) => {
   if (e.group && e.group !== "Input") return step.kind === "decide" ? "the " + e.group + " question" : e.label.toLowerCase() + " of " + e.group;
   if (e.group) return "the " + e.label + " input";
-  return { "Run only when": "the condition", Model: "the model", Input: "the input" }[e.label] || "the " + e.label.toLowerCase();
+  return { "Run only when": "the condition", Model: "the model", Input: "the input", "Output schema": "the schema file's name" }[e.label] || "the " + e.label.toLowerCase();
 };
 
 function buildFoot() {
@@ -4781,6 +5328,16 @@ function diffOf(w, step) {
     if (p && p.state === "ready") out.push(["del", "- " + lines(p.text) + " in " + p.file]);
     out.push(["add", "+ " + lines(text) + (p && p.file ? " in " + p.file : "")]);
   }
+  for (const [stepId, draft] of Object.entries(d.schemas)) {
+    const c = schemaCache[w.name + "|" + stepId];
+    const show = (f) => f.name + " · " + f.type + (f.options ? " (" + f.options.join(", ") + ")" : "") + " · " + (f.required ? "required" : "optional") + (f.description ? " · " + f.description : "");
+    out.push(["hunk", "@@ " + stepId + " · the answer's fields" + (c && c.file ? " in " + c.file : "") + " @@"]);
+    if (draft.text !== undefined) { out.push(["add", "+ the schema's text, " + plural(draft.text.split("\n").length, "line")]); continue; }
+    const was = c && c.state === "ready" ? baseFields(c) || [] : [];
+    const has = (list, f) => list.some((x) => JSON.stringify(x) === JSON.stringify(f));
+    for (const f of was) if (!has(draft.fields, f)) out.push(["del", "- " + show(f)]);
+    for (const f of draft.fields) if (!has(was, f)) out.push(["add", "+ " + show(f)]);
+  }
   return out;
 }
 
@@ -4789,7 +5346,7 @@ function paintFoot() {
   const { w, step } = curOf();
   if (!w || !step) return;
   const b = ed.foot, st = uiOf(w.name), d = draftsOf(w.name);
-  const n = dirtyCount(w.name), nf = Object.keys(d.fields).length, np = Object.keys(d.prompts).length;
+  const n = dirtyCount(w.name), nf = Object.keys(d.fields).length, np = Object.keys(d.prompts).length, ns = Object.keys(d.schemas).length;
   b.root.classList.toggle("dirty", n > 0);
   if (b.shownNotice !== st.notice) {
     b.shownNotice = st.notice;
@@ -4805,13 +5362,15 @@ function paintFoot() {
   } else {
     const here = [...new Set([
       ...Object.values(d.fields).filter((e) => e.node === step.id).map((e) => wordsFor(e, step)),
-      ...(d.prompts[step.id] !== undefined ? ["the prompt"] : [])])];
+      ...(d.prompts[step.id] !== undefined ? ["the prompt"] : []),
+      ...(d.schemas[step.id] !== undefined ? ["the answer's fields"] : [])])];
     const elsewhere = n - draftCountFor(w.name, step.id);
     b.dot.hidden = false;
     b.count.textContent = st.saving ? "Saving…" : plural(n, "change");
     b.what.textContent = [here.slice(0, 3).join(", ") + (here.length > 3 ? " and " + (here.length - 3) + " more" : ""), elsewhere ? plural(elsewhere, "change") + " in other steps" : ""].filter(Boolean).join(" and ");
     const file = (w.path || "workflow.yaml").split("/").pop();
-    put(b.writes, "Saving writes ", [nf ? plural(nf, "line") + " of " : null, nf ? el("span", { class: "mono" }, file) : null, nf && np ? " and " : null, np ? plural(np, "prompt file") : null], " and puts it live.");
+    put(b.writes, "Saving writes ", [nf ? plural(nf, "line") + " of " : null, nf ? el("span", { class: "mono" }, file) : null, nf && (np || ns) ? " and " : null,
+      np ? plural(np, "prompt file") : null, np && ns ? " and " : null, ns ? plural(ns, "schema file") : null], " and puts it live.");
     b.link.hidden = false;
   }
   b.link.setAttribute("aria-expanded", ed.diff ? "true" : "false");

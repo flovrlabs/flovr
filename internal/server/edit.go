@@ -554,6 +554,14 @@ func (s *Server) steps(req stepsRequest) (int, any) {
 		status, answer := s.save(i, out, fmt.Sprintf("step %s added, %s", add.ID, what))
 		if status != http.StatusOK {
 			undo()
+			// The problems are in the file as it would have been, whose
+			// lines are not those of the file the page shows.
+			if f, ok := answer.(failure); ok {
+				for j := range f.Problems {
+					f.Problems[j].Line = 0
+				}
+				answer = f
+			}
 		}
 		return status, answer
 	}

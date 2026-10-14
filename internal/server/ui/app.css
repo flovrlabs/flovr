@@ -1707,3 +1707,86 @@ body.ned-open { overflow: hidden; }
 }
 .btn.small.openedit { margin-right: 4px; font-size: 12px; }
 .btn.small.openedit svg { margin-right: 2px; }
+
+/* Choosing what to add: a search box, then the kinds of step in groups. */
+.vh { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.chooser > .finder, .chooser > .chosen, .chooser > .cgroups { clear: both; }
+.chooser .finder { margin: 0 0 8px; }
+.chooser .in.find { height: 38px; padding: 0 12px; border-radius: 9px; background: var(--surface); }
+.cgroup { margin: 0 0 6px; }
+.cgroup-h { padding: 8px 2px 5px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.nocomps { margin: 2px 2px 0; }
+.chosen {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--raised));
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+.chosen .tile { width: 34px; height: 34px; }
+.chosen .ctext { display: block; flex: 1; min-width: 0; }
+.chosen .ctext > span { display: block; }
+.chosen .cname { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.chosen .ckind { color: var(--muted); font-size: 12px; }
+
+/* What a new step that does its own work asks for. */
+.kindfields { margin: 0; }
+.addform .ned-sect { margin: 16px 0 8px; }
+.qcard { margin-bottom: 12px; }
+.qnum { font-size: 13px; font-weight: 650; }
+.qlab { font-size: 12.5px; font-weight: 600; }
+.qtypes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.qtype { min-height: 34px; padding: 4px 6px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface); color: var(--text); font: 600 12.5px var(--sans); cursor: pointer; }
+.qtype:hover { border-color: var(--faint); }
+.qtype[aria-checked="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); }
+.qtype:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.qyn, .qanswers { display: flex; flex-direction: column; gap: 10px; }
+.qyn .field { margin: 0; }
+.qyn .qhint { margin: -4px 0 0; }
+.qahead, .qarow { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr) 28px; gap: 8px; align-items: center; }
+.qahead { color: var(--muted); font-size: 12px; }
+.qadd { align-self: flex-start; }
+.qanswers .in, .qcard .in { background: var(--surface); }
+
+/* The fields an AI step answers with. */
+.ftable { container-type: inline-size; margin: 0 0 14px; }
+.fhead, .frow { display: grid; grid-template-columns: minmax(0, 1fr) 128px 62px minmax(0, 1.6fr) 28px; gap: 8px; align-items: center; }
+.fhead { padding: 0 0 5px; color: var(--muted); font-size: 12px; }
+.fhead span:nth-child(3) { text-align: center; }
+.frows { display: flex; flex-direction: column; gap: 8px; }
+.frow .fopts { grid-column: 1 / 5; }
+.freq { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12.5px; cursor: pointer; }
+.freq input { width: 16px; height: 16px; margin: 0; accent-color: var(--brand-btn); }
+.freq span { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.freq:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.fremove { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted); cursor: pointer; }
+.fremove:hover { background: var(--raised); color: var(--failed); }
+.fremove:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.factions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-top: 10px; }
+.fnote { color: var(--muted); font-size: 12px; }
+.fwarn div + div { margin-top: 3px; }
+.fwarn { margin-top: 8px; }
+.ftable .in { background: var(--surface); }
+.ned-panel .ftable .in { background: var(--chrome); }
+.ftable.edited .in { border-color: var(--accent); }
+@container (max-width: 480px) {
+  .fhead { display: none; }
+  .frow { grid-template-columns: minmax(0, 1fr) 120px auto 28px; }
+  .frow > :nth-child(4) { grid-column: 1 / -1; grid-row: 2; }
+  .frow > :nth-child(5) { grid-column: 4; grid-row: 1; }
+  .frow > .fopts { grid-column: 1 / -1; }
+  .freq span { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; }
+  .frows { gap: 12px; }
+}
+
+/* The answer's fields, in the node editor. */
+.ned-schema { margin: 4px 0 18px; }
+.ned-schemahead { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0 0 10px; }
+.ned-schemahead .ned-fieldchip { margin: 0; font-size: 12px; }
+.ned-schemahead .linkbtn:disabled { color: var(--muted); text-decoration: none; cursor: not-allowed; }
+.ned-schema.edited .ned-h::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--brand); }
+.ned-schematext { min-height: 260px; white-space: pre; overflow: auto; background: var(--chrome); }
+.ned-schemafile { margin-bottom: 6px; }

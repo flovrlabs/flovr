@@ -106,6 +106,9 @@ func TestStepsThatDoTheirOwnWorkAreRefusedWithoutLeavingFiles(t *testing.T) {
 		if code == http.StatusOK || !strings.Contains(body, tc.want) {
 			t.Errorf("%v: status = %d, body %s", tc.add, code, body)
 		}
+		if strings.Contains(body, `"line":`) && !strings.Contains(body, `"line":0`) {
+			t.Errorf("%v: a problem names a line of a file that was never written: %s", tc.add, body)
+		}
 	}
 	if got := readFile(t, filepath.Join(dir, "workflow.yaml")); got != before {
 		t.Errorf("the workflow file changed")
