@@ -208,7 +208,8 @@ const percent = (p) => (p * 100).toFixed(p >= 0.995 || p < 0.005 ? 1 : 0) + "%";
 const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 
 // The address is #/workflows or #/services for the lists, the first of them
-// when there is none, and #/new for the form for a new workflow. A workflow,
+// when there is none, #/new for the form for a new workflow and #/new-service
+// for the form for a new service. A workflow,
 // or a component, is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>,
 // or /a/<step> while a step is being added after that step ("trigger" for the
 // first place, "-" for the last). /t/<run> is the form that keeps a run as a
@@ -217,7 +218,7 @@ const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 // /v/tests is the list of the workflow's tests, /v/runs the list of its runs.
 function readAddress() {
   const raw = location.hash.replace(/^#\/?/, "");
-  if (raw === "" || raw === "workflows" || raw === "services") { selected = { ...BLANK, home: raw || "workflows" }; return; }
+  if (raw === "" || raw === "workflows" || raw === "services" || raw === "new-service") { selected = { ...BLANK, home: raw || "workflows" }; return; }
   if (raw === "new") { selected = { ...BLANK, make: true }; return; }
   const parts = raw.split("/").map(decodeURIComponent);
   const found = {};
@@ -367,7 +368,7 @@ function render() {
   const moved = key !== lastKey;
   lastKey = key;
 
-  paintRail(home || (isComp(w) ? "services" : "workflows"));
+  paintRail(home === "new-service" ? "services" : home || (isComp(w) ? "services" : "workflows"));
   renderTop(w, home);
   if (home) {
     view = null;
@@ -432,14 +433,18 @@ function renderTop(w, home) {
 
   const anyFailed = state.runs.some((r) => r.status === "failed" && latestRun(r.workflow) === r);
   document.title = anyFailed ? "flowmaker (a run failed)" : "flowmaker";
+  // The way back to the list it is in, then its name.
+  const back = (to, label) => [el("a", { href: "#/" + to, class: "crumbback", "data-focus": "back:" + to }, label), icon("chevron", 14)];
+  if (home === "new-service") {
+    $("crumb").replaceChildren(...back("services", "Services"), el("strong", {}, "New service"));
+    return;
+  }
   if (home) {
     $("crumb").replaceChildren(...[
       el("h1", {}, home === "services" ? "Services" : "Workflows"),
       home === "services" ? el("span", { class: "lede" }, "Pieces that workflows use. A change to one reaches every step that uses it.") : null].filter(Boolean));
     return;
   }
-  // The way back to the list it is in, then its name.
-  const back = (to, label) => [el("a", { href: "#/" + to, class: "crumbback", "data-focus": "back:" + to }, label), icon("chevron", 14)];
   if (w.draft) {
     $("crumb").replaceChildren(...back("workflows", "Workflows"), el("strong", {}, w.label || "New workflow"));
     return;
@@ -465,8 +470,9 @@ function statusMark(status, size) {
 const homeUi = { kind: null, query: "", filter: "all", root: null, search: null, filters: null, newSlot: null, rows: null };
 
 function renderHome(kind) {
-  if (homeUi.kind !== kind || !homeUi.root || !$("home").contains(homeUi.root)) buildHome(kind);
-  paintHome();
+  const form = kind === "new-service";
+  if (homeUi.kind !== kind || !homeUi.root || !$("home").contains(homeUi.root)) (form ? buildServiceForm : buildHome)(kind);
+  if (!form) paintHome();
 }
 
 function buildHome(kind) {
@@ -505,9 +511,11 @@ function paintHome() {
       onclick: () => { homeUi.filter = name; paintHome(); },
     }, label, el("span", { class: "hn" + (bad && n ? " bad" : "") }, n));
   homeUi.filters.replaceChildren(filter("all", "All", all.length), filter("failing", "Failing", failing.length, true));
-  homeUi.newSlot.replaceChildren(...(!services && canMake() ? [el("button", {
-      type: "button", class: "btn primary hnew", "data-focus": "new-workflow", onclick: () => go({ make: true }),
-    }, icon("plus", 13), making && makeTouched() ? "Go on with the new workflow" : "New workflow")] : []));
+  const goOn = services ? svcTouched() : !!making && makeTouched();
+  homeUi.newSlot.replaceChildren(...(canMake() ? [el("button", {
+      type: "button", class: "btn primary hnew", "data-focus": services ? "new-service" : "new-workflow",
+      onclick: () => go(services ? { home: "new-service" } : { make: true }),
+    }, icon("plus", 13), (goOn ? "Go on with the new " : "New ") + (services ? "service" : "workflow"))] : []));
 
   if (!found.length) {
     const none = all.length ? "Nothing here matches."
@@ -596,6 +604,201 @@ function serviceRow(x) {
       ? [hstat(v === "passed" ? "ok" : v === "unmet" || v === "broke" ? "failed" : v === "running" ? "running" : "pending", VERDICT[v].word), el("div", { class: "hwhen" }, when(test.started))]
       : hnone((x.cases || []).length ? "Not run yet" : "No tests")),
   ]);
+}
+
+// ---- making a service ----
+//
+// The form for a new service is a page of its own, under the list of
+// services. The work is set in the fields of a new step that does its own
+// work, and what it reads is its own input. What has been typed lives in
+// `svc` until the service is made or the form is cancelled, so a trip to a
+// workflow and back loses none of it.
+
+let svc = null;
+const componentsDir = "components"; // the folder, in a root, that a service made here goes in
+const PARAM_TYPES = ["string", "number", "boolean", "object", "list", "any"];
+const SVC_KINDS = [["http", "HTTP request", "Send to any API"], ["ai", "AI", "Write or extract, in fields you define"], ["decide", "Decide", "Yes or no, one of a list, or a score"]];
+const svcOf = () => svc || (svc = {
+  root: (state.roots || [])[0] || "", name: "", description: "", kind: "http", inputs: [{ name: "", type: "string" }],
+  method: "POST", url: "", input: "${input}", prompt: "", edited: false, saving: false, failure: null,
+  models: { decide: "openrouter/cloudflare/clef", ai: "openrouter/deepseek/deepseek-v4.1-flash" },
+  questions: [blankQuestion()], fields: [blankField()],
+});
+const svcTouched = () => !!svc && (svc.edited || svc.name.trim() !== "" || svc.description.trim() !== "" || svc.inputs.some((i) => i.name.trim() !== ""));
+
+function buildServiceForm(kind) {
+  const m = svcOf();
+  const A = {
+    uid: "svc", targets: [], target: null, submit: () => makeService(),
+    readHint: "A key, such as ${input.ticket}. Click one above to put it here.",
+    promptHint: "Written to prompts/<name>.md and sent as it is: the model gets what it reads apart from it, so no ${...} goes here.",
+  };
+  homeUi.kind = kind;
+  homeUi.svc = A;
+  const textBox = (id, props) => formBox(A, id, props);
+  const remember = (box) => box.addEventListener("focus", () => { A.target = box; });
+  const field = (label, id, box, hint) => el("div", { class: "field" }, el("div", { class: "lab" }, el("label", { for: id }, label)), box, hint || null);
+
+  A.nameBox = textBox("svc-name", { mono: true, set: (v) => { m.name = v; paintServiceForm(); } });
+  A.fileNote = el("p", { class: "hint-text" });
+  A.descBox = textBox("svc-desc", { set: (v) => { m.description = v; } });
+  const roots = state.roots || [];
+  A.rootBox = roots.length > 1 ? el("select", { id: "svc-root", class: "in" }, roots.map((r) => el("option", { value: r }, r))) : null;
+  if (A.rootBox) A.rootBox.addEventListener("change", () => { m.root = A.rootBox.value; paintServiceForm(); });
+
+  A.kinds = el("div", { class: "svckinds", role: "group", "aria-label": "What it does" }, SVC_KINDS.map(([k, label, text]) => {
+    const b = el("button", { type: "button", class: "svckind", "data-kind": k, "data-focus": "svc-kind:" + k }, kindTile(k, 34), el("span", { class: "ctext" }, el("span", { class: "cname" }, label), el("span", { class: "cdesc" }, text)));
+    b.addEventListener("click", () => { if (m.kind !== k) { m.kind = k; buildWork(); paintServiceForm(); } });
+    return b;
+  }));
+  A.inputsBox = el("div", { class: "svcinputs" });
+  A.addInput = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add an input");
+  A.addInput.addEventListener("click", () => { m.inputs.push({ name: "", type: "string" }); paintInputs(true); });
+  A.refs = el("div", { class: "refs" });
+  A.work = el("div", { class: "svcwork" });
+  A.problems = el("div", { class: "conflict", hidden: true, role: "alert" });
+  A.notice = el("div", { class: "noticeslot" });
+  A.cancel = el("button", { type: "button", class: "btn" }, "Cancel");
+  A.cancel.addEventListener("click", cancelService);
+  A.make = el("button", { type: "button", class: "btn primary", "data-focus": "svc-make" }, "Make service");
+  A.make.addEventListener("click", makeService);
+  const buildWork = () => {
+    A.targets = [];
+    A.work.replaceChildren(buildKindFields(A, null, m, m.kind, textBox, remember));
+    if (A.kindSync) A.kindSync();
+  };
+
+  homeUi.root = el("div", { class: "hwrap svcwrap" },
+    el("section", { class: "svcform", "aria-label": "New service" },
+      el("div", { class: "svcgrid" },
+        field("Name", "svc-name", A.nameBox, A.fileNote),
+        field("Description", "svc-desc", A.descBox, el("p", { class: "hint-text" }, "A line on what it is for, shown where a service is picked.")),
+        A.rootBox ? field("Folder", "svc-root", A.rootBox) : null),
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it does")), A.kinds,
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it takes"), el("span", { class: "muted small" }, "Each step that uses it fills these in.")),
+      A.inputsBox, A.addInput,
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "How it does it")), A.refs, A.work, A.problems),
+    el("div", { class: "svcbar" }, A.notice, el("div", { class: "barrow" }, el("span", { class: "grow" }), A.cancel, A.make)));
+  $("home").replaceChildren(homeUi.root);
+
+  setValue(A.nameBox, m.name);
+  setValue(A.descBox, m.description);
+  if (A.rootBox) A.rootBox.value = m.root;
+  buildWork();
+  paintInputs(false);
+  paintRefs();
+  paintServiceForm();
+  if (!m.name) A.nameBox.focus({ preventScroll: true });
+}
+
+// paintInputs draws a row for each input: its name, its type, and a way to take it out.
+function paintInputs(focusLast) {
+  const A = homeUi.svc, m = svcOf();
+  A.inputsBox.replaceChildren(...m.inputs.map((inp, i) => {
+    const name = el("input", { type: "text", class: "in mono", placeholder: "name", "aria-label": "Name of input " + (i + 1), spellcheck: "false", autocomplete: "off" });
+    name.value = inp.name;
+    name.addEventListener("input", () => { inp.name = name.value; paintRefs(); });
+    const type = el("select", { class: "in", "aria-label": "Type of input " + (i + 1) }, PARAM_TYPES.map((t) => el("option", { value: t }, t)));
+    type.value = inp.type;
+    type.addEventListener("change", () => { inp.type = type.value; });
+    const x = el("button", { type: "button", class: "x small", "aria-label": "Take out input " + (inp.name || i + 1), title: "Take it out" }, icon("close", 13));
+    x.addEventListener("click", () => { m.inputs.splice(i, 1); paintInputs(false); paintRefs(); });
+    return el("div", { class: "svcin" }, name, type, x);
+  }));
+  if (!m.inputs.length) A.inputsBox.append(el("p", { class: "muted small" }, "It takes no input."));
+  if (focusLast) {
+    const boxes = A.inputsBox.querySelectorAll("input");
+    if (boxes.length) boxes[boxes.length - 1].focus();
+  }
+}
+
+// paintRefs offers the input, whole or by name, to put in the field being edited.
+function paintRefs() {
+  const A = homeUi.svc, m = svcOf();
+  const names = m.inputs.map((i) => i.name.trim()).filter((n) => NAME_RE.test(n));
+  const chip = (text) => {
+    const b = el("button", { type: "button", class: "pill link mono", title: "Put " + text + " there" }, text);
+    b.addEventListener("mousedown", (e) => e.preventDefault());
+    b.addEventListener("click", () => insertRef(A, { text }));
+    return b;
+  };
+  A.refs.replaceChildren(
+    el("div", { class: "rhead" }, el("strong", {}, "Refer to"), el("span", { class: "muted" }, "Click to put it in the field you are editing")),
+    el("div", { class: "rrow" }, el("span", { class: "rid mono" }, "input"), el("span", { class: "rchips" }, chip("input"), names.map((n) => chip("input." + n)))));
+}
+
+function paintServiceForm() {
+  const A = homeUi.svc, m = svcOf();
+  if (!A) return;
+  const name = m.name.trim();
+  A.fileNote.textContent = "Its folder: " + (m.root ? m.root + "/" : "") + componentsDir + "/" + (name || "<name>") + ". Letters, digits, - and _.";
+  for (const b of A.kinds.children) b.setAttribute("aria-pressed", b.dataset.kind === m.kind ? "true" : "false");
+  A.make.setAttribute("aria-disabled", m.saving ? "true" : "false");
+  A.make.textContent = m.saving ? "Making…" : "Make service";
+  A.notice.replaceChildren(...(m.failure ? [el("div", { class: "notice bad", role: "alert" },
+    el("div", { class: "nhead" }, el("strong", {}, "Nothing was made")),
+    el("p", {}, m.failure.error || "The server refused it."),
+    m.failure.problems && m.failure.problems.length ? el("ul", { class: "problems" }, m.failure.problems.map((p) => el("li", {}, el("span", { class: "msg" }, p.message)))) : null)] : []));
+}
+
+// serviceProblems are what keeps the form from being sent, said before it is.
+function serviceProblems(m) {
+  const out = [], name = m.name.trim(), seen = new Set();
+  if (!name) out.push("The service needs a name.");
+  else if (!NAME_OK.test(name)) out.push("The name is also its folder's: letters, digits, - and _, starting with a letter or a digit.");
+  for (const inp of m.inputs) {
+    const n = inp.name.trim();
+    if (!n) continue;
+    if (!NAME_RE.test(n)) out.push("“" + n + "” cannot name an input: use letters, digits and _, and do not start with a digit.");
+    else if (seen.has(n)) out.push("There are two inputs called " + n + ".");
+    seen.add(n);
+  }
+  if (m.kind === "http" && !m.url.trim()) out.push("The request needs a URL.");
+  if (m.kind === "ai") {
+    if (!m.prompt.trim()) out.push("The model needs instructions.");
+    out.push(...fieldProblems(m.fields));
+  }
+  if (m.kind === "decide") out.push(...questionProblems(m.questions));
+  return out;
+}
+
+async function makeService() {
+  const A = homeUi.svc, m = svcOf();
+  if (!A || m.saving) return;
+  const problems = serviceProblems(m);
+  problemList(A.problems, problems);
+  if (problems.length) return;
+  const work = m.kind === "http" ? { kind: "http", method: m.method, url: m.url.trim() }
+    : m.kind === "decide" ? { kind: "decide", model: m.models.decide.trim(), input: m.input.trim(), questions: questionsOut(m.questions) }
+    : { kind: "ai", model: m.models.ai.trim(), input: m.input.trim(), prompt: m.prompt, fields: fieldsOut(m.fields) };
+  m.saving = true;
+  m.failure = null;
+  paintServiceForm();
+  let r = null;
+  try {
+    r = await request("POST", "/api/components", {
+      root: m.root, name: m.name.trim(), description: m.description.trim(), work,
+      inputs: m.inputs.filter((i) => i.name.trim()).map((i) => ({ name: i.name.trim(), type: i.type })),
+    });
+  } catch (err) {
+    r = null;
+  }
+  m.saving = false;
+  if (r && r.ok && r.body.component) {
+    svc = null;
+    homeUi.kind = null;
+    go({ workflow: r.body.component.name, home: null });
+    return;
+  }
+  m.failure = r ? r.body : { error: "Could not reach the server. Nothing was made." };
+  paintServiceForm();
+}
+
+function cancelService() {
+  if (svc && svc.saving) return;
+  svc = null;
+  homeUi.kind = null;
+  go({ home: "services" });
 }
 
 // outcome says in a few words what a run did.
@@ -1655,7 +1858,7 @@ function dirtyNodes(name) {
 }
 const editedNodes = (w) => new Set(state.editable ? dirtyNodes(w.name) : []);
 const addTouched = (a) => !!a && (a.edited || a.idTouched || a.when.trim() !== "" || Object.values(a.values).some((v) => v.trim() !== ""));
-const anyDirty = () => state.editable && (state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name])) || Object.values(keeps).some((k) => k.touched) || makeTouched());
+const anyDirty = () => state.editable && (state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name])) || Object.values(keeps).some((k) => k.touched) || makeTouched() || svcTouched());
 
 // adopt takes in a fresh answer from /api/state. A workflow whose file changed
 // without this page saving it keeps the person's drafts, on top of the new text.
@@ -3013,7 +3216,7 @@ function buildKindFields(A, w, a, kind, textBox, remember) {
     remember(box);
     A.targets.push(box);
     sync.push(() => setValue(box, a.input));
-    return field("What it reads", box, "A key, such as ${trigger.body}. Click one above to put it here.");
+    return field("What it reads", box, A.readHint || "A key, such as ${trigger.body}. Click one above to put it here.");
   };
   if (kind === "http") {
     const mid = "smt" + A.uid + "x";
@@ -3040,7 +3243,7 @@ function buildKindFields(A, w, a, kind, textBox, remember) {
     A.fieldTable = buildFieldTable(a.fields, () => { a.edited = true; updateBar(); }, A.uid);
     out.push(modelBox(), inputBox(),
       el("div", { class: "field" }, el("div", { class: "lab" }, el("label", { for: pid }, "Instructions")), prompt,
-        el("p", { class: "hint-text" }, "Written to prompts/<step id>.md and sent as it is: the model gets what it reads apart from it, so no ${...} goes here.")),
+        el("p", { class: "hint-text" }, A.promptHint || "Written to prompts/<step id>.md and sent as it is: the model gets what it reads apart from it, so no ${...} goes here.")),
       el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "The answer has these fields")),
       A.fieldTable.root);
   }
