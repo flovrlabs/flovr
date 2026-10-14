@@ -739,9 +739,13 @@ func catalogue(w *workflow.Workflow, known map[string]*workflow.Component) []com
 	views := []componentView{}
 	for _, id := range sortedIDs(known) {
 		c := known[id]
-		use, err := relative(dir, filepath.Dir(c.Path))
-		if err != nil {
-			continue
+		// One from git is named as it was in git; one in a folder, by the path to it.
+		use := c.Remote
+		if use == "" {
+			var err error
+			if use, err = relative(dir, filepath.Dir(c.Path)); err != nil {
+				continue
+			}
 		}
 		view := componentView{
 			Name: c.Name, Description: c.Description, Use: use, Kind: c.Kind(),
@@ -752,7 +756,7 @@ func catalogue(w *workflow.Workflow, known map[string]*workflow.Component) []com
 		}
 		views = append(views, view)
 	}
-	elsewhere := func(v componentView) bool { return strings.HasPrefix(v.Use, "../") }
+	elsewhere := func(v componentView) bool { return strings.HasPrefix(v.Use, "../") || workflow.IsRemote(v.Use) }
 	slices.SortStableFunc(views, func(a, b componentView) int {
 		switch {
 		case elsewhere(a) == elsewhere(b):
@@ -934,6 +938,9 @@ func (s *Server) savePrompt(req promptRequest) (int, any) {
 	path, written, status, err := s.promptFile(req.Workflow, req.Step)
 	if err != nil {
 		return status, fail("%v", err)
+	}
+	if workflow.FromGit(path) {
+		return http.StatusUnprocessableEntity, fail(fromGit, req.Workflow)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -591,7 +591,10 @@ function serviceRow(x) {
   const uses = x.usedBy || [];
   return homeRow(href, [
     el("td", { class: "hmain" }, el("div", { class: "hsvc" }, kindTile(compKind(x), 34),
-      el("div", {}, el("a", { href, class: "hname", "data-focus": "h:" + x.name, title: x.name }, compTitle(x)), flagFor(x), x.description ? el("div", { class: "hdesc" }, x.description) : null))),
+      el("div", {}, el("a", { href, class: "hname", "data-focus": "h:" + x.name, title: x.name }, compTitle(x)), flagFor(x),
+        x.source ? el("span", { class: "hgit", title: "Taken from git and pinned in flowmaker.lock. It is changed at its source." }, "git") : null,
+        x.description ? el("div", { class: "hdesc" }, x.description) : null,
+        x.source ? el("div", { class: "hpath mono" }, x.source) : null))),
     el("td", {}, x.gives ? stepTiles(x.steps, plural(x.steps.length, "step")) : hnone(compKindWord(x))),
     el("td", {}, chipsOf(inputNames(x))),
     el("td", {}, chipsOf(givenNames(x))),
@@ -1069,7 +1072,7 @@ function badge(status) {
 function fileStrip(w, last) {
   const word = last ? (isTestRun(last) ? "Last test run " : "Last run ") + (last.status === "ok" ? "succeeded" : (STATUS_TEXT[last.status] || last.status).toLowerCase()) : "";
   return el("div", { class: "strip" },
-    el("span", { class: "mono path" }, w.path),
+    el("span", { class: "mono path" }, w.source || w.path),
     last ? el("button", { type: "button", class: "lastrun " + last.status, "data-focus": "open-latest", title: "Open run " + last.run, onclick: () => go({ run: last.run, node: null }) },
       word + " · " + when(last.started)) : null);
 }
@@ -1423,8 +1426,10 @@ function componentDetails(w) {
   return [
     header(kind, kind, compTitle(w), "Component · " + compKindWord(w)),
     w.description ? section("", el("p", { class: "lede" }, w.description)) : null,
+    w.source ? section("From git", el("p", {}, mono(w.source)),
+      el("p", { class: "muted small" }, "Pinned to a commit in flowmaker.lock, so it is the same on every machine. It is changed at its source; flowmaker get -u takes the new commit.")) : null,
     section("Definition", pairs([
-      ["File", mono(w.path)],
+      w.source ? null : ["File", mono(w.path)],
       ["Made of", w.gives ? plural(w.steps.length, "step") + " of its own" : "One piece of work: " + (KIND_NAMES[kind] || kind).toLowerCase()],
       ["Tests", w.tests + (w.tests && !state.editable ? ", run with flowmaker test" : "")],
       state.commit ? ["Version", mono(state.commit)] : null,

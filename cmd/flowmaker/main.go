@@ -43,7 +43,7 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(validateCmd(), runCmd(), testCmd(), serveCmd(), versionCmd())
+	root.AddCommand(validateCmd(), runCmd(), testCmd(), serveCmd(), getCmd(), versionCmd())
 	err := loadDotEnv(".env")
 	if err == nil {
 		err = root.Execute()

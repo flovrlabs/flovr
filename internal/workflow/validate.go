@@ -33,6 +33,13 @@ type checker struct {
 	shapes     map[string]*shape     // what is known of the values expressions read, by name
 	loading    []string              // the component files being loaded, the one that uses the next before it
 	files      Overlay               // content to use in place of what component files hold
+	remote     string                // for a component fetched from git, the folder of its repository
+}
+
+// outside reports whether rel, a path written in a component fetched from
+// git, names a file outside its repository, which it may not read.
+func (c *checker) outside(rel string) bool {
+	return c.remote != "" && !inside(c.remote, resolve(c.path, rel))
 }
 
 func (c *checker) addf(line int, format string, args ...any) {
@@ -224,6 +231,8 @@ func (c *checker) ai(base []any, label string, s *AIStep, env *expr.Env) {
 
 	if s.Prompt == "" {
 		c.addf(at("prompt"), "%s: ai.prompt is required", label)
+	} else if c.outside(s.Prompt) {
+		c.addf(at("prompt"), "%s: %s is outside the repository it comes from", label, s.Prompt)
 	} else if info, err := os.Stat(resolve(c.path, s.Prompt)); err != nil || info.IsDir() {
 		c.addf(at("prompt"), "%s: prompt file not found: %s", label, s.Prompt)
 	}
@@ -236,6 +245,8 @@ func (c *checker) ai(base []any, label string, s *AIStep, env *expr.Env) {
 
 	if s.Output == "" {
 		c.addf(at("output"), "%s: ai.output is required", label)
+	} else if c.outside(s.Output) {
+		c.addf(at("output"), "%s: %s is outside the repository it comes from", label, s.Output)
 	} else if _, _, err := loadSchema(c.path, s.Output, c.files); errors.Is(err, fs.ErrNotExist) {
 		c.addf(at("output"), "%s: schema file not found: %s", label, s.Output)
 	} else if err != nil {

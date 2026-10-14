@@ -204,8 +204,12 @@ func describe(w *workflow.Workflow) workflowView {
 }
 
 // componentID is the name the page knows a component by: the path of its
-// folder, which no two components share.
+// folder, which no two components share, or for one from git the name steps
+// give it, rather than where this machine keeps it.
 func componentID(c *workflow.Component) string {
+	if c.Remote != "" {
+		return c.Remote
+	}
 	return filepath.ToSlash(filepath.Dir(c.Path))
 }
 
@@ -214,7 +218,7 @@ func componentID(c *workflow.Component) string {
 func describeComponent(c *workflow.Component) workflowView {
 	view := workflowView{
 		Name: componentID(c), Title: c.Name, Path: c.Path, Tests: len(c.Tests), Steps: []stepView{},
-		Component: true, Description: c.Description, Inputs: []inputView{}, Fixed: true,
+		Component: true, Description: c.Description, Inputs: []inputView{}, Fixed: true, Source: c.Remote,
 	}
 	for _, p := range c.Input {
 		view.Inputs = append(view.Inputs, inputView{p.Name, p.Type})

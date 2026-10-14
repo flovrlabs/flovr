@@ -421,6 +421,7 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .huse .mono { font-size: 12.5px; }
 .hempty { margin: 0; padding: 28px; border: 1px dashed var(--border-strong); border-radius: 14px; color: var(--muted); text-align: center; }
 .hfoot { margin: 0; color: var(--muted); font-size: 12.5px; }
+.hgit { margin-left: 8px; padding: 0 6px; border-radius: 5px; background: var(--raised); color: var(--muted); font: 600 10.5px/18px var(--mono); vertical-align: 1px; }
 
 /* The form for a new service, a page under the list of services. */
 .svcwrap { max-width: 820px; gap: 0; }

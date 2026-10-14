@@ -174,6 +174,10 @@ type workflowView struct {
 	Gives       *givesView  `json:"gives,omitempty"`  // of a component made of steps
 	UsedBy      []useView   `json:"usedBy,omitempty"` // the steps that use it
 	Fixed       bool        `json:"fixed,omitempty"`  // steps are not added or removed from the page
+
+	// Source is how steps name a component taken from git, as in
+	// github.com/acme/services/notify@v1.2. Such a one is never changed here.
+	Source string `json:"source,omitempty"`
 }
 
 // givesView is what a component made of steps gives back, as written.

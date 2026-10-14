@@ -233,6 +233,35 @@ A component can carry tests of its own. Each gives it `input`, written out or as
 flowmaker test examples/triage-ticket/components/reply
 ```
 
+### Components from git
+
+A step can use a component kept in a git repository, named by host, owner and repository, then the component's folder in it, then `@` and a tag, branch or commit:
+
+```yaml
+- id: tell
+  use: github.com/acme/flowmaker-services/slack-notify@v1.2
+  with:
+    webhook: ${env.SLACK_WEBHOOK}
+    text: ${summarize.text}
+```
+
+`flowmaker get` fetches what the workflows in a folder take from git, and writes the commit each tag or branch is at in `flowmaker.lock` in that folder:
+
+```bash
+flowmaker get workflows
+```
+
+Keep `flowmaker.lock` in git with the workflows. Running, testing and serving never go to the network: they take each component at the commit the lock file pins, from a cache on the machine (`FLOWMAKER_CACHE` sets where), and say to run `flowmaker get` when it is not there. A tag that moves on is not followed until `flowmaker get -u`. A deploy runs `flowmaker get` before it serves.
+
+What comes from git is held to more than what you write yourself:
+
+- It reads only its input, never `env`, which holds the server's secrets. The workflow gives it what it needs, as `with` does above.
+- The files it names stay inside its repository, and a link in the repository is taken as a plain file.
+- It does not use another component from git.
+- The page shows where it comes from and does not change it: it is changed at its source.
+
+It can still send what it is given to the URLs it names, and the models it asks are paid for with your keys, so read a component before you use it, as you would any code.
+
 ## What validate catches
 
 `flowmaker validate` reads the workflow, the components it uses and the files they name, and reports each problem with its line. Among them:
@@ -251,14 +280,15 @@ flowmaker test examples/triage-ticket/components/reply
 
 `flowmaker serve` serves a page and prints its address, which carries the page's key as `?key=...`. The browser keeps the key once the page has been opened with it, and nothing reaches the page or its API without it, not even another program on the same machine. The key is kept for you outside the project, so it stays the same across restarts; `FLOWMAKER_PAGE_KEY` sets it instead.
 
-The page shows each workflow as a drawing, with one shape per kind of step, and the recent runs. Selecting a run colours the drawing by what each step did; selecting a step shows what it put out, or why it failed.
+The page opens on a list of the workflows and one of the services, the components that workflows use. A workflow is drawn from left to right, with one shape and colour per kind of step, and has its runs and its tests. Picking a run colours the drawing by what each step did; a step opens to show what it read and put out, or why it failed.
 
 With `--edit` the page becomes a place to work on the workflows:
 
-- Select a step, the trigger or the response and change its values in the form. Saving writes only the lines of those values, so comments, blank lines and order in the file stay as they were.
+- Open a step and change its values in the editor, or the trigger and the response beside the drawing. Saving writes only the lines of those values, so comments, blank lines and order in the file stay as they were.
 - Make a new workflow: give it a name, say what starts it, and choose a component for its first step. It is written as a folder of that name holding a `workflow.yaml`, in the folder the server was started with, and is served at once.
-- Add a step from a component, or remove a step. The components on offer are those in the folders the server was started with, so a workflow can use a component that lives in another workflow's folder.
+- Add a step that asks a model to write or to decide, sends an HTTP request, or uses a component; or remove a step. The components on offer are those in the folders the server was started with, so a workflow can use a component that lives in another workflow's folder.
 - Open a component, which is drawn like a workflow with what it takes at the top and what it gives back at the bottom, and change its values the same way. The change is refused if it would break a workflow that uses the component.
+- Make a new service: a name, what it takes, and one piece of work. It is written as `components/<name>/component.yaml` in the folder the server was started with, and every workflow can use it at once.
 - Run the tests of a workflow or of a component and see, for each, which expectations were met.
 - Keep a run that went right as a test. Its request becomes the fixture, saved as a new file in the workflow's folder, and what the run did becomes what to expect: which steps ran, and what a model decided. Text a model wrote is left out unless you ask for it, since it reads differently each time. A test can also be written from nothing, or removed.
 - See under **Changes** what git says has changed since the last commit.
@@ -302,7 +332,7 @@ Both exit with a status other than 0 when something is wrong, and print what.
 - It does not retry a step that failed or queue runs; a run is one pass through the steps in one process.
 - It has no steps for databases or message brokers. A workflow reaches other systems through `http`.
 - It does not check signatures of webhooks from providers such as Stripe or GitHub.
-- The page adds steps only from components, does not reorder steps, and does not add or remove the steps of a component. A workflow it makes starts with one step and has no `respond`.
+- The page does not reorder steps, does not add or remove the steps of a component, and makes only services that do one piece of work. A workflow it makes starts with one step and has no `respond`.
 - A workflow file that appears or goes away while the server runs is not noticed until the server is restarted, unless the page made it.
 - A webhook is always a POST to a fixed path.
 
