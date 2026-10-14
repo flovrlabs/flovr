@@ -17,6 +17,7 @@ The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page
 - [x] Runs recorded with the commit of the files they ran, and read back on start
 - [x] Releases set up to build for macOS, Linux and Windows with GoReleaser
+- [x] An installer for Linux and macOS (`curl | sh`) that checks what it downloads, a Homebrew cask and an image for Docker
 
 The page
 - [x] The lists of workflows and of services, where the page opens
@@ -38,6 +39,7 @@ Services
 ## Now: 0.1, the first public release
 
 - [ ] Open the repository and tag 0.1.0, which builds the binaries
+- [ ] The Homebrew tap, `simonyosb/homebrew-tap`, that the cask is published to
 - [ ] Publish the market's list with the example services, pinned to the release
 - [ ] The page of a service in the same editor as a workflow; its panel is still the old one
 - [ ] Services made of steps, from the page

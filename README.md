@@ -19,7 +19,27 @@ Flowmaker is new. This is its first release, and the file format may still chang
 
 ## Install
 
-Download the archive for your system from [Releases](https://github.com/simonyosb/flowmaker/releases) and put `flowmaker` somewhere on your PATH. Or build it with Go 1.26 or later:
+On Linux or macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/simonyosb/flowmaker/main/install.sh | sh
+```
+
+[install.sh](install.sh) downloads the archive of the latest release for your system, checks it against the release's checksums, and puts `flowmaker` in `~/.local/bin`. `FLOWMAKER_VERSION=v0.1.0` installs another release, and `FLOWMAKER_INSTALL_DIR` puts it in another folder.
+
+With Homebrew:
+
+```bash
+brew install simonyosb/tap/flowmaker
+```
+
+With Docker, where the examples come with the image and run without a key:
+
+```bash
+docker run --rm ghcr.io/simonyosb/flowmaker test /examples/triage-ticket --replay
+```
+
+Or download the archive for your system from [Releases](https://github.com/simonyosb/flowmaker/releases), the zip on Windows, and put `flowmaker` somewhere on your PATH. Or build it with Go 1.26 or later:
 
 ```bash
 go install github.com/simonyosb/flowmaker/cmd/flowmaker@latest
@@ -353,6 +373,14 @@ FLOWMAKER_TOKEN=... flowmaker serve workflows --addr 0.0.0.0:8080
 - Finished runs are appended to `.flowmaker/runs.jsonl`, readable by its owner only, and read back on start. They hold request bodies and step outputs; the folder gets a `.gitignore` that keeps them out of git. `--history` puts the file elsewhere.
 - Every run records the git commit of the workflow files it ran.
 - `/healthz` answers 200 while the server is up.
+
+The image serves the folder mounted at `/work` on port 8080:
+
+```bash
+docker run -p 8080:8080 -v "$PWD/workflows:/work" -e FLOWMAKER_TOKEN -e FLOWMAKER_PAGE_KEY -e OPENROUTER_API_KEY ghcr.io/simonyosb/flowmaker
+```
+
+It runs as a user of its own, uid 10001, and writes its runs to `/work/.flowmaker`, so that user must be able to write there; `--user "$(id -u):$(id -g)"` runs it as you instead. Give `FLOWMAKER_PAGE_KEY`, since a key the server made itself is lost with the container.
 
 ## In CI
 
