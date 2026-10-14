@@ -20,7 +20,7 @@ var ui embed.FS
 // page serves the web page and the JSON it shows and, if the server allows
 // editing, takes the changes the page makes.
 func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
-	if s.opts.Edit && r.Method == http.MethodPost && slices.Contains([]string{"/api/edit", "/api/steps", "/api/prompt", "/api/test", "/api/cases", "/api/workflows", "/api/steps/test"}, r.URL.Path) {
+	if s.opts.Edit && r.Method == http.MethodPost && slices.Contains([]string{"/api/edit", "/api/steps", "/api/prompt", "/api/test", "/api/cases", "/api/workflows", "/api/steps/test", "/api/schema"}, r.URL.Path) {
 		s.change(rw, r)
 		return
 	}
@@ -82,6 +82,8 @@ func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
 		reply(rw, http.StatusOK, run)
 	case path == "/api/prompt" && s.opts.Edit:
 		s.prompt(rw, r)
+	case path == "/api/schema" && s.opts.Edit:
+		s.schema(rw, r)
 	case path == "/api/changes" && s.opts.Edit:
 		s.changes(rw, r)
 	default:

@@ -200,6 +200,13 @@ func (s *Server) change(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status, answer = s.edit(req)
+	} else if r.URL.Path == "/api/schema" {
+		var req schemaRequest
+		if err := json.Unmarshal(data, &req); err != nil {
+			reply(rw, http.StatusBadRequest, fail("the request body is not the JSON expected"))
+			return
+		}
+		status, answer = s.saveSchema(req)
 	} else if r.URL.Path == "/api/steps/test" {
 		var req stepTestRequest
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -440,18 +447,46 @@ func owner(w *workflow.Workflow, path []any) string {
 
 // stepsRequest adds a step to a workflow, or removes one.
 type stepsRequest struct {
-	Workflow string `json:"workflow"`
-	Rev      string `json:"rev"` // the file as the page last saw it
-	Add      *struct {
-		ID string `json:"id"`
-		// After is the step the new one comes after, "trigger" to make it
-		// the first step, or empty to make it the last.
-		After string            `json:"after"`
-		Use   string            `json:"use"`  // the component it uses, as the workflow's list names it
-		When  string            `json:"when"` // may be empty
-		With  map[string]string `json:"with"` // what it gives the component, by input
-	} `json:"add"`
-	Remove string `json:"remove"` // the id of the step to remove
+	Workflow string   `json:"workflow"`
+	Rev      string   `json:"rev"` // the file as the page last saw it
+	Add      *stepAdd `json:"add"`
+	Remove   string   `json:"remove"` // the id of the step to remove
+}
+
+// stepAdd is a step to add: one that uses a component, or, with Kind, one
+// that does the work itself.
+type stepAdd struct {
+	ID string `json:"id"`
+	// After is the step the new one comes after, "trigger" to make it the
+	// first step, or empty to make it the last.
+	After string            `json:"after"`
+	Use   string            `json:"use"`  // the component it uses, as the workflow's list names it
+	When  string            `json:"when"` // may be empty
+	With  map[string]string `json:"with"` // what it gives the component, by input
+
+	Kind      string         `json:"kind"`      // "ai", "decide" or "http", in place of Use
+	Model     string         `json:"model"`     // ai, decide
+	Input     string         `json:"input"`     // ai, decide: what the model reads
+	Prompt    string         `json:"prompt"`    // ai: the text of its prompt, written to a new file
+	Fields    []schemaField  `json:"fields"`    // ai: the fields of its answer, written to a new schema file
+	Questions []questionSpec `json:"questions"` // decide
+	Method    string         `json:"method"`    // http
+	URL       string         `json:"url"`       // http
+}
+
+// questionSpec is a question of a new decide step.
+type questionSpec struct {
+	Name string `json:"name"`
+	Ask  string `json:"ask"`
+	Type string `json:"type"` // "yes or no", "one of" or "score"
+	// Answers are the choices of "one of", or the levels of "score" from
+	// lowest to highest, each with what it means.
+	Answers []struct {
+		Name    string `json:"name"`
+		Meaning string `json:"meaning"`
+	} `json:"answers"`
+	YesIf string `json:"yesIf"` // "yes or no" only, may be empty
+	NoIf  string `json:"noIf"`
 }
 
 // steps adds a step that uses a component to a workflow file, or removes a
@@ -481,22 +516,46 @@ func (s *Server) steps(req stepsRequest) (int, any) {
 				return http.StatusUnprocessableEntity, fail("there is no step %s to put the new step after", add.After)
 			}
 		}
-		// The page adds steps only from the components it was shown.
-		known, _ := s.components()
-		components := catalogue(w, known)
-		c := slices.IndexFunc(components, func(c componentView) bool { return c.Use == add.Use })
-		if c < 0 {
-			return http.StatusUnprocessableEntity, fail("%s is not one of the components this workflow can use", add.Use)
+		var pairs []yamledit.Pair
+		var made []string // files written for the step, taken away if it is refused
+		what := "using " + add.Use
+		if add.Kind != "" {
+			var status int
+			var refused failure
+			if pairs, made, status, refused = ownWork(filepath.Dir(w.Path), add); status != 0 {
+				return status, refused
+			}
+			what = "an " + add.Kind + " step"
+		} else {
+			// The page adds steps only from the components it was shown.
+			known, _ := s.components()
+			components := catalogue(w, known)
+			c := slices.IndexFunc(components, func(c componentView) bool { return c.Use == add.Use })
+			if c < 0 {
+				return http.StatusUnprocessableEntity, fail("%s is not one of the components this workflow can use", add.Use)
+			}
+			pairs = stepUsing(add.ID, add.When, add.Use, add.With, components[c].Inputs)
 		}
-		text, err := yamledit.Mapping(stepUsing(add.ID, add.When, add.Use, add.With, components[c].Inputs))
+		undo := func() {
+			for _, rel := range made {
+				os.Remove(filepath.Join(filepath.Dir(w.Path), rel))
+			}
+		}
+		text, err := yamledit.Mapping(pairs)
 		if err != nil {
+			undo()
 			return http.StatusUnprocessableEntity, fail("%v", err)
 		}
 		out, err := yamledit.InsertItem(data, []any{"steps"}, at, text)
 		if err != nil {
+			undo()
 			return http.StatusUnprocessableEntity, fail("%v", err)
 		}
-		return s.save(i, out, fmt.Sprintf("step %s added, using %s", add.ID, add.Use))
+		status, answer := s.save(i, out, fmt.Sprintf("step %s added, %s", add.ID, what))
+		if status != http.StatusOK {
+			undo()
+		}
+		return status, answer
 	}
 
 	at := position(req.Remove)
@@ -508,6 +567,101 @@ func (s *Server) steps(req stepsRequest) (int, any) {
 		return http.StatusUnprocessableEntity, fail("%v", err)
 	}
 	return s.save(i, out, fmt.Sprintf("step %s removed", req.Remove))
+}
+
+// ownWork is a step that does its work itself, as it is written in a file,
+// and the files written for it in dir: an ai step's prompt and schema. The
+// caller removes those files if the step is not taken.
+func ownWork(dir string, add *stepAdd) (pairs []yamledit.Pair, made []string, status int, refused failure) {
+	refuse := func(format string, args ...any) ([]yamledit.Pair, []string, int, failure) {
+		for _, rel := range made {
+			os.Remove(filepath.Join(dir, rel))
+		}
+		return nil, nil, http.StatusUnprocessableEntity, fail(format, args...)
+	}
+	pairs = []yamledit.Pair{{Key: "id", Value: strings.TrimSpace(add.ID)}}
+	if when := strings.TrimSpace(add.When); when != "" {
+		pairs = append(pairs, yamledit.Pair{Key: "when", Value: when})
+	}
+	input := strings.TrimSpace(add.Input)
+	switch add.Kind {
+	case "http":
+		pairs = append(pairs, yamledit.Pair{Key: "http", Value: []yamledit.Pair{
+			{Key: "method", Value: strings.ToUpper(strings.TrimSpace(add.Method))},
+			{Key: "url", Value: strings.TrimSpace(add.URL)},
+		}})
+
+	case "ai":
+		prompt := strings.TrimRight(strings.ReplaceAll(add.Prompt, "\r\n", "\n"), " \t\n")
+		if strings.TrimSpace(prompt) == "" {
+			return refuse("The step needs instructions for the model.")
+		}
+		schema, err := schemaOf(add.Fields, nil)
+		if err != nil {
+			return refuse("%v", err)
+		}
+		promptFile, err := newFile(dir, "prompts", add.ID, ".md", []byte(prompt+"\n"))
+		if err != nil {
+			return refuse("%v", err)
+		}
+		made = append(made, promptFile)
+		schemaFile, err := newFile(dir, "schemas", add.ID, ".json", schema)
+		if err != nil {
+			return refuse("%v", err)
+		}
+		made = append(made, schemaFile)
+		pairs = append(pairs, yamledit.Pair{Key: "ai", Value: []yamledit.Pair{
+			{Key: "model", Value: strings.TrimSpace(add.Model)},
+			{Key: "prompt", Value: filepath.ToSlash(promptFile)},
+			{Key: "input", Value: input},
+			{Key: "output", Value: filepath.ToSlash(schemaFile)},
+		}})
+
+	case "decide":
+		if len(add.Questions) == 0 {
+			return refuse("The step needs at least one question.")
+		}
+		var questions []yamledit.Pair
+		for _, q := range add.Questions {
+			name := strings.TrimSpace(q.Name)
+			question := []yamledit.Pair{{Key: "ask", Value: strings.TrimSpace(q.Ask)}}
+			var answers []yamledit.Pair
+			for _, a := range q.Answers {
+				if n := strings.TrimSpace(a.Name); n != "" {
+					answers = append(answers, yamledit.Pair{Key: n, Value: strings.TrimSpace(a.Meaning)})
+				}
+			}
+			switch q.Type {
+			case "yes or no":
+				if yes := strings.TrimSpace(q.YesIf); yes != "" {
+					question = append(question, yamledit.Pair{Key: "yes_if", Value: yes})
+				}
+				if no := strings.TrimSpace(q.NoIf); no != "" {
+					question = append(question, yamledit.Pair{Key: "no_if", Value: no})
+				}
+			case "one of":
+				question = append(question, yamledit.Pair{Key: "choice", Value: answers})
+			case "score":
+				levels := yamledit.Items{}
+				for _, a := range answers {
+					levels = append(levels, []yamledit.Pair{a})
+				}
+				question = append(question, yamledit.Pair{Key: "score", Value: levels})
+			default:
+				return refuse("%s: a question is answered with yes or no, one of a list, or a score.", name)
+			}
+			questions = append(questions, yamledit.Pair{Key: name, Value: question})
+		}
+		pairs = append(pairs, yamledit.Pair{Key: "decide", Value: []yamledit.Pair{
+			{Key: "model", Value: strings.TrimSpace(add.Model)},
+			{Key: "input", Value: input},
+			{Key: "questions", Value: questions},
+		}})
+
+	default:
+		return refuse("A step is added from a component, or is an ai, decide or http step.")
+	}
+	return pairs, made, 0, failure{}
 }
 
 // stepUsing is a step that uses a component, as it is written in a file: its

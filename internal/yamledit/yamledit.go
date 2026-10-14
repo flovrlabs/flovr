@@ -719,11 +719,16 @@ func check(before, after []byte, change func(root any) (any, bool), keepComments
 }
 
 // Pair is one "key: value" of a mapping to be written. The value is a string,
-// bool, number or nil, or a []Pair holding a mapping below it.
+// bool, number or nil, a []Pair holding a mapping below it, or Items holding
+// a list below it.
 type Pair struct {
 	Key   string
 	Value any
 }
+
+// Items is a list to be written as the value of a Pair. Each item is a
+// string, bool, number or nil, or a []Pair holding a mapping.
+type Items []any
 
 // Mapping writes pairs as the text of a mapping, from the first column and
 // in the order given, as InsertItem takes it.
@@ -739,6 +744,43 @@ func mapping(pairs []Pair, depth int) ([]string, error) {
 	var lines []string
 	pad := strings.Repeat(" ", depth)
 	for _, p := range pairs {
+		if items, ok := p.Value.(Items); ok {
+			if len(items) == 0 {
+				lines = append(lines, pad+scalar(p.Key, 0)+": []")
+				continue
+			}
+			lines = append(lines, pad+scalar(p.Key, 0)+":")
+			for _, item := range items {
+				var inner []string
+				var err error
+				switch item := item.(type) {
+				case []Pair:
+					inner, err = mapping(item, 0)
+				case string:
+					inner = []string{scalar(item, 0)}
+				case nil, bool, int, int64, float64:
+					var out []byte
+					out, err = yaml.Marshal(item)
+					inner = []string{strings.TrimSpace(string(out))}
+				default:
+					err = fmt.Errorf("an item of type %T cannot be written", item)
+				}
+				if err != nil {
+					return nil, fmt.Errorf("%s: %w", p.Key, err)
+				}
+				for i, l := range inner {
+					switch {
+					case i == 0:
+						lines = append(lines, pad+"  - "+l)
+					case l == "":
+						lines = append(lines, "")
+					default:
+						lines = append(lines, pad+"    "+l)
+					}
+				}
+			}
+			continue
+		}
 		if below, ok := p.Value.([]Pair); ok {
 			inner, err := mapping(below, depth+2)
 			if err != nil {

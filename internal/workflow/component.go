@@ -124,7 +124,7 @@ func (c *Component) shape() *shape {
 	if len(c.Steps) > 0 {
 		return writtenShape(c.Output)
 	}
-	return outputShape(c.Path, c.AI, c.Decide, c.HTTP)
+	return outputShape(c.Path, nil, c.AI, c.Decide, c.HTTP)
 }
 
 // Resolve turns a path written in the component file into one usable from
@@ -134,7 +134,7 @@ func (c *Component) Resolve(rel string) string { return resolve(c.Path, rel) }
 // Schema loads the JSON Schema at rel, both compiled for validation and as
 // the plain document.
 func (c *Component) Schema(rel string) (*jsonschema.Schema, map[string]any, error) {
-	return loadSchema(c.Path, rel)
+	return loadSchema(c.Path, rel, nil)
 }
 
 // EnvVars lists the environment variables read as env.NAME by the
