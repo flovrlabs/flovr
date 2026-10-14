@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/simonyosb/flowmaker/internal/fetch"
 	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
@@ -45,9 +46,9 @@ http:
 	run("commit", "-q", "-m", "notify")
 	run("tag", "-a", "v1", "-m", "v1")
 
-	repoURL = func(workflow.Remote) string { return repo }
-	allowFile = true
-	t.Cleanup(func() { repoURL = func(r workflow.Remote) string { return r.URL() }; allowFile = false })
+	fetch.RepoURL = func(workflow.Remote) string { return repo }
+	fetch.AllowFile = true
+	t.Cleanup(func() { fetch.RepoURL = func(r workflow.Remote) string { return r.URL() }; fetch.AllowFile = false })
 	t.Setenv("FLOWMAKER_CACHE", t.TempDir())
 	return repo, run
 }

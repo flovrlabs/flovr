@@ -262,6 +262,23 @@ What comes from git is held to more than what you write yourself:
 
 It can still send what it is given to the URLs it names, and the models it asks are paid for with your keys, so read a component before you use it, as you would any code.
 
+### The market
+
+The market is a list of components in git that anyone may use. The page lists them beside your own, and adding a step from one takes it from git and pins it in `flowmaker.lock`, as `flowmaker get` does. The list is one JSON file, kept anywhere it can be read over https, or a file on the machine; `flowmaker serve --edit --market <address>` says where, and [market/index.json](market/index.json) in this repository is the one read unless told otherwise:
+
+```json
+{"services": [{
+  "name": "notify",
+  "description": "Tells a team about an urgent ticket by sending it a summary.",
+  "use": "github.com/simonyosb/flowmaker/examples/triage-ticket/components/notify@main",
+  "kind": "http",
+  "inputs": [{"name": "url", "type": "string"}, {"name": "summary", "type": "string"}, {"name": "category", "type": "string"}],
+  "tags": ["alert", "webhook"]
+}]}
+```
+
+What the list says is only what it offers: a component is what its repository holds at the commit taken, and is held to the rules above. To list one, add it to the file in a pull request.
+
 ## What validate catches
 
 `flowmaker validate` reads the workflow, the components it uses and the files they name, and reports each problem with its line. Among them:
@@ -289,6 +306,7 @@ With `--edit` the page becomes a place to work on the workflows:
 - Add a step that asks a model to write or to decide, sends an HTTP request, or uses a component; or remove a step. The components on offer are those in the folders the server was started with, so a workflow can use a component that lives in another workflow's folder.
 - Open a component, which is drawn like a workflow with what it takes at the top and what it gives back at the bottom, and change its values the same way. The change is refused if it would break a workflow that uses the component.
 - Make a new service: a name, what it takes, and one piece of work. It is written as `components/<name>/component.yaml` in the folder the server was started with, and every workflow can use it at once.
+- Browse the market and add a step from one of its services: it is taken from git and pinned in `flowmaker.lock`.
 - Run the tests of a workflow or of a component and see, for each, which expectations were met.
 - Keep a run that went right as a test. Its request becomes the fixture, saved as a new file in the workflow's folder, and what the run did becomes what to expect: which steps ran, and what a model decided. Text a model wrote is left out unless you ask for it, since it reads differently each time. A test can also be written from nothing, or removed.
 - See under **Changes** what git says has changed since the last commit.

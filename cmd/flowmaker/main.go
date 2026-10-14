@@ -379,6 +379,7 @@ func serveCmd() *cobra.Command {
 	var addr, history, tlsCert, tlsKey string
 	var edit bool
 	var maxRuns int
+	var market string
 	cmd := &cobra.Command{
 		Use:   "serve [path...]",
 		Short: "Stay running and run workflows when their triggers fire",
@@ -453,7 +454,7 @@ func serveCmd() *cobra.Command {
 			if edit {
 				// The files change while the server runs, and so does
 				// their version.
-				opts.Edit, opts.CommitNow = true, gitCommit
+				opts.Edit, opts.CommitNow, opts.Market = true, gitCommit, market
 				for _, path := range args {
 					if info, err := os.Stat(path); err == nil && info.IsDir() {
 						opts.Roots = append(opts.Roots, filepath.Clean(path))
@@ -531,10 +532,14 @@ func serveCmd() *cobra.Command {
 		"file that finished runs are saved to, with their trigger payloads and step outputs; empty keeps them in memory only")
 	cmd.Flags().BoolVar(&edit, "edit", false, "let the web page change the workflow files, and pick up changes made to them")
 	cmd.Flags().IntVar(&maxRuns, "max-runs", 16, "how many runs webhooks may have going at once; more are answered 429")
+	cmd.Flags().StringVar(&market, "market", defaultMarket, "with --edit, the list of components in git that the page offers: an https address or a file; empty offers none")
 	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "certificate file, to serve https")
 	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "key file of the certificate")
 	return cmd
 }
+
+// defaultMarket is the list of components the page offers unless told otherwise.
+const defaultMarket = "https://raw.githubusercontent.com/simonyosb/flowmaker/main/market/index.json"
 
 // gitCommit identifies the version of the files in the current directory: the
 // short commit hash, marked if there are uncommitted changes. It is empty

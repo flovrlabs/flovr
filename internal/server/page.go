@@ -86,6 +86,8 @@ func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
 		s.schema(rw, r)
 	case path == "/api/changes" && s.opts.Edit:
 		s.changes(rw, r)
+	case path == "/api/market" && s.opts.Edit:
+		reply(rw, http.StatusOK, s.market(r.Context()))
 	default:
 		reply(rw, http.StatusNotFound, map[string]string{"error": "nothing is served at this path"})
 	}

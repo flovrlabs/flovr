@@ -248,6 +248,15 @@ func (s *Server) change(rw http.ResponseWriter, r *http.Request) {
 			reply(rw, http.StatusBadRequest, fail("the request body is not the JSON expected: it adds a step or removes one"))
 			return
 		}
+		// A component from git is fetched first, outside the server's lock.
+		if add := req.Add; add != nil && add.Kind == "" && workflow.IsRemote(add.Use) {
+			commit, err := s.takeFromGit(r.Context(), req.Workflow, add.Use)
+			if err != nil {
+				reply(rw, http.StatusUnprocessableEntity, fail("%v", err))
+				return
+			}
+			add.commit = commit
+		}
 		status, answer = s.steps(req)
 	} else {
 		var req promptRequest
@@ -479,6 +488,8 @@ type stepAdd struct {
 	Questions []questionSpec `json:"questions"` // decide
 	Method    string         `json:"method"`    // http
 	URL       string         `json:"url"`       // http
+
+	commit string // for a component from git, the commit it was fetched at
 }
 
 // questionSpec is a question of a new decide step.
@@ -524,7 +535,8 @@ func (s *Server) steps(req stepsRequest) (int, any) {
 			}
 		}
 		var pairs []yamledit.Pair
-		var made []string // files written for the step, taken away if it is refused
+		var made []string  // files written for the step, taken away if it is refused
+		unpin := func() {} // puts the lock file back, if the step pinned something in it
 		what := "using " + add.Use
 		if add.Kind != "" {
 			var status int
@@ -538,15 +550,26 @@ func (s *Server) steps(req stepsRequest) (int, any) {
 			known, _ := s.components()
 			components := catalogue(w, known)
 			c := slices.IndexFunc(components, func(c componentView) bool { return c.Use == add.Use })
-			if c < 0 {
+			switch {
+			case c >= 0:
+				pairs = stepUsing(add.ID, add.When, add.Use, add.With, components[c].Inputs)
+			case add.commit != "":
+				// One from git, from the market: pinned in the lock file with the step.
+				inputs, undo, err := s.pinFromGit(w, add.Use, add.commit)
+				if err != nil {
+					return http.StatusUnprocessableEntity, fail("%v", err)
+				}
+				unpin = undo
+				pairs = stepUsing(add.ID, add.When, add.Use, add.With, inputs)
+			default:
 				return http.StatusUnprocessableEntity, fail("%s is not one of the components this workflow can use", add.Use)
 			}
-			pairs = stepUsing(add.ID, add.When, add.Use, add.With, components[c].Inputs)
 		}
 		undo := func() {
 			for _, rel := range made {
 				os.Remove(filepath.Join(filepath.Dir(w.Path), rel))
 			}
+			unpin()
 		}
 		text, err := yamledit.Mapping(pairs)
 		if err != nil {

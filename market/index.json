@@ -1,0 +1,27 @@
+{
+  "services": [
+    {
+      "name": "notify",
+      "description": "Tells a team about an urgent ticket by sending it a summary.",
+      "use": "github.com/simonyosb/flowmaker/examples/triage-ticket/components/notify@main",
+      "kind": "http",
+      "inputs": [
+        {"name": "url", "type": "string"},
+        {"name": "summary", "type": "string"},
+        {"name": "category", "type": "string"}
+      ],
+      "tags": ["alert", "webhook"]
+    },
+    {
+      "name": "reply",
+      "description": "Drafts a reply to the customer and sends it through a mail service.",
+      "use": "github.com/simonyosb/flowmaker/examples/triage-ticket/components/reply@main",
+      "kind": "flow",
+      "inputs": [
+        {"name": "ticket", "type": "object"},
+        {"name": "url", "type": "string"}
+      ],
+      "tags": ["email", "support"]
+    }
+  ]
+}

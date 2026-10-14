@@ -76,6 +76,11 @@ type Options struct {
 	// server reads back when it starts. Empty keeps runs in memory only.
 	History string
 
+	// Market is where the list of components anyone may take from git is
+	// read, for the page to offer: an https address, or a file on this
+	// machine. Empty offers none.
+	Market string
+
 	Log   func(format string, args ...any) // one line per event; nil discards
 	OnRun func(Run)                        // called when a run finishes, if set
 }
@@ -183,6 +188,13 @@ type Server struct {
 		sync.Mutex
 		files []string // the component files
 		at    time.Time
+	}
+
+	// marketRead is the market as last read, and when.
+	marketRead struct {
+		sync.Mutex
+		view marketView
+		at   time.Time
 	}
 }
 

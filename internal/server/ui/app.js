@@ -208,8 +208,9 @@ const percent = (p) => (p * 100).toFixed(p >= 0.995 || p < 0.005 ? 1 : 0) + "%";
 const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 
 // The address is #/workflows or #/services for the lists, the first of them
-// when there is none, #/new for the form for a new workflow and #/new-service
-// for the form for a new service. A workflow,
+// when there is none, #/new for the form for a new workflow, #/new-service
+// for the form for a new service and #/market for the components anyone may
+// take from git. A workflow,
 // or a component, is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>,
 // or /a/<step> while a step is being added after that step ("trigger" for the
 // first place, "-" for the last). /t/<run> is the form that keeps a run as a
@@ -218,7 +219,7 @@ const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 // /v/tests is the list of the workflow's tests, /v/runs the list of its runs.
 function readAddress() {
   const raw = location.hash.replace(/^#\/?/, "");
-  if (raw === "" || raw === "workflows" || raw === "services" || raw === "new-service") { selected = { ...BLANK, home: raw || "workflows" }; return; }
+  if (raw === "" || raw === "workflows" || raw === "services" || raw === "new-service" || raw === "market") { selected = { ...BLANK, home: raw || "workflows" }; return; }
   if (raw === "new") { selected = { ...BLANK, make: true }; return; }
   const parts = raw.split("/").map(decodeURIComponent);
   const found = {};
@@ -368,7 +369,7 @@ function render() {
   const moved = key !== lastKey;
   lastKey = key;
 
-  paintRail(home === "new-service" ? "services" : home || (isComp(w) ? "services" : "workflows"));
+  paintRail(home === "new-service" || home === "market" ? "services" : home || (isComp(w) ? "services" : "workflows"));
   renderTop(w, home);
   if (home) {
     view = null;
@@ -439,6 +440,11 @@ function renderTop(w, home) {
     $("crumb").replaceChildren(...back("services", "Services"), el("strong", {}, "New service"));
     return;
   }
+  if (home === "market") {
+    $("crumb").replaceChildren(...back("services", "Services"), el("strong", {}, "Market"),
+      el("span", { class: "lede" }, "Services kept in git that anyone may use. Adding one pins it in flowmaker.lock."));
+    return;
+  }
   if (home) {
     $("crumb").replaceChildren(...[
       el("h1", {}, home === "services" ? "Services" : "Workflows"),
@@ -472,21 +478,23 @@ const homeUi = { kind: null, query: "", filter: "all", root: null, search: null,
 function renderHome(kind) {
   const form = kind === "new-service";
   if (homeUi.kind !== kind || !homeUi.root || !$("home").contains(homeUi.root)) (form ? buildServiceForm : buildHome)(kind);
-  if (!form) paintHome();
+  if (kind === "market") { loadMarket(); paintMarket(); }
+  else if (!form) paintHome();
 }
 
 function buildHome(kind) {
-  const word = kind === "services" ? "service" : "workflow";
+  const word = kind === "workflows" ? "workflow" : "service";
   homeUi.kind = kind;
   homeUi.query = "";
   homeUi.filter = "all";
   homeUi.search = el("input", { type: "search", class: "in", placeholder: "Find a " + word, "aria-label": "Find a " + word });
-  homeUi.search.addEventListener("input", () => { homeUi.query = homeUi.search.value; paintHome(); });
+  homeUi.search.addEventListener("input", () => { homeUi.query = homeUi.search.value; if (kind === "market") paintMarket(); else paintHome(); });
   homeUi.filters = el("div", { class: "hfilters", role: "group", "aria-label": "Show" });
   homeUi.newSlot = el("span", { class: "hnewslot" });
+  homeUi.where = el("span", { class: "hwhere" });
   homeUi.rows = el("div", { class: "hrows" });
   homeUi.root = el("div", { class: "hwrap" },
-    el("div", { class: "htools" }, el("label", { class: "hfind" }, icon("search", 16), homeUi.search), homeUi.filters, el("span", { class: "grow" }), homeUi.newSlot),
+    el("div", { class: "htools" }, homeUi.where, el("label", { class: "hfind" }, icon("search", 16), homeUi.search), homeUi.filters, el("span", { class: "grow" }), homeUi.newSlot),
     homeUi.rows);
   $("home").replaceChildren(homeUi.root);
 }
@@ -511,6 +519,7 @@ function paintHome() {
       onclick: () => { homeUi.filter = name; paintHome(); },
     }, label, el("span", { class: "hn" + (bad && n ? " bad" : "") }, n));
   homeUi.filters.replaceChildren(filter("all", "All", all.length), filter("failing", "Failing", failing.length, true));
+  paintWhere();
   const goOn = services ? svcTouched() : !!making && makeTouched();
   homeUi.newSlot.replaceChildren(...(canMake() ? [el("button", {
       type: "button", class: "btn primary hnew", "data-focus": services ? "new-service" : "new-workflow",
@@ -530,6 +539,73 @@ function paintHome() {
       el("thead", {}, el("tr", {}, head.map((h) => el("th", { scope: "col" }, h)))),
       el("tbody", {}, found.map(services ? serviceRow : workflowRow)))),
     services ? el("p", { class: "hfoot" }, "A service is a folder with a ", mono("component.yaml"), ". A step uses one by its folder's name.") : null].filter(Boolean));
+}
+
+// paintWhere offers, on the pages of services, the way between the project's
+// own and those of the market.
+function paintWhere() {
+  const kind = homeUi.kind;
+  if (kind === "workflows" || !state.editable) { homeUi.where.replaceChildren(); return; }
+  const tab = (to, label, n) => el("a", { href: "#/" + to, class: "hwtab", "aria-current": kind === to ? "page" : null, "data-focus": "hw:" + to },
+    label, n == null ? null : el("span", { class: "hn" }, n));
+  homeUi.where.replaceChildren(el("nav", { class: "hfilters", "aria-label": "Services" },
+    tab("services", "Yours", state.workflows.filter(isComp).length),
+    tab("market", "Market", market.state === "ready" ? market.services.length : null)));
+}
+
+// paintMarket draws the market: each service with what it takes and where it
+// is kept, and a way to add it as a step of a workflow.
+function paintMarket() {
+  paintWhere();
+  homeUi.filters.replaceChildren();
+  homeUi.newSlot.replaceChildren(...(state.editable ? [el("button", {
+      type: "button", class: "btn", "data-focus": "market-again", "aria-disabled": market.state === "loading" ? "true" : "false",
+      onclick: () => loadMarket(true),
+    }, "Read it again")] : []));
+  const say = (text, cls) => homeUi.rows.replaceChildren(el("p", { class: cls || "hempty" }, text));
+  if (!state.editable) return say("The market is offered when the server runs with --edit, since adding from it changes the files.");
+  if (market.state === "idle" || (market.state === "loading" && !market.services.length)) return say("Reading the market…");
+  if (market.state === "error") {
+    return homeUi.rows.replaceChildren(el("div", { class: "notice bad", role: "alert" },
+      el("div", { class: "nhead" }, el("strong", {}, "The market could not be read")),
+      el("p", {}, market.error),
+      market.source ? el("p", {}, "It is read from ", mono(market.source), ". flowmaker serve --market sets another.") : null));
+  }
+  const q = homeUi.query.trim().toLowerCase();
+  const found = market.services.filter((e) => !q || [e.name, e.description, e.use, ...(e.tags || [])].some((t) => (t || "").toLowerCase().includes(q)));
+  if (!found.length) return say(market.services.length ? "Nothing here matches." : "The market lists nothing yet.");
+  const used = new Set(state.workflows.filter(isComp).map((x) => x.source).filter(Boolean));
+  const targets = state.workflows.filter(canAdd);
+  homeUi.rows.replaceChildren(
+    el("div", { class: "hbox" }, el("table", { class: "htab" },
+      el("thead", {}, el("tr", {}, ["Service", "Takes", "Kept in", "Use it"].map((h) => el("th", { scope: "col" }, h)))),
+      el("tbody", {}, found.map((e) => marketRow(e, used.has(e.use), targets))))),
+    el("p", { class: "hfoot" }, "Read from ", mono(market.source), ". What a service does is what its repository holds: read it before you use it. ",
+      market.skipped ? plural(market.skipped, "entry") + " of the list could not be read and " + (market.skipped === 1 ? "is" : "are") + " left out." : ""));
+}
+
+function marketRow(e, inUse, targets) {
+  const pick = el("select", { class: "in", "aria-label": "Workflow to add " + e.name + " to" }, targets.map((w) => el("option", { value: w.name }, w.name)));
+  const add = el("button", { type: "button", class: "btn small", "data-focus": "mk:" + e.use, "aria-disabled": targets.length ? "false" : "true" }, icon("plus", 12), "Add a step");
+  add.addEventListener("click", () => { if (pick.value) useFromMarket(e, pick.value); });
+  return el("tr", {},
+    el("td", { class: "hmain" }, el("div", { class: "hsvc" }, kindTile(e.kind, 34),
+      el("div", {}, el("span", { class: "hname" }, e.name), inUse ? el("span", { class: "hgit", title: "A workflow here uses it already" }, "in use") : null,
+        e.description ? el("div", { class: "hdesc" }, e.description) : null,
+        (e.tags || []).length ? el("div", { class: "hchips htags" }, e.tags.map((t) => el("span", { class: "hchip" }, t))) : null))),
+    el("td", {}, chipsOf((e.inputs || []).map((i) => i.name))),
+    el("td", {}, el("span", { class: "hpath mono" }, e.use)),
+    el("td", {}, targets.length ? el("div", { class: "huseit" }, pick, add) : hnone("No workflow can take a step now")));
+}
+
+// useFromMarket opens the form for a new step of the workflow, last, with the
+// market's service chosen in it.
+function useFromMarket(e, name) {
+  const a = addOf(name), w = workflowByName(name);
+  a.component = e.use;
+  a.kind = null;
+  if (w && !a.idTouched) a.id = freeId(w, e.name);
+  go({ workflow: name, add: "-", home: null });
 }
 
 // homeRow is a row of a list: the name is the link, and a click anywhere on the row follows it.
@@ -2847,7 +2923,33 @@ function questionsOut(list) {
     return o;
   });
 }
-const componentsOf = (w) => w.components || [];
+// A workflow is offered its own components, then those of the market that it
+// does not have yet.
+const componentsOf = (w) => {
+  const own = w.components || [];
+  return [...own, ...marketList().filter((e) => !own.some((c) => c.use === e.use)).map((e) => ({ ...e, market: true }))];
+};
+
+// ---- the market ----
+//
+// The server reads the list of components in git that anyone may take, from
+// where it was told to, and the page asks for it once. A step added from one
+// has the server take it from git and pin it in flowmaker.lock.
+
+const market = { state: "idle", services: [], error: null, source: "" };
+const marketList = () => (market.state === "ready" ? market.services : []);
+async function loadMarket(again) {
+  if (!state.editable || market.state === "loading" || (market.state === "ready" && !again)) return;
+  market.state = "loading";
+  try {
+    const m = await getJSON("/api/market");
+    Object.assign(market, { state: m.error ? "error" : "ready", services: m.services || [], error: m.error || null, source: m.source || "", skipped: m.skipped || 0 });
+  } catch (err) {
+    Object.assign(market, { state: "error", services: [], error: "The page could not reach the server." });
+  }
+  uiTick++;
+  render();
+}
 // A workflow is offered components from other folders too, so two can share a
 // name: one is told from another by its use, the path it is used by.
 const componentOf = (w, use) => componentsOf(w).find((c) => c.use === use) || null;
@@ -2897,6 +2999,7 @@ function hideAdder() {
 }
 
 function showAdder(w) {
+  loadMarket();
   if (!adder || adder.workflow !== w.name) {
     adder = buildAdder(w);
     // What the last save said is not news in a new form.
@@ -2961,8 +3064,10 @@ function buildAdder(w) {
   A.choices = el("div", { class: "choices", role: "presentation" });
   A.noComps = el("p", { class: "muted small nocomps" }, "None yet. A component is a step written once, with named inputs, in components/<name>/component.yaml in the workflow's folder.");
   A.gComp = el("div", { class: "cgroup" }, el("div", { class: "cgroup-h" }, "Your components"), A.choices, A.noComps);
+  A.mchoices = el("div", { class: "choices", role: "presentation" });
+  A.gMarket = el("div", { class: "cgroup" }, el("div", { class: "cgroup-h" }, "From the market"), A.mchoices);
   A.noMatch = el("p", { class: "muted small", hidden: true, role: "status" });
-  A.groups = el("div", { class: "cgroups" }, A.gModel, A.gAct, A.gComp, A.noMatch);
+  A.groups = el("div", { class: "cgroups" }, A.gModel, A.gAct, A.gComp, A.gMarket, A.noMatch);
   A.finder = el("div", { class: "finder" }, el("label", { class: "vh", for: "find" + uid }, "Find a kind of step"), A.search);
   // Once a kind is chosen the chooser folds into one line, to be opened again by Change.
   A.summary = el("div", { class: "chosen", hidden: true });
@@ -2978,7 +3083,7 @@ function buildAdder(w) {
 function filterChoices(A) {
   const q = A.query.trim().toLowerCase();
   let shown = 0;
-  for (const g of [A.gModel, A.gAct, A.gComp]) {
+  for (const g of [A.gModel, A.gAct, A.gComp, A.gMarket]) {
     let any = 0;
     for (const row of g.querySelectorAll(".choice")) {
       const on = !q || row.textContent.toLowerCase().includes(q);
@@ -3037,7 +3142,7 @@ function syncChoices(A, comps, current, far) {
     A.compSig = sig;
     const group = "comp" + A.uid;
     A.choiceEls = {};
-    A.choices.replaceChildren(...comps.map((c) => {
+    const rowOf = (c) => {
       const input = el("input", { type: "radio", name: group, value: c.use });
       input.addEventListener("change", () => { if (input.checked) A.pick(c.use); });
       const row = el("label", { class: "choice kind-" + c.kind },
@@ -3049,7 +3154,9 @@ function syncChoices(A, comps, current, far) {
           el("span", { class: "cin mono" }, (c.inputs || []).length ? "Takes " + c.inputs.map((i) => i.name).join(", ") : "Takes no input")));
       A.choiceEls[c.use] = { row, input };
       return row;
-    }));
+    };
+    A.choices.replaceChildren(...comps.filter((c) => !c.market).map(rowOf));
+    A.mchoices.replaceChildren(...comps.filter((c) => c.market).map(rowOf));
   }
   for (const [use, c] of Object.entries(A.choiceEls)) {
     c.input.checked = current === use;
@@ -3092,12 +3199,12 @@ function syncAdder(w) {
 
   // What to add: a component that is no longer offered is let go.
   if (a.component && !comps.some((c) => c.use === a.component)) a.component = null;
-  syncChoices(A, comps, a.component, (c) => c.use.startsWith("../"));
+  syncChoices(A, comps, a.component, (c) => c.use.startsWith("../") || !!c.market);
   for (const [kind, c] of Object.entries(A.builtinEls)) {
     c.input.checked = a.kind === kind;
     c.row.classList.toggle("on", a.kind === kind);
   }
-  A.noComps.hidden = comps.length > 0;
+  A.noComps.hidden = comps.some((c) => !c.market);
   const comp = chosenOf(w, a);
   if (!comp) A.expanded = true;
   A.groups.hidden = A.finder.hidden = !A.expanded;
