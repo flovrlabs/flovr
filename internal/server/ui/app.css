@@ -203,16 +203,18 @@ kbd {
   font: 10.5px/16px var(--mono);
 }
 
-/* Shell: a rail, a top bar, then the lists, the drawing and the details. */
+/* Shell: a rail, a top bar, then the drawing and the details. */
 .app {
+  --insp-w: 388px;
   display: grid;
-  grid-template-columns: 56px 252px minmax(0, 1fr) 388px;
+  grid-template-columns: 56px minmax(0, 1fr) var(--insp-w);
   grid-template-rows: 52px minmax(0, 1fr);
-  grid-template-areas: "rail top top top" "rail side canvas inspector";
+  grid-template-areas: "rail top top" "rail canvas inspector";
   height: 100vh;
 }
-.app[data-panel="closed"] { grid-template-columns: 56px 0 minmax(0, 1fr) 388px; }
-.app[data-panel="closed"] .side { display: none; }
+/* The details are only there when something is picked: the drawing has the room otherwise. */
+.app[data-inspector="closed"] { --insp-w: 0px; }
+.app[data-inspector="closed"] .inspector { display: none; }
 
 /* The rail: the logo tile, the sections, the theme. */
 .rail {
@@ -299,18 +301,7 @@ kbd {
 .tabs button:focus-visible { outline-offset: -3px; }
 .tabs .n { color: var(--faint); font: 12px var(--mono); font-weight: 400; }
 
-.latest { margin-left: auto; flex: none; }
-.commit {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 240px;
-  color: var(--faint);
-  font: 11.5px var(--mono);
-}
-.commit span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.changes-slot { flex: none; }
+.changes-slot { flex: none; margin-left: auto; }
 .live { display: flex; align-items: center; gap: 7px; color: var(--ok); font-size: 13px; white-space: nowrap; }
 .live .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--run); box-shadow: 0 0 0 0 var(--run); animation: beat 3s ease-out infinite; }
 .live.down { color: var(--failed); }
@@ -385,31 +376,23 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .dot.pending { background: none; box-shadow: inset 0 0 0 1.5px var(--border-strong); }
 @keyframes pulse { 50% { opacity: 0.4; } }
 
-/* Left: workflows and the selected workflow's runs. */
-.side {
-  position: relative;
-  grid-area: side;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+/* The menu of workflows or components, opened from the rail or the name. */
+.menu {
+  position: fixed;
+  z-index: 30;
+  width: 300px;
+  max-width: calc(100vw - 16px);
+  max-height: min(560px, calc(100vh - 80px));
   overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
   background: var(--surface);
-  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-lift);
 }
-.side h2 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 16px 16px 6px;
-  font-size: 11px;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--faint);
-}
-.side .count { padding: 0 6px; border-radius: 999px; background: var(--sunken); color: var(--muted); font-size: 10.5px; letter-spacing: 0; }
-.side .list { padding: 0 8px; }
+.mhead { display: flex; align-items: center; gap: 8px; padding: 6px 9px 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.mempty { margin: 2px 9px 8px; color: var(--muted); font-size: 12.5px; }
+.menu .newwf { margin-top: 6px; }
 .row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -431,20 +414,16 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 .row .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row.wf .sub { grid-column: 2; }
 .row.wf .aside { grid-column: 3; grid-row: 2; }
-.row.run .seg, .row.run .sub { grid-column: 1 / -1; }
-.row.run .sub { font-family: var(--sans); font-size: 12px; }
+.row.run .sub { grid-column: 2 / -1; font-family: var(--sans); font-size: 12px; }
 .row.run.failed .sub { color: var(--failed); }
 .row.run .mark { width: 16px; height: 16px; }
+.runlist { display: grid; gap: 2px; margin: 0 -9px; }
 .seg { display: flex; gap: 3px; margin-top: 2px; }
 .seg i { flex: 1; height: 4px; border-radius: 2px; background: var(--run); }
 .seg i.failed { background: var(--fail); }
 .seg i.skipped { background: var(--border-strong); }
 .seg i.pending { background: var(--sunken); box-shadow: inset 0 0 0 1px var(--border); }
 .seg i.running { background: var(--running); animation: pulse 1.3s ease-in-out infinite; }
-.side .runs { padding-bottom: 8px; }
-.side .empty { margin: 4px 16px; color: var(--muted); }
-.side .note { margin: auto 0 0; padding: 14px 16px; border-top: 1px solid var(--border); color: var(--faint); font-size: 12px; }
-.side .runs + .note, .side .empty + .note { margin-top: auto; }
 
 /* Centre: the workflow drawn as a flow, left to right. */
 .canvas {
@@ -479,11 +458,7 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
   font-size: 12.5px;
 }
 .hint { gap: 4px 18px; }
-.hint .state { display: inline-flex; align-items: center; gap: 7px; font-weight: 650; }
-.hint .state.ok { color: var(--ok); }
-.hint .state.failed { color: var(--failed); }
-.hint .state.running { color: var(--running); }
-.hint .id, .runbar .id { color: var(--text); font-weight: 600; }
+.runbar .id { color: var(--text); font-weight: 600; }
 .runbar .state { display: inline-flex; align-items: center; gap: 7px; font-weight: 650; font-size: 13px; }
 .runbar .state.ok { color: var(--ok); }
 .runbar .state.failed { color: var(--failed); }
@@ -501,7 +476,27 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
 }
 .ghost:hover { border-color: var(--border-strong); }
 .ghost kbd { margin-left: 8px; }
-.hint .ghost + .ghost { margin-left: 0; }
+
+/* Over the drawing: the file it is drawn from and how its last run went. */
+.strip { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 14px 18px 0; color: var(--muted); font-size: 12.5px; }
+.strip .path { font-size: 12.5px; overflow-wrap: anywhere; }
+.lastrun { padding: 3px 10px; border: 0; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-size: 12px; font-weight: 500; cursor: pointer; }
+.lastrun.failed { background: var(--failed-soft); color: var(--failed); }
+.lastrun.running { background: var(--running-soft); color: var(--running); }
+.lastrun:hover { box-shadow: inset 0 0 0 1px currentColor; }
+
+/* Under the drawing: the latest runs, and the way to all of them. */
+.runstrip { flex: none; display: flex; align-items: center; gap: 4px 10px; height: 46px; padding: 0 12px 0 18px; border-top: 1px solid var(--border); background: var(--chrome); font-size: 13px; white-space: nowrap; overflow: hidden; }
+.rs-title { font-weight: 600; margin-right: 4px; }
+.rs-run, .rs-all { display: inline-flex; align-items: center; gap: 7px; min-width: 0; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: none; color: var(--text); cursor: pointer; }
+.rs-run:hover, .rs-run[aria-current="true"], .rs-all:hover { background: var(--raised); }
+.rs-run .mono { font-size: 12.5px; }
+.rs-run.failed .mono { color: var(--failed); }
+.rs-said { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.runstrip .grow { flex: 1 1 auto; }
+.rs-all { font-weight: 500; }
+.rs-n { color: var(--faint); font: 12px var(--mono); }
+.canvas:has(> .runstrip) .tools, .canvas:has(> .runstrip) .fab { bottom: 64px; }
 
 .tools {
   position: absolute;
@@ -533,24 +528,6 @@ button.pill:hover { border-color: var(--accent); color: var(--accent); }
   gap: 10px;
 }
 .fab .btn { height: 42px; padding: 0 18px; border-radius: 10px; font-size: 13.5px; box-shadow: var(--shadow); }
-.key {
-  position: absolute;
-  right: 18px;
-  bottom: 18px;
-  max-width: calc(100% - 200px);
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--node);
-  color: var(--muted);
-  font-size: 12px;
-  box-shadow: var(--shadow);
-}
-.key .line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; }
-.key .line > span { display: inline-flex; align-items: center; gap: 6px; }
 
 /* The lines between nodes. A line takes on the outcome of the step it leads into. */
 .edge { fill: none; stroke: var(--edge); stroke-width: 2; }
@@ -874,29 +851,26 @@ pre.cond-pre { color: var(--accent); }
 .options .chosen .fill { background: var(--brand); }
 .options .meaning { margin-top: 3px; color: var(--muted); font-size: 12.5px; }
 
-/* Narrower windows: slimmer side columns. */
+/* Narrower windows: slimmer details. */
 @media (max-width: 1180px) {
-  .app { grid-template-columns: 56px 216px minmax(0, 1fr) 340px; }
-  .app[data-panel="closed"] { grid-template-columns: 56px 0 minmax(0, 1fr) 340px; }
-  .commit { display: none; }
+  .app { --insp-w: 340px; }
   .tabs { gap: 14px; }
 }
 @media (max-width: 860px) {
-  .app, .app[data-panel="closed"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px auto auto 70vh auto; grid-template-areas: "rail" "top" "side" "canvas" "inspector"; height: auto; }
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px auto 70vh auto; grid-template-areas: "rail" "top" "canvas" "inspector"; height: auto; }
   .rail { flex-direction: row; justify-content: flex-start; padding: 0 12px; border-right: 0; border-bottom: 1px solid var(--border); }
   .rail .logo { margin: 0 8px 0 0; }
   .rail .grow { flex: 1 1 auto; }
   .top { flex-wrap: wrap; gap: 0 14px; padding: 0 12px; }
   .crumb { flex: 1 1 100%; min-height: 40px; }
   .tabs { min-height: 40px; }
-  .side { max-height: 260px; border-right: 0; border-bottom: 1px solid var(--border); }
   .inspector { overflow: visible; border-left: 0; border-top: 1px solid var(--border); }
   .inspector header { position: static; }
-  .latest { margin-left: 0; }
-  .latest .chip-meta { display: none; }
-  .tools { bottom: 70px; }
-  .fab { left: 18px; bottom: 16px; }
-  .key { display: none; }
+  .changes-slot { margin-left: 0; }
+  .tools, .canvas:has(> .runstrip) .tools { bottom: 70px; }
+  .fab, .canvas:has(> .runstrip) .fab { left: 18px; bottom: 16px; }
+  .runstrip { order: -1; border-top: 0; border-bottom: 1px solid var(--border); }
+  .rs-said, .rs-run + .rs-run { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -1076,13 +1050,10 @@ pre.diff:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; 
 .addbtn:hover { border-style: solid; border-color: var(--brand); background: var(--brand-btn); color: var(--on-accent); }
 .addbtn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; opacity: 1; }
 
-.ghost.addstep { margin-left: auto; align-items: center; gap: 6px; padding-left: 10px; }
-.hint .ghost.addstep:last-child { margin-left: auto; }
-.btn.addstep { margin-top: 10px; }
-.btn.addstep kbd { border-color: var(--border-strong); }
-.btn.danger { margin-left: 8px; margin-top: 10px; color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, var(--border-strong)); }
+.btn.danger { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, var(--border-strong)); }
 .btn.danger:hover { border-color: var(--failed); }
 .btn.danger.armed { background: #b91c1c; border-color: #b91c1c; color: #fff; }
+.ned-foot .btn.danger { margin-right: 6px; }
 
 /* The form for a new step reuses the settings form; these are its own parts. */
 .addform h2.sub { margin: 4px 0 12px; padding-top: 14px; border-top: 1px solid var(--border); }
@@ -1198,12 +1169,8 @@ button.ihead:hover { background: var(--raised); }
 .btn.block { width: 100%; justify-content: center; }
 .againrow { margin-top: 10px; }
 
-/* Left: the tests of the workflow and the round just started. */
-.testbox { display: grid; gap: 8px; padding: 0 16px 6px; }
-.testbox .notice { max-height: none; }
-.testbox .notice .btn { margin-top: 8px; }
+/* The round of tests just started, on top of the list of tests. */
 .tnote { margin: 0; color: var(--faint); font-size: 12px; }
-.idle { display: grid; gap: 6px; }
 .roundbox { padding: 10px 10px 10px; border: 1px solid var(--border); border-radius: 11px; background: var(--raised); }
 .roundbox:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .roundbox.ok { border-color: color-mix(in srgb, var(--ok) 30%, var(--border)); background: var(--ok-soft); }
@@ -1240,13 +1207,7 @@ button.ihead:hover { background: var(--raised); }
 .row.tr .mark { width: 16px; height: 16px; }
 
 /* A test among the runs: its name instead of a time, and the word Test. */
-.row.run .who { display: block; min-width: 0; overflow: visible; }
-.row.run .who > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row.run .who .eyebrow { color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.3; }
-.row.run .who .eyebrow b { color: var(--accent); font-weight: 700; }
-.row.run .who .tn { font-weight: 600; }
 .row.run.unrun .sub { color: var(--muted); }
-.row.run.test .seg i.pending { background: var(--sunken); }
 
 /* A test's run, in the bar over the drawing and in the details. */
 .ttag { padding: 0 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font: 700 9.5px/16px var(--sans); letter-spacing: 0.06em; text-transform: uppercase; }
@@ -1291,7 +1252,6 @@ pre.plain { margin-top: 8px; }
 .expects li.failed .ek { color: var(--failed); }
 .expects .ew { max-width: 14em; color: var(--muted); text-align: right; overflow-wrap: anywhere; }
 .row.tr .name { white-space: normal; overflow-wrap: anywhere; }
-.row.run .who > span.tn { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 
 /* ---- Components: drawn like workflows, with an input and an output for ends. ---- */
 
@@ -1440,11 +1400,9 @@ pre.plain { margin-top: 8px; }
 
 /* Removing a test from its card. */
 .trow { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border); }
-.btn.danger.rmtest { margin: 0; }
 .inspector .rmnote { margin: 6px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 
 /* The control under the workflows that opens the form for a new one. */
-.side .list .newwf { margin-top: 6px; }
 .btn.newwf[aria-current="true"] { border-color: var(--accent); }
 .card[aria-disabled="true"] { cursor: default; }
 
