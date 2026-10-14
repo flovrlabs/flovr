@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -34,10 +35,11 @@ func main() {
 			"Model API keys come from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY or\n" +
 			"OPENROUTER_API_KEY, depending on the models a workflow uses. Variables in a .env\n" +
 			"file in the current directory are loaded too, unless they are already set.",
+		Version:       currentVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(validateCmd(), runCmd(), testCmd(), serveCmd())
+	root.AddCommand(validateCmd(), runCmd(), testCmd(), serveCmd(), versionCmd())
 	err := loadDotEnv(".env")
 	if err == nil {
 		err = root.Execute()
@@ -45,6 +47,33 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+// version is the release this binary was built as. A release sets it with
+// -ldflags "-X main.version=v0.1.0".
+var version = ""
+
+// currentVersion is the version of this binary: the release's, the module
+// version that go install records, or "dev" for a build from a checkout.
+func currentVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
+}
+
+func versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the version of flowmaker",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println("flowmaker " + currentVersion())
+		},
 	}
 }
 

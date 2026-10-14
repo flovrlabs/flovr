@@ -13,12 +13,22 @@ One binary does everything:
 
 With `flowmaker serve --edit` the page can also change the workflow files. Every change it makes is a small diff in the same YAML file.
 
-## Try it
+Flowmaker is new. This is its first release, and the file format may still change before 1.0.
 
-You need Go 1.26 and, for the examples, an [OpenRouter](https://openrouter.ai) key.
+## Install
+
+Download the archive for your system from [Releases](https://github.com/simonyosb/flowmaker/releases) and put `flowmaker` somewhere on your PATH. Or build it with Go 1.26 or later:
 
 ```bash
-go build -o flowmaker ./cmd/flowmaker
+go install github.com/simonyosb/flowmaker/cmd/flowmaker@latest
+```
+
+## Try it
+
+The examples are in this repository, and they need an [OpenRouter](https://openrouter.ai) key.
+
+```bash
+git clone https://github.com/simonyosb/flowmaker && cd flowmaker
 ```
 
 Put the key in a file named `.env` in the folder you run flowmaker from. The file is ignored by git.
@@ -30,17 +40,17 @@ OPENROUTER_API_KEY=...
 Check an example, then run its tests. The tests call the models, which costs a little; they send none of the workflow's HTTP requests.
 
 ```bash
-./flowmaker validate examples/triage-ticket
+flowmaker validate examples/triage-ticket
 ```
 
 ```bash
-./flowmaker test examples/triage-ticket
+flowmaker test examples/triage-ticket
 ```
 
 Serve both examples and open http://127.0.0.1:8080. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
 
 ```bash
-PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing ./flowmaker serve examples --edit
+PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flowmaker serve examples --edit
 ```
 
 ## A workflow
@@ -220,7 +230,7 @@ output:
 A component can carry tests of its own. Each gives it `input`, written out or as the path of a JSON file, and expects things of `output`. For a component made of steps, a test can also expect a step to be `called` or `skipped`.
 
 ```bash
-./flowmaker test examples/triage-ticket/components/reply
+flowmaker test examples/triage-ticket/components/reply
 ```
 
 ## What validate catches
@@ -258,7 +268,7 @@ Nothing is written unless the result is a workflow the server can go on serving;
 ## Serving for real
 
 ```bash
-FLOWMAKER_TOKEN=... ./flowmaker serve workflows --addr 0.0.0.0:8080
+FLOWMAKER_TOKEN=... flowmaker serve workflows --addr 0.0.0.0:8080
 ```
 
 - Without `FLOWMAKER_TOKEN` the server listens only on this machine. With it, every webhook request must carry `Authorization: Bearer <token>`, and the browser asks for the token as a password.
@@ -290,3 +300,7 @@ Both exit with a status other than 0 when something is wrong, and print what.
 - The page adds steps only from components, does not reorder steps, and does not add or remove the steps of a component. A workflow it makes starts with one step and has no `respond`.
 - A workflow file that appears or goes away while the server runs is not noticed until the server is restarted, unless the page made it.
 - A webhook is always a POST to a fixed path.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
