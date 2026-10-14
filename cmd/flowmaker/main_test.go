@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -153,5 +154,22 @@ func TestPageKeyIsKeptForTheUser(t *testing.T) {
 	t.Setenv("FLOWMAKER_PAGE_KEY", strings.Repeat("k", minSecret))
 	if key, fromEnv, err := pageKey(); err != nil || !fromEnv || key != strings.Repeat("k", minSecret) {
 		t.Errorf("key = %q, from the environment %v, error %v", key, fromEnv, err)
+	}
+}
+
+func TestAddressPrintedIsOneABrowserCanOpen(t *testing.T) {
+	for addr, want := range map[string]string{
+		"0.0.0.0:8080":   "127.0.0.1:8080",
+		"[::]:8080":      "127.0.0.1:8080",
+		"127.0.0.1:8080": "127.0.0.1:8080",
+		"10.0.0.5:9000":  "10.0.0.5:9000",
+	} {
+		tcp, err := net.ResolveTCPAddr("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := reachable(tcp); got != want {
+			t.Errorf("reachable(%s) = %s, want %s", addr, got, want)
+		}
 	}
 }

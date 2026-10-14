@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -191,6 +192,16 @@ func pageKey() (key string, told bool, err error) {
 		return key, false, nil
 	}
 	return key, false, nil
+}
+
+// reachable is an address a browser on this machine can open for addr: the
+// address itself, or 127.0.0.1 when the server listens on every address.
+func reachable(addr net.Addr) string {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok || !tcp.IP.IsUnspecified() {
+		return addr.String()
+	}
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(tcp.Port))
 }
 
 // minSecret is the shortest token or key the server accepts.
@@ -463,11 +474,15 @@ func serveCmd() *cobra.Command {
 			if tlsCert != "" {
 				scheme = "https"
 			}
-			fmt.Printf("flowmaker is serving on %s://%s\n", scheme, listener.Addr())
+			at := reachable(listener.Addr())
+			fmt.Printf("flowmaker is serving on %s://%s\n", scheme, at)
+			if at != listener.Addr().String() {
+				fmt.Printf("  listening on every address of this machine, port %d\n", listener.Addr().(*net.TCPAddr).Port)
+			}
 			if keyFromEnv {
-				fmt.Printf("  page: %s://%s/?key= followed by FLOWMAKER_PAGE_KEY\n", scheme, listener.Addr())
+				fmt.Printf("  page: %s://%s/?key= followed by FLOWMAKER_PAGE_KEY\n", scheme, at)
 			} else {
-				fmt.Printf("  page: %s://%s/?key=%s\n", scheme, listener.Addr(), key)
+				fmt.Printf("  page: %s://%s/?key=%s\n", scheme, at, key)
 			}
 			for _, route := range srv.Routes() {
 				fmt.Println("  " + route)
