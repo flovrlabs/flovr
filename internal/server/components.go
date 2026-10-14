@@ -100,7 +100,9 @@ func (s *Server) rootFiles() []string {
 func (s *Server) componentView(c *workflow.Component, uses []useView) workflowView {
 	view := describeComponent(c)
 	view.UsedBy = uses
-	if !s.opts.Edit {
+	// One from git is changed at its source, so the page is not told what
+	// could be changed either.
+	if !s.opts.Edit || workflow.FromGit(c.Path) {
 		// Nothing can be changed, so the page is not told what could be.
 		for i := range view.Steps {
 			view.Steps[i].Edit = nil
@@ -128,6 +130,9 @@ func (s *Server) componentView(c *workflow.Component, uses []useView) workflowVi
 // if the component is still valid and every workflow that uses it is still
 // one the server can serve. The caller holds s.mu.
 func (s *Server) editComponent(c *workflow.Component, req editRequest) (int, any) {
+	if workflow.FromGit(c.Path) {
+		return http.StatusUnprocessableEntity, fail(fromGit, componentID(c))
+	}
 	s.refresh()
 	id := componentID(c)
 	data, err := os.ReadFile(c.Path)
@@ -200,6 +205,9 @@ func (s *Server) editComponent(c *workflow.Component, req editRequest) (int, any
 	}
 	return http.StatusOK, map[string]any{}
 }
+
+// fromGit is the refusal of a change to a component taken from git.
+const fromGit = "%s comes from git: change it at its source, then take the new commit with flowmaker get -u."
 
 // invalid is the answer to a change that would leave a file not valid.
 func invalid(message string, err error) failure {

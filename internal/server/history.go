@@ -116,11 +116,12 @@ func (h *history) trim() {
 	}
 }
 
-// recent returns the runs, newest first.
+// recent returns the runs, newest first. With none it returns an empty
+// list, which the page reads as a list.
 func (h *history) recent() []Run {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	out := slices.Clone(h.runs)
+	out := append([]Run{}, h.runs...)
 	slices.Reverse(out)
 	return out
 }

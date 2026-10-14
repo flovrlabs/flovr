@@ -109,6 +109,34 @@ func (e *Engine) run(ctx context.Context, w *workflow.Workflow, trigger any) (ma
 	return vars, resp, nil
 }
 
+// RunStep runs the step at position i of w on its own, as a run would have
+// run it after the steps before it had put out what earlier holds under their
+// ids; a step missing from earlier was skipped. trigger is what started the
+// run. Its condition is not checked, so a step can be tried whatever its
+// condition says; wouldRun says what the condition gives, and is true for a
+// step without one.
+func (e *Engine) RunStep(ctx context.Context, w *workflow.Workflow, i int, trigger any, earlier map[string]any) (res StepResult, wouldRun bool) {
+	s := w.Steps[i]
+	vars := map[string]any{"trigger": trigger, "env": e.Env}
+	var ids []string
+	for _, before := range w.Steps[:i] {
+		ids = append(ids, before.ID)
+		vars[before.ID] = earlier[before.ID]
+	}
+	env, err := expr.NewEnv(ids)
+	if err != nil {
+		return StepResult{ID: s.ID, Kind: s.Kind(), Status: Failed, Err: err}, false
+	}
+	wouldRun = true
+	if s.When != "" {
+		if wouldRun, err = env.EvalCondition(s.When, vars); err != nil {
+			return StepResult{ID: s.ID, Kind: s.Kind(), Status: Failed, Err: fmt.Errorf("when: %w", err)}, false
+		}
+		s.When = ""
+	}
+	return e.step(ctx, w, s, env, vars), wouldRun
+}
+
 // respond works out the answer to the caller from what the steps produced.
 func respond(r *workflow.Respond, ids []string, vars map[string]any) (*Response, error) {
 	env, err := expr.NewEnv(ids)

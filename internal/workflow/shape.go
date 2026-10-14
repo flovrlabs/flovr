@@ -107,11 +107,12 @@ func decideShape(d *DecideStep) *shape {
 }
 
 // outputShape is the shape of what a step or component of the given work
-// puts out. file is the file it is written in.
-func outputShape(file string, ai *AIStep, decide *DecideStep, http *HTTPStep) *shape {
+// puts out. file is the file it is written in, and files what to read in place
+// of the files on disk.
+func outputShape(file string, files Overlay, ai *AIStep, decide *DecideStep, http *HTTPStep) *shape {
 	switch {
 	case ai != nil:
-		if _, doc, err := loadSchema(file, ai.Output); err == nil {
+		if _, doc, err := loadSchema(file, ai.Output, files); err == nil {
 			return schemaShape(doc, true)
 		}
 	case decide != nil:

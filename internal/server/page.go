@@ -20,7 +20,7 @@ var ui embed.FS
 // page serves the web page and the JSON it shows and, if the server allows
 // editing, takes the changes the page makes.
 func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
-	if s.opts.Edit && r.Method == http.MethodPost && slices.Contains([]string{"/api/edit", "/api/steps", "/api/prompt", "/api/test", "/api/cases", "/api/workflows"}, r.URL.Path) {
+	if s.opts.Edit && r.Method == http.MethodPost && slices.Contains([]string{"/api/edit", "/api/steps", "/api/prompt", "/api/test", "/api/cases", "/api/workflows", "/api/components", "/api/steps/test", "/api/schema", "/api/trigger"}, r.URL.Path) {
 		s.change(rw, r)
 		return
 	}
@@ -82,8 +82,12 @@ func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
 		reply(rw, http.StatusOK, run)
 	case path == "/api/prompt" && s.opts.Edit:
 		s.prompt(rw, r)
+	case path == "/api/schema" && s.opts.Edit:
+		s.schema(rw, r)
 	case path == "/api/changes" && s.opts.Edit:
 		s.changes(rw, r)
+	case path == "/api/market" && s.opts.Edit:
+		reply(rw, http.StatusOK, s.market(r.Context()))
 	default:
 		reply(rw, http.StatusNotFound, map[string]string{"error": "nothing is served at this path"})
 	}
@@ -172,6 +176,10 @@ type workflowView struct {
 	Gives       *givesView  `json:"gives,omitempty"`  // of a component made of steps
 	UsedBy      []useView   `json:"usedBy,omitempty"` // the steps that use it
 	Fixed       bool        `json:"fixed,omitempty"`  // steps are not added or removed from the page
+
+	// Source is how steps name a component taken from git, as in
+	// github.com/acme/services/notify@v1.2. Such a one is never changed here.
+	Source string `json:"source,omitempty"`
 }
 
 // givesView is what a component made of steps gives back, as written.

@@ -700,3 +700,24 @@ func TestHistoryOfOddSizesDoesNotStopTheServer(t *testing.T) {
 		t.Error("a .gitignore was written into a folder that was already there")
 	}
 }
+
+func TestStateOfAServerThatHasRunNothing(t *testing.T) {
+	f := serveExample(t, "low", "")
+	body := get(f.srv, "/api/state").Body.String()
+	if !strings.Contains(body, `"runs":[]`) {
+		t.Errorf("state = %.200s, want an empty list of runs", body)
+	}
+}
+
+func TestBrowsersAskingForAnIconAreNotRefused(t *testing.T) {
+	f := serveExample(t, "low", "")
+	f.srv.opts.PageKey = "page-key"
+	if rec := get(f.srv, "/favicon.ico"); rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d", rec.Code)
+	}
+	for _, line := range *f.logs {
+		if strings.HasPrefix(line, "refused") {
+			t.Errorf("logged %q", line)
+		}
+	}
+}

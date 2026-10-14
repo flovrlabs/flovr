@@ -7,18 +7,19 @@
 <link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
-<div class="app">
+<div class="app" id="app">
+  <nav id="rail" class="rail" aria-label="Sections">
+    <svg class="logo" width="30" height="30" viewBox="0 0 24 24" role="img" aria-label="flowmaker"><rect class="lg-bg" width="24" height="24" rx="7"></rect><circle class="lg-ink" cx="8" cy="7" r="2.3"></circle><circle class="lg-ink" cx="16" cy="17" r="2.3"></circle><path class="lg-line" d="M8 9.6v2.4a3 3 0 0 0 3 3h2.4"></path></svg>
+  </nav>
   <header class="top">
-    <div class="brand"><span class="logo" aria-hidden="true"></span><span class="wordmark">flowmaker</span></div>
     <nav id="crumb" class="crumb" aria-label="Current workflow or component"></nav>
-    <span id="latest" class="latest"></span>
-    <span id="commit" class="commit" title="Version of the workflow files this server is running"></span>
+    <div id="tabs" class="tabs" role="tablist" aria-label="View"></div>
     <span id="changes" class="changes-slot"></span>
     <span id="live" class="live" role="status"></span>
   </header>
-  <aside id="side" class="side" aria-label="Workflows, components and runs"></aside>
   <main id="canvas" class="canvas" aria-label="Drawing of the selected workflow or component"></main>
   <aside id="inspector" class="inspector" aria-label="Details"></aside>
+  <main id="home" class="home" aria-label="List"></main>
 </div>
 <script src="/ui/app.js"></script>
 </body>

@@ -98,9 +98,12 @@ func (s *Server) create(req createRequest) (int, any) {
 	if c == nil {
 		return refuse("The first step uses a component, and %q is not one the page knows.", req.Step.Use)
 	}
-	use, err := relative(dir, filepath.Dir(c.Path))
-	if err != nil {
-		return refuse("%v", err)
+	use := c.Remote
+	if use == "" {
+		var err error
+		if use, err = relative(dir, filepath.Dir(c.Path)); err != nil {
+			return refuse("%v", err)
+		}
 	}
 	var inputs []inputView
 	for _, p := range c.Input {

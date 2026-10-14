@@ -6,25 +6,31 @@
 const REFRESH_MS = 3000;
 
 // Sizes of the drawing, in pixels before it is scaled to fit the window. The
-// workflow flows from top to bottom, so it stays narrow: branches sit side by
-// side and the page never needs to squeeze it to make room for the details.
-const CARD_H = 88;
-const W_MIN = 214;
-const W_MAX = 272;
-const GAP_X = 28;
-const GAP_Y = 46;
-const PAD = 28;
-const FOOT = 28;     // height of the strip at the bottom of a box
-const LEAN = CARD_H * 0.18; // how far an HTTP box leans
-const ZOOM_MIN = 0.5;
+// workflow flows from left to right: a column per depth, a row per branch end.
+const CARD_H = 68;
+const CARD_W = 216;
+const END_W = 188;   // the way out is a little smaller
+const END_H = 56;
+const COL = 360;     // distance between columns, which leaves room for a condition on each line
+const ROW = 112;     // distance between rows, which leaves room for the line of result under a node
+const PAD = 36;
+const HANDLE = 56;   // room to the right of the last column for the plus
+const ZOOM_MIN = 0.3;
 const ZOOM_MAX = 1.5;
 
 const ICONS = {
-  trigger: ["M13 2 4.5 13.5H11L10 22l8.5-11.5H12z"],
-  decide: ["M6 3v18", "M6 15c8 0 12-2 12-9", "M14.5 8.5 18 5l3.5 3.5"],
-  ai: ["M11 4l1.9 5.1L18 11l-5.1 1.9L11 18l-1.9-5.1L4 11l5.1-1.9z", "M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"],
-  http: ["M4 12h15", "M13 6l6 6-6 6"],
-  flow: ["M12 3.5 3.5 8 12 12.5 20.5 8z", "M3.5 12 12 16.5 20.5 12", "M3.5 16 12 20.5 20.5 16"],
+  trigger: ["M13 2 4 14h7l-1 8 9-12h-7z"],
+  decide: ["M6 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M6 16a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M18 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M6 8v8", "M18 11a6 6 0 0 1-6 6H8"],
+  ai: ["M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z", "M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"],
+  http: ["M22 2 11 13", "M22 2 15 22l-4-9-9-4z"],
+  flow: ["M21 8 12 3 3 8v8l9 5 9-5z", "M3 8l9 5 9-5", "M12 13v8"],
+  moon: ["M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"],
+  sun: ["M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M12 2.5v2.2", "M12 19.3v2.2", "M2.5 12h2.2", "M19.3 12h2.2", "M5.3 5.3l1.6 1.6", "M17.1 17.1l1.6 1.6", "M5.3 18.7l1.6-1.6", "M17.1 6.9l1.6-1.6"],
+  runs: ["M4 6h16", "M4 12h10", "M4 18h13"],
+  tests: ["M9 3h6", "M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"],
+  chev: ["M6 9l6 6 6-6"],
+  search: ["M18 11a7 7 0 1 1-14 0 7 7 0 0 1 14 0z", "m20 20-3.5-3.5"],
+  clock: ["M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z", "M12 7v5l3 2"],
   chevron: ["M9 6l6 6-6 6"],
   workflow: ["M4 6h6v5H4z", "M14 13h6v5h-6z", "M10 8.5h3a2 2 0 0 1 2 2V13"],
   run: ["M7 4.5v15l12-7.5z"],
@@ -39,7 +45,7 @@ const ICONS = {
   plus: ["M12 5v14", "M5 12h14"],
   trash: ["M5 7h14", "M10 7V4.5h4V7", "M7 7l.8 12h8.4L17 7", "M10.5 11v5", "M13.5 11v5"],
   minus: ["M5 12h14"],
-  response: ["M10 5 4 11l6 6", "M4 11h9a7 7 0 0 1 7 7v1"],
+  response: ["M9 14 4 9l5-5", "M4 9h10a6 6 0 0 1 6 6v5"],
   fit: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"],
   // A component's two ends: an arrow into a bar, and an arrow out of one.
   input: ["M4 12h10", "M10.5 7.5 15 12l-4.5 4.5", "M19.5 5v14"],
@@ -84,8 +90,11 @@ const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", run
 const openInner = new Set();
 
 let state = { commit: "", protected: false, workflows: [], runs: [] };
-let selected = { workflow: null, run: null, node: null, changes: false, add: null, test: null, make: false };
+// What the address picks. `home` is one of the lists, "workflows" or "services".
+const BLANK = { workflow: null, run: null, node: null, changes: false, add: null, test: null, make: false, edit: null, list: null, home: null };
+let selected = { ...BLANK };
 let detail = null;      // the selected run in full, with trigger and outputs
+let latestFull = null;  // the latest run of the selected workflow in full, drawn on it while no run is picked
 let shown = "";         // what the page currently shows, to tell whether anything changed
 let view = null;        // the workflow and run now drawn, for redrawing on resize and zoom
 let zoom = null;        // null fits the drawing to the window
@@ -94,6 +103,57 @@ let enteredFor = null;  // the workflow whose cards last slid in
 let afterRender = null; // something to do once the page has been drawn, such as moving the focus
 
 const $ = (id) => document.getElementById(id);
+
+// ---- theme: remembered in the browser, and the page works without it ----
+
+const THEME_KEY = "flowmaker-theme";
+function remembered(key) {
+  try { return localStorage.getItem(key); } catch (err) { return null; }
+}
+function remember(key, value) {
+  try { localStorage.setItem(key, value); } catch (err) { /* the choice just lasts until the page is closed */ }
+}
+const systemDark = () => !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches);
+// The theme in use: the one picked with the toggle, else the system's.
+const currentTheme = () => document.documentElement.dataset.theme || (systemDark() ? "dark" : "light");
+{
+  const saved = remembered(THEME_KEY);
+  if (saved === "dark" || saved === "light") document.documentElement.dataset.theme = saved;
+}
+let themeButton = null;
+function paintTheme() {
+  if (!themeButton) return;
+  const dark = currentTheme() === "dark";
+  themeButton.replaceChildren(icon(dark ? "sun" : "moon", 19));
+  themeButton.title = dark ? "Switch to the light theme" : "Switch to the dark theme";
+  themeButton.setAttribute("aria-label", themeButton.title);
+}
+function toggleTheme() {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  remember(THEME_KEY, next);
+  paintTheme();
+}
+if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paintTheme);
+
+function railButton(name, label, onclick, pressed) {
+  return el("button", { type: "button", class: "railbtn", "aria-label": label, title: label, "aria-pressed": pressed, onclick }, icon(name, 20));
+}
+// buildRail fills the rail under the logo: the list of workflows and the list
+// of services, and the theme at the bottom. The runs and tests of a workflow
+// are its tabs.
+const railButtons = {};
+function buildRail() {
+  railButtons.workflows = railButton("workflow", "Workflows", () => go({ home: "workflows" }), "false");
+  railButtons.services = railButton("component", "Services", () => go({ home: "services" }), "false");
+  themeButton = railButton("moon", "Switch theme", toggleTheme);
+  $("rail").append(railButtons.workflows, railButtons.services, el("span", { class: "grow" }), themeButton);
+  paintTheme();
+}
+// paintRail marks the list that what is on show belongs to.
+function paintRail(kind) {
+  for (const [name, b] of Object.entries(railButtons)) b.setAttribute("aria-pressed", name === kind ? "true" : "false");
+}
 
 function append(node, children) {
   for (const child of children.flat(Infinity)) {
@@ -147,17 +207,24 @@ function when(started) {
 const percent = (p) => (p * 100).toFixed(p >= 0.995 || p < 0.005 ? 1 : 0) + "%";
 const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 
-// The address is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>,
+// The address is #/workflows or #/services for the lists, the first of them
+// when there is none, #/new for the form for a new workflow, #/new-service
+// for the form for a new service and #/market for the components anyone may
+// take from git. A workflow,
+// or a component, is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>,
 // or /a/<step> while a step is being added after that step ("trigger" for the
 // first place, "-" for the last). /t/<run> is the form that keeps a run as a
-// test, and /t/- the form for a new test from nothing. /m/1 is the form for
-// a new workflow, which belongs to no workflow: the one named stays selected
-// behind it.
+// test, and /t/- the form for a new test from nothing. /e/<step> is the node editor, the large dialog for one step; a
+// step of a workflow this page can edit opens in it from /n/<step> too.
+// /v/tests is the list of the workflow's tests, /v/runs the list of its runs.
 function readAddress() {
-  const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  const raw = location.hash.replace(/^#\/?/, "");
+  if (raw === "" || raw === "workflows" || raw === "services" || raw === "new-service" || raw === "market") { selected = { ...BLANK, home: raw || "workflows" }; return; }
+  if (raw === "new") { selected = { ...BLANK, make: true }; return; }
+  const parts = raw.split("/").map(decodeURIComponent);
   const found = {};
   for (let i = 0; i + 1 < parts.length; i += 2) found[parts[i]] = parts[i + 1];
-  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null, test: found.t || null, make: found.m === "1" };
+  selected = { ...BLANK, workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null, test: found.t || null, edit: found.e || null, list: found.v === "tests" || found.v === "runs" ? found.v : null };
 }
 
 function go(change) {
@@ -170,12 +237,21 @@ function go(change) {
   if (!("test" in change)) next.test = null;
   // Nor the form for a new workflow.
   if (!("make" in change)) next.make = false;
+  // Nor the node editor.
+  if (!("edit" in change)) next.edit = null;
+  // Nor the list of tests or runs.
+  if (!("list" in change)) next.list = null;
+  if (!("home" in change)) next.home = null;
+  // The lists and the form for a new workflow belong to no workflow.
+  const own = next.home ? "#/" + next.home : next.make ? "#/new" : !next.workflow ? "#/workflows" : null;
+  if (own) { if (location.hash !== own) location.hash = own; return; }
   let hash = "#/w/" + encodeURIComponent(next.workflow);
   if (next.run) hash += "/r/" + encodeURIComponent(next.run);
   if (next.node) hash += "/n/" + encodeURIComponent(next.node);
   if (next.add) hash += "/a/" + encodeURIComponent(next.add);
   if (next.test) hash += "/t/" + encodeURIComponent(next.test);
-  if (next.make) hash += "/m/1";
+  if (next.edit) hash += "/e/" + encodeURIComponent(next.edit);
+  if (next.list) hash += "/v/" + next.list;
   if (next.changes) hash += "/c/1";
   if (location.hash !== hash) location.hash = hash;
 }
@@ -204,16 +280,37 @@ async function refresh() {
     } else {
       detail = null;
     }
-    live.replaceChildren(el("span", { class: "pulse" }), "Live");
+    await loadLatest();
+    offline = null;
     live.title = "Last updated " + when(Date.now());
-    live.className = "live";
   } catch (err) {
     // The server is there but does not know this browser: its key is gone.
-    const why = err.status === 401 ? "Needs the page's key: open the address flowmaker printed" : "Cannot reach the server";
-    live.replaceChildren(el("span", { class: "pulse" }), why);
-    live.className = "live down";
+    offline = err.status === 401 ? "Needs the page's key: open the address flowmaker printed" : "Cannot reach the server";
   }
+  paintLive();
   render();
+}
+
+// paintLive says whether the page hears from the server, and what starts the
+// workflow on show: "Live on POST /tickets".
+let offline = null;
+function paintLive() {
+  const w = selected.make ? null : state.workflows.find((x) => x.name === selected.workflow);
+  const served = state.workflows.filter((x) => !isComp(x) && x.trigger).length;
+  const on = !w ? (served ? "Live · " + plural(served, "trigger") : "Live") : !isComp(w) && w.trigger ? "Live on " + w.trigger : "Live";
+  $("live").replaceChildren(el("span", { class: "pulse" }), offline || on);
+  $("live").className = offline ? "live down" : "live";
+}
+
+// loadLatest fetches the latest run of the selected workflow in full, which the
+// drawing shows while no run is picked. A component has no runs of its own, so
+// for it the latest is its latest test.
+async function loadLatest() {
+  const w = state.workflows.find((x) => x.name === selected.workflow);
+  const last = selected.run || !w ? null : isComp(w) ? state.runs.find((r) => r.workflow === w.name) : latestRun(w.name);
+  if (!last) { latestFull = null; return; }
+  if (latestFull && latestFull.run === last.run && latestFull.status !== "running") return;
+  latestFull = await getJSON("/api/runs/" + encodeURIComponent(last.run)).catch(() => null);
 }
 
 // progress is how far a step got in a run: its recorded status, or "pending"
@@ -250,11 +347,6 @@ const failedInside = (rows) => rows.find((r) => r.status === "failed") || null;
 const latestRun = (name) => state.runs.find((r) => r.workflow === name && r.source !== "test");
 
 function render() {
-  if (!state.workflows.some((w) => w.name === selected.workflow)) {
-    const first = state.workflows.find((x) => !x.component) || state.workflows[0];
-    selected = { workflow: first ? first.name : null, run: null, node: null, changes: false, add: null, test: null, make: false };
-    detail = null;
-  }
   // Rebuilding the page drops the reader's focus and text selection, so it is
   // only done when there is something new to show.
   const wanted = state.workflows.find((x) => x.name === selected.workflow);
@@ -263,98 +355,111 @@ function render() {
   // The server has no changes view for a component.
   if (selected.changes && isComp(wanted)) selected = { ...selected, changes: false };
   if (selected.changes && state.editable && wanted) ensureChanges(wanted);
-  const next = JSON.stringify([state, selected, detail, uiTick, selected.changes ? changesCache[selected.workflow] : null]);
+  const next = JSON.stringify([state, selected, detail, latestFull, uiTick, selected.changes ? changesCache[selected.workflow] : null]);
   if (next === shown) return;
   shown = next;
   const focusId = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
 
-  // A new workflow is drawn from the form, as a workflow of its own.
+  // A new workflow is drawn from the form, as a workflow of its own. An
+  // address naming no workflow the server knows shows the list of them.
   const real = state.workflows.find((x) => x.name === selected.workflow);
-  const w = real && selected.make ? draftWorkflow() : real;
-  const key = [selected.workflow, selected.run, selected.node, selected.changes, selected.add, selected.test, selected.make].join("|");
+  const w = selected.make ? draftWorkflow() : real;
+  const home = w ? null : selected.home || "workflows";
+  const key = [selected.workflow, selected.run, selected.node, selected.changes, selected.add, selected.test, selected.make, selected.list, selected.home].join("|");
   const moved = key !== lastKey;
   lastKey = key;
 
-  renderTop(w);
-  if (!w) {
+  paintRail(home === "new-service" || home === "market" ? "services" : home || (isComp(w) ? "services" : "workflows"));
+  renderTop(w, home);
+  if (home) {
     view = null;
     form = null;
     tform = null;
     maker = null;
     insp.body = null;
-    $("side").replaceChildren();
-    $("changes").replaceChildren();
+    $("app").dataset.view = "home";
+    $("app").dataset.inspector = "closed";
     $("inspector").replaceChildren();
-    $("canvas").replaceChildren(el("p", { class: "none" }, "No workflows are loaded."));
+    $("canvas").replaceChildren();
+    renderHome(home);
+    paintEditor();
+    restoreFocus(focusId);
     return;
   }
+  $("app").dataset.view = "flow";
   const run = detail && detail.run === selected.run && detail.workflow === w.name ? detail : null;
-  view = { w, run };
-  renderSide(w);
+  // While no run is picked the drawing shows the latest one, if it is this workflow's.
+  const auto = !run && !w.draft && !selected.run && latestFull && latestFull.workflow === w.name ? latestFull : null;
+  view = { w, run, auto };
   renderCanvas(moved);
   renderInspector(w, run, moved);
-  if (focusId) {
-    const back = document.querySelector('[data-focus="' + CSS.escape(focusId) + '"]');
-    if (back && back !== document.activeElement) back.focus({ preventScroll: true });
-  }
+  paintEditor();
+  restoreFocus(focusId);
   if (afterRender) { const run = afterRender; afterRender = null; run(); }
+}
+
+// restoreFocus puts the focus back on what had it before the page was drawn again.
+function restoreFocus(focusId) {
+  if (!focusId) return;
+  const back = document.querySelector('[data-focus="' + CSS.escape(focusId) + '"]');
+  if (back && back !== document.activeElement) back.focus({ preventScroll: true });
 }
 
 // ---- top bar ----
 
-function renderTop(w) {
-  $("commit").replaceChildren(...(state.commit ? [icon("branch", 13), el("span", {}, state.commit)] : []));
+// paintTabs: the views of a workflow. Editor is the drawing with no run picked,
+// Runs the list of its runs, Tests the list of its tests; each with its count.
+// A component has no runs of its own: its tab lists its test runs.
+function paintTabs(w) {
+  const tabs = $("tabs");
+  if (!w || w.draft) { tabs.replaceChildren(); return; }
+  const comp = isComp(w);
+  const mine = state.runs.filter((r) => r.workflow === w.name);
+  const runs = mine.filter((r) => !isTestRun(r)), tests = mine.filter(isTestRun);
+  const picked = selected.run ? state.runs.find((r) => r.run === selected.run) : null;
+  const mode = picked ? (isTestRun(picked) && !comp ? "tests" : "runs") : selected.list || "editor";
+  const tab = (name, label, count, onclick) => el("button", {
+      type: "button", role: "tab", "aria-selected": mode === name ? "true" : "false", onclick,
+    }, label, count == null ? null : el("span", { class: "n" }, count));
+  tabs.replaceChildren(...[
+    tab("editor", "Editor", null, () => go({ run: null, node: null })),
+    tab("runs", comp ? "Test runs" : "Runs", comp ? tests.length : runs.length, () => go({ list: "runs", run: null, node: null })),
+    comp ? null : tab("tests", "Tests", typeof w.tests === "number" ? w.tests : (w.cases || []).length, () => go({ list: "tests", run: null, node: null }))].filter(Boolean));
+}
 
-  $("changes").replaceChildren(...(state.editable && w && !isComp(w) && !w.draft ? [changesChip()] : []));
+function renderTop(w, home) {
+  paintTabs(home ? null : w);
+  paintLive();
+  $("changes").replaceChildren(...(state.editable && w && !home && !isComp(w) && !w.draft ? [changesChip(w)] : []));
 
-  const last = w && !isComp(w) ? latestRun(w.name) : null;
   const anyFailed = state.runs.some((r) => r.status === "failed" && latestRun(r.workflow) === r);
   document.title = anyFailed ? "flowmaker (a run failed)" : "flowmaker";
-  if (!w) {
-    $("crumb").replaceChildren();
-    $("latest").replaceChildren();
+  // The way back to the list it is in, then its name.
+  const back = (to, label) => [el("a", { href: "#/" + to, class: "crumbback", "data-focus": "back:" + to }, label), icon("chevron", 14)];
+  if (home === "new-service") {
+    $("crumb").replaceChildren(...back("services", "Services"), el("strong", {}, "New service"));
+    return;
+  }
+  if (home === "market") {
+    $("crumb").replaceChildren(...back("services", "Services"), el("strong", {}, "Market"),
+      el("span", { class: "lede" }, "Services kept in git that anyone may use. Adding one pins it in flowmaker.lock."));
+    return;
+  }
+  if (home) {
+    $("crumb").replaceChildren(...[
+      el("h1", {}, home === "services" ? "Services" : "Workflows"),
+      home === "services" ? el("span", { class: "lede" }, "Pieces that workflows use. A change to one reaches every step that uses it.") : null].filter(Boolean));
     return;
   }
   if (w.draft) {
-    $("crumb").replaceChildren(
-      el("span", { class: "sep", "aria-hidden": "true" }, "/"),
-      el("span", { class: "crumbkind" }, icon("plus", 14), "New workflow"),
-      ...(w.label ? [el("span", { class: "sep", "aria-hidden": "true" }, "/"), el("strong", {}, w.label)] : []),
-      el("span", { class: "pill mono" }, w.trigger));
-    $("latest").className = "latest none";
-    $("latest").replaceChildren();
+    $("crumb").replaceChildren(...back("workflows", "Workflows"), el("strong", {}, w.label || "New workflow"));
     return;
   }
   if (isComp(w)) {
-    $("crumb").replaceChildren(
-      el("span", { class: "sep", "aria-hidden": "true" }, "/"),
-      el("span", { class: "crumbkind" }, icon("component", 14), "Component"),
-      el("span", { class: "sep", "aria-hidden": "true" }, "/"),
-      el("strong", { title: w.name }, compTitle(w)),
-      el("span", { class: "pill" }, compKindWord(w)));
-    $("latest").className = "latest none";
-    $("latest").replaceChildren();
+    $("crumb").replaceChildren(...back("services", "Services"), el("strong", { title: w.name }, compTitle(w)), el("span", { class: "pill" }, compKindWord(w)));
     return;
   }
-  $("crumb").replaceChildren(
-    el("span", { class: "sep", "aria-hidden": "true" }, "/"),
-    el("strong", {}, w.name),
-    w.trigger ? el("span", { class: "pill mono" }, w.trigger) : null);
-
-  if (!last) {
-    $("latest").className = "latest none";
-    $("latest").replaceChildren(el("span", { class: "chip quiet" }, "No runs yet"));
-    return;
-  }
-  const text = last.status === "failed" ? "Latest run failed" : last.status === "running" ? "Latest run is running" : "Latest run succeeded";
-  $("latest").className = "latest";
-  $("latest").replaceChildren(el("button", {
-      class: "chip " + last.status, type: "button",
-      title: "Open run " + last.run,
-      onclick: () => go({ run: last.run, node: null }),
-    },
-    statusMark(last.status, 12), text,
-    el("span", { class: "chip-meta" }, when(last.started))));
+  $("crumb").replaceChildren(...back("workflows", "Workflows"), el("strong", { title: w.path }, w.name));
 }
 
 // statusMark is the small round symbol that stands for a status.
@@ -362,83 +467,417 @@ function statusMark(status, size) {
   return el("span", { class: "mark " + status }, icon(status, size || 12));
 }
 
-// ---- left: workflows and runs ----
+// ---- the lists: every workflow, and every service ----
+//
+// The page opens on the list of workflows, and a row opens its drawing.
+// Services are the components that workflows use. The search box and the
+// filter are built once, so what is typed stays while the poll redraws the rows.
 
-function renderSide(w) {
-  const row = (x) => {
-    const last = latestRun(x.name);
-    return el("button", {
-        class: "row wf", type: "button", "aria-current": x.name === w.name ? "true" : null,
-        onclick: () => go({ workflow: x.name, run: null, node: null }),
-      },
-      el("span", { class: "dot " + (last ? last.status : ""), title: last ? "Latest run: " + last.status : "No runs yet" }),
-      el("span", { class: "name" }, x.name),
-      flagFor(x),
-      el("span", { class: "sub mono" }, x.trigger || "no trigger"),
-      el("span", { class: "aside" }, x.steps.length + (x.steps.length === 1 ? " step" : " steps")));
-  };
-  const workflows = state.workflows.filter((x) => !x.component).map(row);
-  const components = state.workflows.filter((x) => x.component).map((x) => componentRow(x, w));
-  const comp = isComp(w);
+const homeUi = { kind: null, query: "", filter: "all", root: null, search: null, filters: null, newSlot: null, rows: null };
 
-  const runs = state.runs.filter((r) => r.workflow === w.name);
-  const rows = runs.map((r) => isTestRun(r) ? testRunRow(w, r) : el("button", {
-      class: "row run " + r.status, type: "button", "aria-current": r.run === selected.run ? "true" : null,
-      "aria-label": "Run at " + when(r.started) + ", " + r.status,
-      onclick: () => go({ run: r.run === selected.run ? null : r.run, node: null }),
-    },
-    statusMark(r.status, 11),
-    el("span", { class: "name" }, when(r.started)),
-    el("span", { class: "aside" }, r.status === "running" ? "running" : duration(r.ms)),
-    el("span", { class: "seg", "aria-hidden": "true" }, w.steps.map((s) => el("i", { class: progress(r, s.id) }))),
-    el("span", { class: "sub" }, outcome(r))));
-
-  // A component is never started by a trigger: all it has are test runs.
-  const none = comp
-    ? (state.editable ? "None yet. Run its tests and each one appears here." : "None. Tests of a component run with flowmaker test.")
-    : w.trigger ? "None yet. A run appears here each time the trigger fires." : "The server does not run this workflow: it has no webhook or cron trigger.";
-
-  // The runs and tests are a workflow's: a workflow still being made has none.
-  const own = w.draft ? [] : [
-    ...testsBlock(w),
-    el("h2", {}, comp ? "Test runs" : "Runs", runs.length ? el("span", { class: "count" }, runs.length) : null),
-    runs.length ? el("div", { class: "list runs" }, rows) : el("p", { class: "empty" }, none)];
-
-  $("side").replaceChildren(...[
-    el("h2", {}, "Workflows"),
-    el("div", { class: "list" }, workflows, canMake() ? newButton(!!w.draft) : null),
-    components.length ? el("h2", {}, "Components", el("span", { class: "count" }, components.length)) : null,
-    components.length ? el("div", { class: "list comps" }, components) : null,
-    ...own,
-    el("p", { class: "note" }, state.editable
-      ? "Edits are written to the YAML file. Committing stays in git."
-      : "Read-only. Workflows and components are files in git: edit the YAML, commit it, restart the server.")].filter(Boolean));
+function renderHome(kind) {
+  const form = kind === "new-service";
+  if (homeUi.kind !== kind || !homeUi.root || !$("home").contains(homeUi.root)) (form ? buildServiceForm : buildHome)(kind);
+  if (kind === "market") { loadMarket(); paintMarket(); }
+  else if (!form) paintHome();
 }
 
-// newButton is the control under the workflows that opens the form for a new one.
-function newButton(on) {
-  return el("button", {
-      type: "button", class: "btn small block newwf", "data-focus": "new-workflow", "aria-current": on ? "true" : null,
-      title: making && makeTouched() ? "Go on with the workflow you started" : null,
-      onclick: () => go({ make: true, run: null, node: null }),
-    }, icon("plus", 12), "New workflow");
+function buildHome(kind) {
+  const word = kind === "workflows" ? "workflow" : "service";
+  homeUi.kind = kind;
+  homeUi.query = "";
+  homeUi.filter = "all";
+  homeUi.search = el("input", { type: "search", class: "in", placeholder: "Find a " + word, "aria-label": "Find a " + word });
+  homeUi.search.addEventListener("input", () => { homeUi.query = homeUi.search.value; if (kind === "market") paintMarket(); else paintHome(); });
+  homeUi.filters = el("div", { class: "hfilters", role: "group", "aria-label": "Show" });
+  homeUi.newSlot = el("span", { class: "hnewslot" });
+  homeUi.where = el("span", { class: "hwhere" });
+  homeUi.rows = el("div", { class: "hrows" });
+  homeUi.root = el("div", { class: "hwrap" },
+    el("div", { class: "htools" }, homeUi.where, el("label", { class: "hfind" }, icon("search", 16), homeUi.search), homeUi.filters, el("span", { class: "grow" }), homeUi.newSlot),
+    homeUi.rows);
+  $("home").replaceChildren(homeUi.root);
 }
 
-// componentRow is a component in the list on the left: the silhouette of its
-// kind, its own name, what kind it is and how many steps use it.
-function componentRow(x, w) {
-  const kind = compKind(x), uses = usesOf(x);
+// failingOf: a workflow whose latest run failed, or a service whose latest test
+// did not pass; either of them with a file the server cannot use.
+function failingOf(x) {
+  if (x.problem) return true;
+  if (!isComp(x)) { const last = latestRun(x.name); return !!last && last.status === "failed"; }
   const test = state.runs.find((r) => r.workflow === x.name && isTestRun(r));
-  return el("button", {
-      class: "row comp kind-" + kind, type: "button", "aria-current": x.name === w.name ? "true" : null,
-      title: x.name + (test ? " · latest test: " + VERDICT[verdictOf(test)].word.toLowerCase() : ""),
-      onclick: () => go({ workflow: x.name, run: null, node: null }),
-    },
-    kindTile(kind, 28),
-    el("span", { class: "name" }, compTitle(x)),
-    flagFor(x),
-    el("span", { class: "sub" }, compKindWord(x)),
-    el("span", { class: "aside" }, uses ? "used by " + uses : "unused"));
+  return !!test && (verdictOf(test) === "unmet" || verdictOf(test) === "broke");
+}
+
+function paintHome() {
+  const services = homeUi.kind === "services";
+  const all = state.workflows.filter((x) => isComp(x) === services);
+  const failing = all.filter(failingOf);
+  const q = homeUi.query.trim().toLowerCase();
+  const found = (homeUi.filter === "failing" ? failing : all).filter((x) => !q || [x.name, x.title, x.description, x.trigger].some((t) => (t || "").toLowerCase().includes(q)));
+  const filter = (name, label, n, bad) => el("button", {
+      type: "button", "aria-pressed": homeUi.filter === name ? "true" : "false", "data-focus": "hf:" + name,
+      onclick: () => { homeUi.filter = name; paintHome(); },
+    }, label, el("span", { class: "hn" + (bad && n ? " bad" : "") }, n));
+  homeUi.filters.replaceChildren(filter("all", "All", all.length), filter("failing", "Failing", failing.length, true));
+  paintWhere();
+  const goOn = services ? svcTouched() : !!making && makeTouched();
+  homeUi.newSlot.replaceChildren(...(canMake() ? [el("button", {
+      type: "button", class: "btn primary hnew", "data-focus": services ? "new-service" : "new-workflow",
+      onclick: () => go(services ? { home: "new-service" } : { make: true }),
+    }, icon("plus", 13), (goOn ? "Go on with the new " : "New ") + (services ? "service" : "workflow"))] : []));
+
+  if (!found.length) {
+    const none = all.length ? "Nothing here matches."
+      : services ? "No services yet. A service is a folder with a component.yaml, and a step uses it by its folder's name."
+      : canMake() ? "No workflows yet. Make the first one with New workflow." : "No workflows yet. A workflow is a folder with a workflow.yaml.";
+    homeUi.rows.replaceChildren(el("p", { class: "hempty" }, none));
+    return;
+  }
+  const head = services ? ["Service", "Made of", "Takes", "Gives back", "Used by", "Last test"] : ["Workflow", "Starts on", "Steps", "Last run", "Recent runs", "Tests"];
+  homeUi.rows.replaceChildren(...[
+    el("div", { class: "hbox" }, el("table", { class: "htab" },
+      el("thead", {}, el("tr", {}, head.map((h) => el("th", { scope: "col" }, h)))),
+      el("tbody", {}, found.map(services ? serviceRow : workflowRow)))),
+    services ? el("p", { class: "hfoot" }, "A service is a folder with a ", mono("component.yaml"), ". A step uses one by its folder's name.") : null].filter(Boolean));
+}
+
+// paintWhere offers, on the pages of services, the way between the project's
+// own and those of the market.
+function paintWhere() {
+  const kind = homeUi.kind;
+  if (kind === "workflows" || !state.editable) { homeUi.where.replaceChildren(); return; }
+  const tab = (to, label, n) => el("a", { href: "#/" + to, class: "hwtab", "aria-current": kind === to ? "page" : null, "data-focus": "hw:" + to },
+    label, n == null ? null : el("span", { class: "hn" }, n));
+  homeUi.where.replaceChildren(el("nav", { class: "hfilters", "aria-label": "Services" },
+    tab("services", "Yours", state.workflows.filter(isComp).length),
+    tab("market", "Market", market.state === "ready" ? market.services.length : null)));
+}
+
+// paintMarket draws the market: each service with what it takes and where it
+// is kept, and a way to add it as a step of a workflow.
+function paintMarket() {
+  paintWhere();
+  homeUi.filters.replaceChildren();
+  homeUi.newSlot.replaceChildren(...(state.editable ? [el("button", {
+      type: "button", class: "btn", "data-focus": "market-again", "aria-disabled": market.state === "loading" ? "true" : "false",
+      onclick: () => loadMarket(true),
+    }, "Read it again")] : []));
+  const say = (text, cls) => homeUi.rows.replaceChildren(el("p", { class: cls || "hempty" }, text));
+  if (!state.editable) return say("The market is offered when the server runs with --edit, since adding from it changes the files.");
+  if (market.state === "idle" || (market.state === "loading" && !market.services.length)) return say("Reading the market…");
+  if (market.state === "error") {
+    return homeUi.rows.replaceChildren(el("div", { class: "notice bad", role: "alert" },
+      el("div", { class: "nhead" }, el("strong", {}, "The market could not be read")),
+      el("p", {}, market.error),
+      market.source ? el("p", {}, "It is read from ", mono(market.source), ". flowmaker serve --market sets another.") : null));
+  }
+  const q = homeUi.query.trim().toLowerCase();
+  const found = market.services.filter((e) => !q || [e.name, e.description, e.use, ...(e.tags || [])].some((t) => (t || "").toLowerCase().includes(q)));
+  if (!found.length) return say(market.services.length ? "Nothing here matches." : "The market lists nothing yet.");
+  const used = new Set(state.workflows.filter(isComp).map((x) => x.source).filter(Boolean));
+  const targets = state.workflows.filter(canAdd);
+  homeUi.rows.replaceChildren(
+    el("div", { class: "hbox" }, el("table", { class: "htab" },
+      el("thead", {}, el("tr", {}, ["Service", "Takes", "Kept in", "Use it"].map((h) => el("th", { scope: "col" }, h)))),
+      el("tbody", {}, found.map((e) => marketRow(e, used.has(e.use), targets))))),
+    el("p", { class: "hfoot" }, "Read from ", mono(market.source), ". What a service does is what its repository holds: read it before you use it. ",
+      market.skipped ? plural(market.skipped, "entry") + " of the list could not be read and " + (market.skipped === 1 ? "is" : "are") + " left out." : ""));
+}
+
+function marketRow(e, inUse, targets) {
+  const pick = el("select", { class: "in", "aria-label": "Workflow to add " + e.name + " to" }, targets.map((w) => el("option", { value: w.name }, w.name)));
+  const add = el("button", { type: "button", class: "btn small", "data-focus": "mk:" + e.use, "aria-disabled": targets.length ? "false" : "true" }, icon("plus", 12), "Add a step");
+  add.addEventListener("click", () => { if (pick.value) useFromMarket(e, pick.value); });
+  return el("tr", {},
+    el("td", { class: "hmain" }, el("div", { class: "hsvc" }, kindTile(e.kind, 34),
+      el("div", {}, el("span", { class: "hname" }, e.name), inUse ? el("span", { class: "hgit", title: "A workflow here uses it already" }, "in use") : null,
+        e.description ? el("div", { class: "hdesc" }, e.description) : null,
+        (e.tags || []).length ? el("div", { class: "hchips htags" }, e.tags.map((t) => el("span", { class: "hchip" }, t))) : null))),
+    el("td", {}, chipsOf((e.inputs || []).map((i) => i.name))),
+    el("td", {}, el("span", { class: "hpath mono" }, e.use)),
+    el("td", {}, targets.length ? el("div", { class: "huseit" }, pick, add) : hnone("No workflow can take a step now")));
+}
+
+// useFromMarket opens the form for a new step of the workflow, last, with the
+// market's service chosen in it.
+function useFromMarket(e, name) {
+  const a = addOf(name), w = workflowByName(name);
+  a.component = e.use;
+  a.kind = null;
+  if (w && !a.idTouched) a.id = freeId(w, e.name);
+  go({ workflow: name, add: "-", home: null });
+}
+
+// homeRow is a row of a list: the name is the link, and a click anywhere on the row follows it.
+function homeRow(href, cells) {
+  const tr = el("tr", { class: "hrow" }, cells);
+  tr.addEventListener("click", (event) => { if (!event.target.closest("a, button")) location.hash = href; });
+  return tr;
+}
+
+const hstat = (tone, text) => el("span", { class: "hstat " + tone }, el("span", { class: "dot " + tone }), text);
+const hnone = (text) => el("span", { class: "hnone" }, text);
+const chipsOf = (names) => (names.length ? el("div", { class: "hchips" }, names.map((n) => el("span", { class: "hchip mono" }, n))) : hnone("Nothing"));
+
+// stepTiles are a workflow's steps in a row, each the tile of its kind.
+function stepTiles(steps, count) {
+  return el("div", { class: "htiles" }, steps.map((s) => {
+    const t = kindTile(s.kind, 22);
+    t.title = s.id + " · " + (s.component || KIND_LABEL[s.kind] || s.kind);
+    return t;
+  }), el("span", { class: "hcount" }, count || steps.length));
+}
+
+// testsWord says how a workflow's tests went, each by its latest run.
+function testsWord(x) {
+  const cases = x.cases || [];
+  if (!cases.length) return hnone(x.tests ? plural(x.tests, "test") : "No tests");
+  const got = cases.map((c) => { const r = latestTestRun(x.name, c.name); return r ? verdictOf(r) : null; });
+  const n = (v) => got.filter((g) => g === v).length;
+  const bad = n("unmet") + n("broke");
+  if (bad) return hstat("failed", plural(bad, "test") + " failing");
+  if (n("passed")) return hstat("ok", n("passed") === cases.length ? "All " + cases.length + " passed" : n("passed") + " of " + cases.length + " passed");
+  if (n("unrun")) return hstat("pending", n("unrun") + " could not run");
+  return hnone(plural(cases.length, "test") + ", not run yet");
+}
+
+function workflowRow(x) {
+  const href = "#/w/" + encodeURIComponent(x.name);
+  const last = latestRun(x.name);
+  const recent = state.runs.filter((r) => r.workflow === x.name && !isTestRun(r)).slice(0, 8).reverse();
+  const ok = recent.filter((r) => r.status === "ok").length;
+  return homeRow(href, [
+    el("td", { class: "hmain" }, el("a", { href, class: "hname", "data-focus": "h:" + x.name }, x.name), flagFor(x), el("div", { class: "hpath mono" }, folderOf(x.path))),
+    el("td", {}, x.trigger ? el("span", { class: "hpill mono" }, icon(isWebhook(x) ? "trigger" : "clock", 12), x.trigger) : hnone("No trigger · flowmaker run")),
+    el("td", {}, stepTiles(x.steps)),
+    el("td", {}, last
+      ? [hstat(last.status, last.status === "failed" ? outcome(last) : last.status === "running" ? "Running" : "Succeeded in " + duration(last.ms)), el("div", { class: "hwhen" }, when(last.started))]
+      : hnone(x.trigger ? "No runs yet" : "Not served")),
+    el("td", {}, recent.length
+      ? el("div", { class: "hrecent" }, el("span", { class: "hbars", "aria-hidden": "true" }, recent.map((r) => el("i", { class: r.status }))), el("span", { class: "hcount" }, ok + " of " + recent.length + " ok"))
+      : hnone("·")),
+    el("td", {}, testsWord(x)),
+  ]);
+}
+
+function serviceRow(x) {
+  const href = "#/w/" + encodeURIComponent(x.name);
+  const test = state.runs.find((r) => r.workflow === x.name && isTestRun(r));
+  const v = test ? verdictOf(test) : null;
+  const uses = x.usedBy || [];
+  return homeRow(href, [
+    el("td", { class: "hmain" }, el("div", { class: "hsvc" }, kindTile(compKind(x), 34),
+      el("div", {}, el("a", { href, class: "hname", "data-focus": "h:" + x.name, title: x.name }, compTitle(x)), flagFor(x),
+        x.source ? el("span", { class: "hgit", title: "Taken from git and pinned in flowmaker.lock. It is changed at its source." }, "git") : null,
+        x.description ? el("div", { class: "hdesc" }, x.description) : null,
+        x.source ? el("div", { class: "hpath mono" }, x.source) : null))),
+    el("td", {}, x.gives ? stepTiles(x.steps, plural(x.steps.length, "step")) : hnone(compKindWord(x))),
+    el("td", {}, chipsOf(inputNames(x))),
+    el("td", {}, chipsOf(givenNames(x))),
+    el("td", {}, uses.length ? el("div", { class: "huses" }, uses.map((u) => {
+      const at = entryOf(u.workflow);
+      return el("a", { class: "huse", href: "#/w/" + encodeURIComponent(u.workflow) + "/n/" + encodeURIComponent(u.step), title: "Open step " + u.step },
+        el("span", { class: "hw" }, at ? (at.component ? compTitle(at) : at.name) : u.workflow), el("span", { class: "gt" }, " › "), mono(u.step));
+    })) : hnone("Unused")),
+    el("td", {}, test
+      ? [hstat(v === "passed" ? "ok" : v === "unmet" || v === "broke" ? "failed" : v === "running" ? "running" : "pending", VERDICT[v].word), el("div", { class: "hwhen" }, when(test.started))]
+      : hnone((x.cases || []).length ? "Not run yet" : "No tests")),
+  ]);
+}
+
+// ---- making a service ----
+//
+// The form for a new service is a page of its own, under the list of
+// services. The work is set in the fields of a new step that does its own
+// work, and what it reads is its own input. What has been typed lives in
+// `svc` until the service is made or the form is cancelled, so a trip to a
+// workflow and back loses none of it.
+
+let svc = null;
+const componentsDir = "components"; // the folder, in a root, that a service made here goes in
+const PARAM_TYPES = ["string", "number", "boolean", "object", "list", "any"];
+const SVC_KINDS = [["http", "HTTP request", "Send to any API"], ["ai", "AI", "Write or extract, in fields you define"], ["decide", "Decide", "Yes or no, one of a list, or a score"]];
+const svcOf = () => svc || (svc = {
+  root: (state.roots || [])[0] || "", name: "", description: "", kind: "http", inputs: [{ name: "", type: "string" }],
+  method: "POST", url: "", input: "${input}", prompt: "", edited: false, saving: false, failure: null,
+  models: { decide: "openrouter/cloudflare/clef", ai: "openrouter/deepseek/deepseek-v4.1-flash" },
+  questions: [blankQuestion()], fields: [blankField()],
+});
+const svcTouched = () => !!svc && (svc.edited || svc.name.trim() !== "" || svc.description.trim() !== "" || svc.inputs.some((i) => i.name.trim() !== ""));
+
+function buildServiceForm(kind) {
+  const m = svcOf();
+  const A = {
+    uid: "svc", targets: [], target: null, submit: () => makeService(),
+    readHint: "A key, such as ${input.ticket}. Click one above to put it here.",
+    promptHint: "Written to prompts/<name>.md and sent as it is: the model gets what it reads apart from it, so no ${...} goes here.",
+  };
+  homeUi.kind = kind;
+  homeUi.svc = A;
+  const textBox = (id, props) => formBox(A, id, props);
+  const remember = (box) => box.addEventListener("focus", () => { A.target = box; });
+  const field = (label, id, box, hint) => el("div", { class: "field" }, el("div", { class: "lab" }, el("label", { for: id }, label)), box, hint || null);
+
+  A.nameBox = textBox("svc-name", { mono: true, set: (v) => { m.name = v; paintServiceForm(); } });
+  A.fileNote = el("p", { class: "hint-text" });
+  A.descBox = textBox("svc-desc", { set: (v) => { m.description = v; } });
+  const roots = state.roots || [];
+  A.rootBox = roots.length > 1 ? el("select", { id: "svc-root", class: "in" }, roots.map((r) => el("option", { value: r }, r))) : null;
+  if (A.rootBox) A.rootBox.addEventListener("change", () => { m.root = A.rootBox.value; paintServiceForm(); });
+
+  A.kinds = el("div", { class: "svckinds", role: "group", "aria-label": "What it does" }, SVC_KINDS.map(([k, label, text]) => {
+    const b = el("button", { type: "button", class: "svckind", "data-kind": k, "data-focus": "svc-kind:" + k }, kindTile(k, 34), el("span", { class: "ctext" }, el("span", { class: "cname" }, label), el("span", { class: "cdesc" }, text)));
+    b.addEventListener("click", () => { if (m.kind !== k) { m.kind = k; buildWork(); paintServiceForm(); } });
+    return b;
+  }));
+  A.inputsBox = el("div", { class: "svcinputs" });
+  A.addInput = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add an input");
+  A.addInput.addEventListener("click", () => { m.inputs.push({ name: "", type: "string" }); paintInputs(true); });
+  A.refs = el("div", { class: "refs" });
+  A.work = el("div", { class: "svcwork" });
+  A.problems = el("div", { class: "conflict", hidden: true, role: "alert" });
+  A.notice = el("div", { class: "noticeslot" });
+  A.cancel = el("button", { type: "button", class: "btn" }, "Cancel");
+  A.cancel.addEventListener("click", cancelService);
+  A.make = el("button", { type: "button", class: "btn primary", "data-focus": "svc-make" }, "Make service");
+  A.make.addEventListener("click", makeService);
+  const buildWork = () => {
+    A.targets = [];
+    A.work.replaceChildren(buildKindFields(A, null, m, m.kind, textBox, remember));
+    if (A.kindSync) A.kindSync();
+  };
+
+  homeUi.root = el("div", { class: "hwrap svcwrap" },
+    el("section", { class: "svcform", "aria-label": "New service" },
+      el("div", { class: "svcgrid" },
+        field("Name", "svc-name", A.nameBox, A.fileNote),
+        field("Description", "svc-desc", A.descBox, el("p", { class: "hint-text" }, "A line on what it is for, shown where a service is picked.")),
+        A.rootBox ? field("Folder", "svc-root", A.rootBox) : null),
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it does")), A.kinds,
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it takes"), el("span", { class: "muted small" }, "Each step that uses it fills these in.")),
+      A.inputsBox, A.addInput,
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "How it does it")), A.refs, A.work, A.problems),
+    el("div", { class: "svcbar" }, A.notice, el("div", { class: "barrow" }, el("span", { class: "grow" }), A.cancel, A.make)));
+  $("home").replaceChildren(homeUi.root);
+
+  setValue(A.nameBox, m.name);
+  setValue(A.descBox, m.description);
+  if (A.rootBox) A.rootBox.value = m.root;
+  buildWork();
+  paintInputs(false);
+  paintRefs();
+  paintServiceForm();
+  if (!m.name) A.nameBox.focus({ preventScroll: true });
+}
+
+// paintInputs draws a row for each input: its name, its type, and a way to take it out.
+function paintInputs(focusLast) {
+  const A = homeUi.svc, m = svcOf();
+  A.inputsBox.replaceChildren(...m.inputs.map((inp, i) => {
+    const name = el("input", { type: "text", class: "in mono", placeholder: "name", "aria-label": "Name of input " + (i + 1), spellcheck: "false", autocomplete: "off" });
+    name.value = inp.name;
+    name.addEventListener("input", () => { inp.name = name.value; paintRefs(); });
+    const type = el("select", { class: "in", "aria-label": "Type of input " + (i + 1) }, PARAM_TYPES.map((t) => el("option", { value: t }, t)));
+    type.value = inp.type;
+    type.addEventListener("change", () => { inp.type = type.value; });
+    const x = el("button", { type: "button", class: "x small", "aria-label": "Take out input " + (inp.name || i + 1), title: "Take it out" }, icon("close", 13));
+    x.addEventListener("click", () => { m.inputs.splice(i, 1); paintInputs(false); paintRefs(); });
+    return el("div", { class: "svcin" }, name, type, x);
+  }));
+  if (!m.inputs.length) A.inputsBox.append(el("p", { class: "muted small" }, "It takes no input."));
+  if (focusLast) {
+    const boxes = A.inputsBox.querySelectorAll("input");
+    if (boxes.length) boxes[boxes.length - 1].focus();
+  }
+}
+
+// paintRefs offers the input, whole or by name, to put in the field being edited.
+function paintRefs() {
+  const A = homeUi.svc, m = svcOf();
+  const names = m.inputs.map((i) => i.name.trim()).filter((n) => NAME_RE.test(n));
+  const chip = (text) => {
+    const b = el("button", { type: "button", class: "pill link mono", title: "Put " + text + " there" }, text);
+    b.addEventListener("mousedown", (e) => e.preventDefault());
+    b.addEventListener("click", () => insertRef(A, { text }));
+    return b;
+  };
+  A.refs.replaceChildren(
+    el("div", { class: "rhead" }, el("strong", {}, "Refer to"), el("span", { class: "muted" }, "Click to put it in the field you are editing")),
+    el("div", { class: "rrow" }, el("span", { class: "rid mono" }, "input"), el("span", { class: "rchips" }, chip("input"), names.map((n) => chip("input." + n)))));
+}
+
+function paintServiceForm() {
+  const A = homeUi.svc, m = svcOf();
+  if (!A) return;
+  const name = m.name.trim();
+  A.fileNote.textContent = "Its folder: " + (m.root ? m.root + "/" : "") + componentsDir + "/" + (name || "<name>") + ". Letters, digits, - and _.";
+  for (const b of A.kinds.children) b.setAttribute("aria-pressed", b.dataset.kind === m.kind ? "true" : "false");
+  A.make.setAttribute("aria-disabled", m.saving ? "true" : "false");
+  A.make.textContent = m.saving ? "Making…" : "Make service";
+  A.notice.replaceChildren(...(m.failure ? [el("div", { class: "notice bad", role: "alert" },
+    el("div", { class: "nhead" }, el("strong", {}, "Nothing was made")),
+    el("p", {}, m.failure.error || "The server refused it."),
+    m.failure.problems && m.failure.problems.length ? el("ul", { class: "problems" }, m.failure.problems.map((p) => el("li", {}, el("span", { class: "msg" }, p.message)))) : null)] : []));
+}
+
+// serviceProblems are what keeps the form from being sent, said before it is.
+function serviceProblems(m) {
+  const out = [], name = m.name.trim(), seen = new Set();
+  if (!name) out.push("The service needs a name.");
+  else if (!NAME_OK.test(name)) out.push("The name is also its folder's: letters, digits, - and _, starting with a letter or a digit.");
+  for (const inp of m.inputs) {
+    const n = inp.name.trim();
+    if (!n) continue;
+    if (!NAME_RE.test(n)) out.push("“" + n + "” cannot name an input: use letters, digits and _, and do not start with a digit.");
+    else if (seen.has(n)) out.push("There are two inputs called " + n + ".");
+    seen.add(n);
+  }
+  if (m.kind === "http" && !m.url.trim()) out.push("The request needs a URL.");
+  if (m.kind === "ai") {
+    if (!m.prompt.trim()) out.push("The model needs instructions.");
+    out.push(...fieldProblems(m.fields));
+  }
+  if (m.kind === "decide") out.push(...questionProblems(m.questions));
+  return out;
+}
+
+async function makeService() {
+  const A = homeUi.svc, m = svcOf();
+  if (!A || m.saving) return;
+  const problems = serviceProblems(m);
+  problemList(A.problems, problems);
+  if (problems.length) return;
+  const work = m.kind === "http" ? { kind: "http", method: m.method, url: m.url.trim() }
+    : m.kind === "decide" ? { kind: "decide", model: m.models.decide.trim(), input: m.input.trim(), questions: questionsOut(m.questions) }
+    : { kind: "ai", model: m.models.ai.trim(), input: m.input.trim(), prompt: m.prompt, fields: fieldsOut(m.fields) };
+  m.saving = true;
+  m.failure = null;
+  paintServiceForm();
+  let r = null;
+  try {
+    r = await request("POST", "/api/components", {
+      root: m.root, name: m.name.trim(), description: m.description.trim(), work,
+      inputs: m.inputs.filter((i) => i.name.trim()).map((i) => ({ name: i.name.trim(), type: i.type })),
+    });
+  } catch (err) {
+    r = null;
+  }
+  m.saving = false;
+  if (r && r.ok && r.body.component) {
+    svc = null;
+    homeUi.kind = null;
+    go({ workflow: r.body.component.name, home: null });
+    return;
+  }
+  m.failure = r ? r.body : { error: "Could not reach the server. Nothing was made." };
+  paintServiceForm();
+}
+
+function cancelService() {
+  if (svc && svc.saving) return;
+  svc = null;
+  homeUi.kind = null;
+  go({ home: "services" });
 }
 
 // outcome says in a few words what a run did.
@@ -455,270 +894,239 @@ function outcome(r) {
 
 // ---- centre: the drawing ----
 
-// Each kind of node has its own silhouette, drawn from the same rounded
-// corners and the same stroke so they read as one family: a trigger is a pill,
-// a decision a hexagon with pointed ends, an AI step a card with a cut corner,
-// an HTTP step a box leaning in the direction of the flow, like the
-// input/output box of a flowchart.
-function roundedPath(points, radii) {
-  const n = points.length;
-  let d = "";
-  points.forEach((p, i) => {
-    const a = points[(i + n - 1) % n], b = points[(i + 1) % n];
-    const toward = (q) => {
-      const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
-      const t = Math.min(radii[i], len / 2) / len;
-      return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
-    };
-    const from = toward(a), to = toward(b);
-    d += (i ? "L" : "M") + from[0].toFixed(2) + " " + from[1].toFixed(2) + "Q" + p[0] + " " + p[1] + " " + to[0].toFixed(2) + " " + to[1].toFixed(2);
-  });
-  return d + "Z";
-}
-
-// silhouette gives the outline path of a box w by h, and the two ends of the
-// line that cuts the footer strip off, which follows the outline.
-function silhouette(kind, w, h) {
-  const m = 1, cut = h - FOOT;
-  if (kind === "trigger") {
-    const r = h / 2 - m, dy = cut - h / 2;
-    const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
-    return { d: `M${h / 2} ${m}H${w - h / 2}A${r} ${r} 0 0 1 ${w - h / 2} ${h - m}H${h / 2}A${r} ${r} 0 0 1 ${h / 2} ${m}Z`, sep: [inset + 2, w - inset - 2] };
-  }
-  if (kind === "response") {
-    // The way out: the trigger's rounded end on the left, a point on the right.
-    const p = h * 0.3, r = h / 2 - m, dy = cut - h / 2;
-    const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
-    const tipAt = (p - m) * ((h - m - cut) / (h / 2 - m));
-    return { d: roundedPath([[m, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [m, h - m]], [r, 9, 12, 9, r]), sep: [inset + 2, w - p + tipAt - 3] };
-  }
-  if (kind === "input") {
-    // The way into a component: a notch on the left where a value arrives, the
-    // trigger's rounded end on the right.
-    const p = h * 0.2, r = h / 2 - m, dy = cut - h / 2;
-    const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
-    const left = m + (p - m) * ((h - m - cut) / (h / 2 - m));
-    return { d: roundedPath([[m, m], [w - m, m], [w - m, h - m], [m, h - m], [p, h / 2]], [9, r, r, 9, 6]), sep: [left + 3, w - inset - 2] };
-  }
-  if (kind === "output") {
-    // The way out of a component: the response's point on the right, square
-    // corners on the left, so that the two are never mistaken for each other.
-    const p = h * 0.3;
-    const tipAt = (p - m) * ((h - m - cut) / (h / 2 - m));
-    return { d: roundedPath([[m, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [m, h - m]], [9, 9, 12, 9, 9]), sep: [1, w - p + tipAt - 3] };
-  }
-  if (kind === "decide") {
-    const p = h / 4;
-    return { d: roundedPath([[m, h / 2], [p, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [p, h - m]], [9, 10, 10, 9, 10, 10]),
-      sep: [(p * (cut - h / 2)) / (h / 2) + 1, w - (p * (cut - h / 2)) / (h / 2) - 1] };
-  }
-  if (kind === "ai") {
-    const c = h * 0.3;
-    return { d: roundedPath([[m, m], [w - c, m], [w - m, c], [w - m, h - m], [m, h - m]], [12, 5, 5, 12, 12]), sep: [1, w - 1] };
-  }
-  if (kind === "http") {
-    return { d: roundedPath([[LEAN, m], [w - m, m], [w - LEAN, h - m], [m, h - m]], [11, 11, 11, 11]),
-      sep: [(LEAN * (h - cut)) / h + 1, w - (LEAN * cut) / h - 1] };
-  }
-  if (kind === "flow") {
-    // A box with a bar down each side, the flowchart sign for "a process
-    // with steps of its own". The bars are part of the outline's family:
-    // same stroke, and they stop where the rounded corner begins.
-    const r = 12, b = Math.min(11, w * 0.19);
-    const dy = b < r ? r - Math.sqrt(r * r - (r - b) * (r - b)) : 0;
-    const y1 = m + dy + 0.5, y2 = h - m - dy - 0.5;
-    return { d: roundedPath([[m, m], [w - m, m], [w - m, h - m], [m, h - m]], [r, r, r, r]), sep: [b, w - b],
-      bars: `M${b} ${y1}V${y2}M${w - b} ${y1}V${y2}` };
-  }
-  return { d: roundedPath([[m, m], [w - m, m], [w - m, h - m], [m, h - m]], [12, 12, 12, 12]), sep: [1, w - 1] };
-}
-
-// portShift is how far the middle of a box's top or bottom edge is from the
-// middle of its bounding box, so edges and ports meet the edge, not the box.
-function portShift(kind, side) {
-  return kind === "http" ? (side === "in" ? LEAN / 2 : -LEAN / 2) : 0;
-}
-
-// shapeSVG draws a node's body: a halo for selection and failure, a ring for
-// keyboard focus, the filled outline, and the line above the footer.
-function shapeSVG(kind, w, h) {
-  const s = silhouette(kind, w, h);
-  return svg("svg", { class: "shape", width: w, height: h, viewBox: "0 0 " + w + " " + h, "aria-hidden": "true" },
-    svg("path", { class: "halo", d: s.d }),
-    svg("path", { class: "ring", d: s.d }),
-    svg("path", { class: "bg", d: s.d }),
-    s.bars ? svg("path", { class: "bars", d: s.bars }) : null,
-    svg("path", { class: "sep", d: "M" + s.sep[0] + " " + (h - FOOT) + "H" + s.sep[1] }));
-}
-
-// kindTile is a small icon tile in the silhouette of its kind.
+// kindTile is a small solid icon tile in the colour of its kind.
 function kindTile(kind, size) {
-  const s = silhouette(kind, size, size);
-  return el("span", { class: "tile kt" },
-    svg("svg", { class: "kshape", width: size, height: size, viewBox: "0 0 " + size + " " + size, "aria-hidden": "true" }, svg("path", { d: s.d }), s.bars ? svg("path", { class: "bars", d: s.bars }) : null),
-    icon(kind, Math.round(size * 0.52)));
+  return el("span", { class: "tile kt kind-" + kind, css: { width: size + "px", height: size + "px" } }, icon(kind, Math.round(size * 0.56)));
 }
 
-// layout places the trigger and the steps in rows. A step goes one row below
-// the latest thing it reads from, so steps that depend on the same earlier
-// step sit next to each other as branches.
-function layout(w, width) {
+// stepSubtitle says what a step is in a few words: its kind and the model or
+// target, or, for a step that uses a component, which one.
+function stepSubtitle(step) {
+  const word = KIND_LABEL[step.kind] || step.kind;
+  if (step.component) {
+    return step.component + " · " + (step.kind === "flow" ? plural((step.inner || []).length, "step") : word + " component");
+  }
+  return word + (step.subtitle ? " · " + step.subtitle : "");
+}
+
+// readable turns a step's condition into words, by a few plain rewrites:
+// classify.priority.value == "high" becomes priority is high. The full
+// expression stays in the label's title.
+function readable(expr) {
+  let t = String(expr).trim();
+  t = t.replace(/\b[A-Za-z_]\w*\.([A-Za-z_]\w*)\.value\b/g, "$1");
+  t = t.replace(/\s*==\s*"([^"]*)"/g, " is $1").replace(/\s*!=\s*"([^"]*)"/g, " is not $1");
+  t = t.replace(/\s+in\s+\[([^\]]*)\]/g, (all, list) => " in " + list.split(",").map((s) => s.trim().replace(/^"(.*)"$/, "$1")).join(", "));
+  t = t.replace(/&&/g, " and ").replace(/\|\|/g, " or ").replace(/!\(/g, "not (");
+  return t.replace(/\s+/g, " ").trim();
+}
+
+// layout draws the steps as a tree, left to right. A step hangs from the
+// latest earlier step it reads, or from the start if it reads none; the way
+// out hangs from the latest step it reads, or the last step. A column is one
+// depth; rows are shared out by how many ends a branch has, and a parent
+// stands in the middle of its children.
+function layout(w) {
   const comp = isComp(w);
-  const nodes = [comp
-    ? { id: IN, kind: "input", depth: 0, eyebrow: "Component input", title: "Input", subtitle: inputNames(w).join(", ") || "takes no input" }
-    : {
-      id: "trigger", kind: "trigger", depth: 0,
-      title: isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Manual",
-      subtitle: w.trigger || "started by hand",
-    }];
-  const byId = { [nodes[0].id]: nodes[0] };
+  const root = comp
+    ? { id: IN, kind: "input", title: "Input", subtitle: inputNames(w).join(", ") || "takes no input" }
+    : { id: "trigger", kind: "trigger", title: isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Manual", subtitle: w.trigger || "started by hand" };
+  Object.assign(root, { depth: 0, children: [], parent: null, w: CARD_W, h: CARD_H });
+  const nodes = [root], byId = { [root.id]: root };
   w.steps.forEach((step, i) => {
-    let parent = i === 0 ? nodes[0].id : w.steps[i - 1].id;
-    const reads = step.reads.map((name) => readNode(w, name)).filter((name) => byId[name]);
-    if (reads.length) {
-      parent = reads[0];
-      for (const name of reads) if (byId[name].depth >= byId[parent].depth) parent = name;
+    let parent = root, best = 0;
+    for (const name of step.reads || []) {
+      const from = byId[readNode(w, name)];
+      const at = from ? nodes.indexOf(from) : -1;
+      if (at >= best) { best = at; parent = from; }
     }
-    const node = { id: step.id, kind: step.kind, title: step.id, subtitle: step.subtitle, order: i + 1, parent, sources: [parent], depth: byId[parent].depth + 1, step };
+    const node = { id: step.id, kind: step.kind, title: step.id, mono: true, subtitle: stepSubtitle(step), order: i + 1, step, parent, depth: parent.depth + 1, children: [], w: CARD_W, h: CARD_H };
     nodes.push(node);
     byId[step.id] = node;
+    parent.children.push(node);
   });
-
-  nodes[0].sources = [];
-  // The way out comes after every step, in a row of its own. Its lines come
-  // from the latest steps it reads, or from the last row if it reads none. A
-  // component of one kind of work gives back what that one step puts out.
-  const out = comp ? { id: OUT, kind: "output", eyebrow: "Component output", title: "Output", subtitle: givenNames(w).join(", ") || "gives back nothing", reads: w.gives ? w.gives.reads || [] : w.steps.map((s) => s.id) }
-    : w.respond ? { id: "response", kind: "response", title: "Response", subtitle: isWebhook(w) ? "Answers " + w.trigger.slice(5) : "Answers the caller", reads: w.respond.reads || [] } : null;
-  if (out) {
-    const last = Math.max(...nodes.map((n) => n.depth));
-    const reads = out.reads.map((name) => readNode(w, name)).filter((name) => byId[name]);
-    const deepest = Math.max(...reads.map((name) => byId[name].depth));
-    const sources = reads.length ? reads.filter((name) => byId[name].depth === deepest) : nodes.filter((n) => n.depth === last).map((n) => n.id);
-    const node = { id: out.id, kind: out.kind, eyebrow: out.eyebrow, title: out.title, subtitle: out.subtitle, sources, depth: last + 1 };
+  const end = comp
+    ? { id: OUT, kind: "output", title: "Output", subtitle: givenNames(w).join(", ") || "gives back nothing", reads: w.gives ? w.gives.reads || [] : w.steps.map((s) => s.id) }
+    : w.respond ? { id: "response", kind: "response", title: "Response", subtitle: "answers " + w.respond.status, reads: w.respond.reads || [] } : null;
+  if (end) {
+    let parent = null, best = 0;
+    for (const name of end.reads) {
+      const from = byId[readNode(w, name)];
+      const at = from ? nodes.indexOf(from) : -1;
+      if (at > best) { best = at; parent = from; }
+    }
+    if (!parent) parent = nodes[nodes.length - 1];
+    const node = { id: end.id, kind: end.kind, title: end.title, subtitle: end.subtitle, parent, depth: parent.depth + 1, children: [], w: END_W, h: END_H };
     nodes.push(node);
-    byId[out.id] = node;
+    byId[end.id] = node;
+    parent.children.push(node);
   }
+  let rows = 0;
+  const place = (n) => {
+    if (!n.children.length) n.row = rows++;
+    else {
+      n.children.forEach(place);
+      n.row = (n.children[0].row + n.children[n.children.length - 1].row) / 2;
+    }
+  };
+  place(root);
+  let deepest = 0;
+  for (const n of nodes) {
+    deepest = Math.max(deepest, n.depth);
+    n.x = PAD + n.depth * COL;
+    n.cy = PAD + CARD_H / 2 + n.row * ROW;
+    n.y = n.cy - n.h / 2;
+  }
+  return {
+    nodes, byId,
+    width: PAD * 2 + deepest * COL + CARD_W + HANDLE,
+    height: PAD * 2 + (rows - 1) * ROW + CARD_H + 24,
+  };
+}
 
-  const rows = [];
-  for (const node of nodes) (rows[node.depth] = rows[node.depth] || []).push(node);
-  const widest = Math.max(...rows.map((r) => r.length));
-  const nodeW = Math.max(W_MIN, Math.min(W_MAX, Math.floor((width - PAD * 2 - (widest - 1) * GAP_X) / widest)));
-  const total = widest * nodeW + (widest - 1) * GAP_X;
-  rows.forEach((row, depth) => {
-    const rowW = row.length * nodeW + (row.length - 1) * GAP_X;
-    row.forEach((node, i) => {
-      node.x = PAD + (total - rowW) / 2 + i * (nodeW + GAP_X);
-      node.y = PAD + depth * (CARD_H + GAP_Y);
-      node.hasOut = false;
-    });
-  });
-  for (const node of nodes) for (const name of node.sources) byId[name].hasOut = true;
-  return { nodes, byId, nodeW, width: PAD * 2 + total, height: PAD * 2 + rows.length * CARD_H + (rows.length - 1) * GAP_Y };
+// resultOf is the one line under a node about the run on show: for a decision
+// the answers it picked and how sure it was, for a request what came back, for
+// the rest how long it took. It gives the pieces to draw and the plain text.
+function resultOf(node, ran, status, done) {
+  if (!ran) return null;
+  const plain = (text, tone) => ({ parts: [text], text, tone });
+  if (node.id === "trigger") return plain("started " + when(ran.started));
+  if (node.id === IN) return null;
+  if (node.id === OUT) return plain(ran.gave !== undefined ? "gave back" : ran.status === "running" ? "waiting" : "not reached");
+  if (node.id === "response") return plain(ran.response ? "answered " + ran.response.status : answerWait(ran));
+  if (status === "skipped") return plain("skipped in this run");
+  if (!done) return status === "pending" ? plain(couldNotRun(ran) ? "could not run" : ran.status === "running" ? "waiting" : "not reached") : null;
+  if (status === "failed") {
+    const brokeAt = node.step && node.kind === "flow" ? failedInside(innerRun(node.step, done, status)) : null;
+    return plain("failed" + (brokeAt ? " at " + brokeAt.s.id : done.error ? " · " + done.error : ""), "failed");
+  }
+  if (status === "running") return plain("running");
+  const took = duration(done.ms);
+  const out = done.output && typeof done.output === "object" ? done.output : null;
+  if (node.kind === "decide" && out) {
+    const parts = [], words = [];
+    for (const name of Object.keys(out)) {
+      const q = out[name];
+      if (!q || typeof q !== "object" || q.value === undefined) continue;
+      // A yes-or-no answer carries the chance of yes; the others the chance of each option.
+      const p = q.probabilities && q.probabilities[q.value] !== undefined ? q.probabilities[q.value]
+        : typeof q.probability === "number" && typeof q.value === "boolean" ? (q.value ? q.probability : 1 - q.probability) : q.confidence;
+      if (parts.length) parts.push(" · ");
+      parts.push(el("span", { class: "pick" }, String(q.value)), typeof p === "number" ? " " + Math.round(p * 100) + "%" : "");
+      words.push(q.value + (typeof p === "number" ? " " + Math.round(p * 100) + "%" : ""));
+    }
+    if (words.length) return { parts, text: words.join(" · ") };
+  }
+  if (node.kind === "http") {
+    const bits = [];
+    if (out && out.status !== undefined) bits.push(String(out.status));
+    if (done.detail) bits.push(done.detail);
+    bits.push(took);
+    return plain(bits.join(" · "));
+  }
+  return plain(took);
 }
 
 function renderCanvas(moved) {
   const canvas = $("canvas");
-  const { w, run } = view;
+  const { w, run, auto } = view;
   if (selected.changes && state.editable && !isComp(w)) return renderChanges(w);
   const edited = editedNodes(w);
   const old = canvas.querySelector(".scroller");
   const keep = old && !moved ? [old.scrollLeft, old.scrollTop] : null;
 
-  const plan = layout(w, canvas.clientWidth || 800);
-  const mid = plan.nodeW / 2;
+  // What the drawing tells about a run: the one picked, or else the latest.
+  const ran = run || auto;
+  const stat = (id) => {
+    if (!ran) return "";
+    const s = progress(ran, id) || "";
+    // The latest run may be older than the file: a step it never heard of is not said to be missed.
+    return auto && s === "pending" && ran.status === "ok" ? "" : s;
+  };
+  const plan = layout(w);
   const animate = enteredFor !== w.name;
   enteredFor = w.name;
 
-  const lines = [];
+  const lines = [], labels = [];
   for (const node of plan.nodes) {
-    const status = progress(run, node.id) || "";
-    for (const name of node.sources) {
-      const from = plan.byId[name];
-      const x1 = from.x + mid + portShift(from.kind, "out"), y1 = from.y + CARD_H, x2 = node.x + mid + portShift(node.kind, "in"), y2 = node.y;
-      const k = (y2 - y1) * 0.55;
-      lines.push(
-        svg("path", { class: "edge " + status, d: `M${x1} ${y1} C${x1} ${y1 + k}, ${x2} ${y2 - k}, ${x2} ${y2 - 8}` }),
-        svg("path", { class: "head " + status, d: `M${x2} ${y2 - 0.5} l-4.5 -8 h9 z` }));
-    }
+    if (!node.parent) continue;
+    const from = node.parent, status = stat(node.id);
+    const x1 = from.x + from.w, y1 = from.cy, x2 = node.x, y2 = node.cy;
+    const dx = Math.max(40, (x2 - x1) / 2);
+    lines.push(svg("path", { class: "edge " + status, d: `M${x1} ${y1} C${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}` }));
+    const cond = node.step && node.step.when;
+    // The condition sits where its line has levelled out before the step, so
+    // the conditions of steps that branch from one parent do not meet.
+    if (cond) labels.push(el("span", { class: "elabel " + status, title: cond, css: { left: x2 - 74 + "px", top: y2 + "px" } }, readable(cond)));
   }
 
   const adding = canAdd(w) && !run;
   const cards = plan.nodes.map((node, i) => {
-    const status = progress(run, node.id);
-    const done = run ? run.steps.find((s) => s.id === node.id) : null;
+    const status = stat(node.id);
+    const done = ran ? ran.steps.find((s) => s.id === node.id) : null;
     const cond = node.step && node.step.when;
-    let took = "";
-    if (node.id === "trigger") took = run ? when(run.started) : "";
-    else if (node.id === IN) took = "";
-    else if (node.id === OUT) took = run ? (run.gave !== undefined ? "gave back" : run.status === "running" ? "waiting" : "not reached") : "";
-    else if (node.id === "response") took = run ? (run.response ? String(run.response.status) : answerWait(run)) : String(w.respond.status);
-    else if (done && done.status === "ok") took = duration(done.ms);
-    else if (done && couldNotRun(run)) took = "could not run";
-    else if (done) took = done.status === "failed" ? "failed" : done.status;
-    else if (run) took = run.status === "running" ? "waiting" : run.status === "ok" ? "no record" : "not reached";
-    // A flow step holds steps of its own: how many, what they are, and in a run how each went.
+    const result = resultOf(node, ran, status, done);
+    // A flow step holds steps of its own: how many, and in a run where it broke.
     const inside = node.kind === "flow" && node.step ? innerRun(node.step, done, status) : null;
     const brokeAt = inside && status === "failed" ? failedInside(inside) : null;
-    const label = (node.eyebrow ? node.eyebrow + ", " : "") + node.title + ", " + KIND_LABEL[node.kind] + (inside ? ", " + plural(inside.length, "step") + " inside" : "") + (node.order ? ", step " + node.order : "") + (status ? ", " + (node.id === "response" && run.response ? "answered " + run.response.status : node.id === OUT && run.gave !== undefined ? "gave back" : (STATUS_TEXT[status] || status).toLowerCase()) : "") + (brokeAt ? ", failed at " + brokeAt.s.id : "");
+    const said = node.id === "response" && ran && ran.response ? "answered " + ran.response.status : node.id === OUT && ran && ran.gave !== undefined ? "gave back" : (STATUS_TEXT[status] || status).toLowerCase();
+    const label = node.title + ", " + KIND_LABEL[node.kind] + (node.step && node.step.component ? ", uses " + node.step.component : "") + (inside ? ", " + plural(inside.length, "step") + " inside" : "")
+      + (node.order ? ", step " + node.order : "") + (canOpen(w, node.id) ? ", Enter opens the editor" : "") + (cond ? ", runs only when " + readable(cond) : "") + (status ? ", " + said : "") + (brokeAt ? ", failed at " + brokeAt.s.id : "");
     const isEdited = edited.has(node.id);
+    const chosen = selected.node === node.id;
+    const leaf = !node.children.length;
     return el("div", {
-        class: "slot" + (animate ? " enter" : ""),
-        css: { left: node.x + "px", top: node.y + "px", width: plan.nodeW + "px", height: CARD_H + "px", animationDelay: (animate ? i * 70 : 0) + "ms" },
+        class: "slot" + (animate ? " enter" : "") + (chosen || selected.add === node.id ? " on" : ""),
+        css: { left: node.x + "px", top: node.y + "px", width: node.w + "px", height: node.h + "px", animationDelay: (animate ? i * 70 : 0) + "ms" },
       },
       el("button", {
-          class: "card shape-" + node.kind + " kind-" + node.kind + (status ? " " + status : "") + (node.sources.length ? " has-in" : "") + (node.hasOut ? " has-out" : "") + (isEdited ? " edited" : ""),
+          class: "card shape-" + node.kind + " kind-" + node.kind + (node.step && node.step.component ? " stacked" : "") + (status ? " " + status : "") + (isEdited ? " edited" : ""),
           type: "button", "data-node": node.id, "data-focus": "n:" + node.id, "data-label": label,
-          "aria-pressed": w.draft ? null : selected.node === node.id ? "true" : "false", "aria-label": label + (isEdited ? ", unsaved changes" : ""),
+          "aria-pressed": w.draft ? null : chosen ? "true" : "false", "aria-label": label + (isEdited ? ", unsaved changes" : ""),
+          title: cond ? "Runs only when " + cond : null,
           // A workflow still being made is only drawn: there is nothing to select yet.
           "aria-disabled": w.draft ? "true" : null,
-          onclick: w.draft ? null : () => go({ node: selected.node === node.id ? null : node.id }),
+          onclick: w.draft ? null : () => (canOpen(w, node.id) ? openEditor(node.id) : go({ node: chosen ? null : node.id })),
         },
-        shapeSVG(node.kind, plan.nodeW, CARD_H),
-        el("span", { class: "head" },
-          el("span", { class: "tile" }, icon(node.kind, 20), node.order ? el("i", { class: "num", title: "Runs " + ordinal(node.order) }, node.order) : null),
-          el("span", { class: "text" },
-            el("span", { class: "eyebrow" }, (node.eyebrow || KIND_LABEL[node.kind]) + (inside ? " · " + plural(inside.length, "step") : "")),
-            el("span", { class: "title" }, node.title),
-            el("span", { class: "sub mono" }, brokeAt ? "failed at " + brokeAt.s.id : node.subtitle)),
-          status && node.id !== "trigger" && node.id !== IN ? statusMark(status, 12) : null),
-        el("span", { class: "foot", title: cond || (inside ? "Steps inside: " + inside.map((r) => r.s.id).join(", ") : null) || (node.id === "trigger" && w.input ? "The body must match " + w.input : null) },
-          cond ? [el("b", {}, "IF"), el("span", { class: "cond mono" }, cond)] : inside ? pips(inside, !!run) : el("span", { class: "always" },
-            node.id === "trigger" ? (w.input ? "Body: " + w.input.split("/").pop() : "Entry point")
-              : node.id === IN ? (inputNames(w).length ? "Takes " + plural(inputNames(w).length, "value") : "Takes nothing")
-              : node.id === OUT ? "Gives back " + plural(givenNames(w).length, "field")
-              : node.id === "response" ? "Exit point" : isComp(w) && w.steps.length === 1 ? "The component's work" : "Always runs"),
-          took ? el("span", { class: "took" }, took) : null)),
+        node.parent ? el("span", { class: "port pin", "aria-hidden": "true" }) : null,
+        el("span", { class: "tile" }, icon(node.kind, node.h < CARD_H ? 18 : 24)),
+        el("span", { class: "text" },
+          el("span", { class: "title" + (node.mono ? " mono" : "") }, node.title),
+          el("span", { class: "sub" }, node.subtitle)),
+        !leaf || (adding && node.id !== "response") ? el("span", { class: "port pout", "aria-hidden": "true" }) : null,
+        badge(status)),
+      result ? el("span", { class: "result" + (result.tone ? " " + result.tone : ""), title: result.text }, result.parts) : null,
       // The place to put a step: right after this one in the file.
-      adding && node.id !== "response" ? addButton(node, plan, mid) : null);
+      adding && node.id !== "response" ? addButton(node) : null);
   });
 
   const stage = el("div", { class: "stage", css: { width: plan.width + "px", height: plan.height + "px" } },
-    svg("svg", { width: plan.width, height: plan.height }, lines), cards);
+    svg("svg", { width: plan.width, height: plan.height, "aria-hidden": "true" }, lines), labels, cards);
 
-  const scale = zoom == null ? Math.max(0.7, Math.min(1, (canvas.clientWidth - 40) / plan.width)) : zoom;
+  const avail = canvas.clientWidth - 40;
+  const scale = zoom == null ? Math.max(0.6, Math.min(1, avail / plan.width)) : zoom;
   stage.style.transform = "scale(" + scale + ")";
   const holder = el("div", { class: "fit", css: { width: Math.ceil(plan.width * scale) + 32 + "px", height: Math.ceil(plan.height * scale) + 32 + "px" } }, stage);
   const scroller = el("div", { class: "scroller" }, holder);
+  panOn(scroller);
+  const fitAll = () => {
+    zoom = Math.min(1, avail / plan.width, (canvas.clientHeight - 150) / plan.height);
+    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(zoom * 100) / 100));
+    renderCanvas(false);
+  };
 
   canvas.replaceChildren(...[
     problemBanner(w),
-    run ? runBar(run) : w.draft ? el("div", { class: "hint" },
-      el("span", {}, "This is the workflow as the form describes it."),
-      el("span", {}, "Nothing is written until you make it.")) : el("div", { class: "hint" },
-      el("span", {}, isComp(w) ? "A step that uses this component fills the input; the output is what it gets back." : "Steps run top to bottom in the order numbered."),
-      el("span", {}, state.editable && !w.problem
-        ? (isComp(w) ? "Select a step or the output to edit it, or a test run on the left to see what happened." : "Select a step to edit it, or a run on the left to see what happened.")
-        : (isComp(w) ? "Pick a test run on the left to see what happened." : "Pick a run on the left to see what happened.")),
-      adding ? el("button", { type: "button", class: "ghost addstep", "data-focus": "add-hint", onclick: () => openAdd() }, icon("plus", 13), "Add a step", el("kbd", {}, "A")) : null),
+    run ? runBar(run) : w.draft ? el("div", { class: "strip" }, "This is the workflow as the form describes it. Nothing is written until you make it.") : fileStrip(w, auto),
     scroller,
     el("div", { class: "tools", role: "group", "aria-label": "Zoom" },
-      tool("minus", "Zoom out", () => setZoom(scale - 0.1)),
-      el("span", { class: "zoom", "aria-live": "off" }, Math.round(scale * 100) + "%"),
       tool("plus", "Zoom in", () => setZoom(scale + 0.1)),
-      tool("fit", "Fit to window", () => { zoom = null; renderCanvas(false); })),
-    run ? el("div", { class: "key", "aria-hidden": "true" },
-      el("div", { class: "line" }, ["ok", "failed", "running", "skipped", "pending"].map((s) => el("span", {}, el("span", { class: "dot " + s }), s === "pending" ? "Not reached" : STATUS_TEXT[s])))) : null,
+      tool("minus", "Zoom out", () => setZoom(scale - 0.1)),
+      tool("fit", "Fit to window", fitAll),
+      el("span", { class: "zoom", "aria-live": "off" }, Math.round(scale * 100) + "%")),
+    canTest(w) && !w.draft && !isComp(w) ? el("div", { class: "fab" }, startButton(w, null, "Run tests", "canvas:test-all", { primary: true, show: true })) : null,
+    // The latest runs, under the drawing in the editor: the Runs tab lists them all on the right.
+    w.draft || isComp(w) || run || selected.list === "runs" ? null : runStrip(w),
   ].filter(Boolean));
 
   if (keep) { scroller.scrollLeft = keep[0]; scroller.scrollTop = keep[1]; }
@@ -728,29 +1136,69 @@ function renderCanvas(moved) {
   }
 }
 
-// pips are the steps inside a flow step as a row of small kind icons, in order,
-// coloured by how each went in a run. Past four they are counted.
-function pips(rows, ran) {
-  const shown = rows.slice(0, 4);
-  const out = [];
-  shown.forEach((r, i) => {
-    if (i) out.push(el("i", { class: "link" }));
-    out.push(el("span", { class: "pip " + (ran ? r.status : "") }, icon(r.s.kind, 11)));
+// badge is the round symbol on a node's corner for how its step went: a tick,
+// a dash, a cross, or a pulsing dot while it runs. A step not reached has none.
+function badge(status) {
+  if (!status || status === "pending") return null;
+  return el("span", { class: "nbadge " + status, "aria-hidden": "true" }, status === "running" ? null : icon(status, 11));
+}
+
+// fileStrip sits over the drawing while no run is picked: the file it is drawn
+// from, and how the run drawn on it went, which opens that run.
+function fileStrip(w, last) {
+  const word = last ? (isTestRun(last) ? "Last test run " : "Last run ") + (last.status === "ok" ? "succeeded" : (STATUS_TEXT[last.status] || last.status).toLowerCase()) : "";
+  return el("div", { class: "strip" },
+    el("span", { class: "mono path" }, w.source || w.path),
+    last ? el("button", { type: "button", class: "lastrun " + last.status, "data-focus": "open-latest", title: "Open run " + last.run, onclick: () => go({ run: last.run, node: null }) },
+      word + " · " + when(last.started)) : null);
+}
+
+// runStrip is the line under the drawing with the latest two runs, each a way
+// to open it, and the way to the list of them all.
+function runStrip(w) {
+  const runs = state.runs.filter((r) => r.workflow === w.name && !isTestRun(r));
+  if (!runs.length) return null;
+  const said = (r) => (r.status === "failed" ? outcome(r).replace(/^Failed/, "failed") : r.status === "running" ? "running" : "succeeded in " + duration(r.ms)) + " · " + when(r.started);
+  return el("div", { class: "runstrip" },
+    el("span", { class: "rs-title" }, "Runs"),
+    runs.slice(0, 2).map((r) => el("button", {
+        type: "button", class: "rs-run " + r.status, "aria-current": r.run === selected.run ? "true" : null,
+        onclick: () => go({ run: r.run === selected.run ? null : r.run, node: null }),
+      },
+      el("span", { class: "dot " + r.status }), el("span", { class: "mono" }, r.run), el("span", { class: "rs-said" }, said(r)))),
+    el("span", { class: "grow" }),
+    el("button", { type: "button", class: "rs-all", onclick: () => go({ list: "runs", run: null, node: null }) }, "All runs", el("span", { class: "rs-n" }, runs.length)));
+}
+
+// panOn lets the drawing be dragged by its background, as well as scrolled.
+function panOn(scroller) {
+  let from = null;
+  scroller.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest("button, .elabel")) return;
+    from = { x: event.clientX, y: event.clientY, left: scroller.scrollLeft, top: scroller.scrollTop };
+    scroller.setPointerCapture(event.pointerId);
+    scroller.classList.add("panning");
   });
-  if (rows.length > shown.length) out.push(el("span", { class: "more" }, "+" + (rows.length - shown.length)));
-  return el("span", { class: "pips", "aria-hidden": "true" }, out);
+  scroller.addEventListener("pointermove", (event) => {
+    if (!from) return;
+    scroller.scrollLeft = from.left - (event.clientX - from.x);
+    scroller.scrollTop = from.top - (event.clientY - from.y);
+  });
+  const stop = () => { from = null; scroller.classList.remove("panning"); };
+  scroller.addEventListener("pointerup", stop);
+  scroller.addEventListener("pointercancel", stop);
 }
 
 // canAdd: steps can only be added to a workflow, when the server edits files and the file is sound.
 // A component's steps are fixed on this page: it never adds or removes one.
 const canAdd = (w) => !!w && state.editable && !w.problem && !w.component && !w.draft;
 
-// addButton is the round plus under a box, where a step can be put after it.
-function addButton(node, plan, mid) {
+// addButton is the plus after a node's right port, where a step can be put after it.
+function addButton(node) {
   const label = node.id === "trigger" ? "Add a step first, right after the trigger" : "Add a step after " + node.id;
   return el("button", {
-      type: "button", class: "addbtn", "data-focus": "add:" + node.id, title: label, "aria-label": label,
-      css: { left: mid + portShift(node.kind, "out") - 11 + "px", top: CARD_H + 11 + "px" },
+      type: "button", class: "addbtn" + (node.children.length ? "" : " leaf"), "data-focus": "add:" + node.id, title: label, "aria-label": label,
+      css: { left: node.w + 14 + "px", top: node.h / 2 - 13 + "px" },
       onclick: () => openAdd(node.id),
     }, icon("plus", 13));
 }
@@ -768,8 +1216,6 @@ function openAdd(after) {
 function answerWait(run) {
   return run.status === "running" ? "waiting" : run.status === "failed" ? "not reached" : "no caller";
 }
-
-const ordinal = (n) => "step " + n + " in file order";
 
 function tool(name, label, onclick) {
   return el("button", { type: "button", class: "tool", "aria-label": label, title: label, onclick }, icon(name, 15));
@@ -798,10 +1244,11 @@ function section(title, ...children) {
   return el("section", {}, title ? el("h2", {}, title) : null, children);
 }
 
-function header(kind, iconName, title, subtitle, closable) {
+function header(kind, iconName, title, subtitle, closable, extra) {
   return el("header", { class: "kind-" + kind },
     KIND_LABEL[kind] ? kindTile(kind, 38) : el("span", { class: "tile" }, icon(iconName, 20)),
     el("div", { class: "names" }, el("h1", { class: kind === "workflow" ? null : "mono" }, title), el("div", { class: "kindname" }, subtitle)),
+    extra || null,
     closable ? el("button", { type: "button", class: "x", "aria-label": "Close details", title: "Close (Esc)", onclick: () => go({ node: null }) }, icon("close", 16)) : null);
 }
 
@@ -865,19 +1312,17 @@ function example(w) {
   return code(lines.join("\n"), "the curl command");
 }
 
-// answerNote says what a request to the workflow gets back.
-function answerNote(w) {
-  if (w.respond) return "The request waits and is answered with what the workflow responds with.";
-  return "With ?wait=true the answer is the finished run. Without it the server answers at once and the run appears in the list.";
-}
-
+// renderInspector fills the panel on the right, which is only there when it has
+// something to show: a run, the trigger, the response, a component, the tests,
+// a form, or changes not saved yet. A step that can be edited opens in the node
+// editor instead, and a workflow with nothing picked is only its drawing.
 function renderInspector(w, run, moved) {
   ensureInspector();
-  const step = w.steps.find((s) => s.id === selected.node);
+  const step = editing(w) ? null : w.steps.find((s) => s.id === selected.node);
   const comp = isComp(w);
   const canEdit = state.editable && !w.problem;
-  const onStart = selected.node === START(w);
-  const onEnd = comp ? selected.node === OUT : selected.node === "response" && !!w.respond;
+  const onStart = selected.node === START(w) && !editing(w);
+  const onEnd = !editing(w) && (comp ? selected.node === OUT : selected.node === "response" && !!w.respond);
   const endEdit = comp ? (w.gives ? w.gives.edit : null) : w.respond ? w.respond.edit : null;
   const fields = !canEdit ? null : onStart ? (comp ? null : w.edit) : onEnd ? endEdit : step ? step.edit : null;
   const hasForm = !!(fields && fields.length);
@@ -894,7 +1339,21 @@ function renderInspector(w, run, moved) {
   else if (onEnd) parts = comp ? outputDetails(w, run) : responseDetails(w, run);
   else if (step) parts = stepDetails(w, step, run, hasForm);
   else if (run) parts = runDetails(w, run);
-  else parts = comp ? componentDetails(w) : workflowDetails(w);
+  else if (selected.list === "runs") parts = runsDetails(w);
+  else if (comp) parts = componentDetails(w);
+  else if (selected.list === "tests") parts = testsDetails(w);
+  else if (canEdit && (dirtyCount(w.name) > 0 || (uiOf(w.name).notice && uiOf(w.name).notice.kind !== "saved"))) parts = pendingDetails(w);
+  const open = !!parts;
+  $("app").dataset.inspector = open ? "open" : "closed";
+  if (!open) {
+    hideMaker();
+    hideAdder();
+    hideTester();
+    showForm(w, null, null);
+    insp.rest.replaceChildren();
+    updateBar();
+    return;
+  }
   const [head, ...sections] = parts.flat(Infinity).filter(Boolean);
   const box = $("inspector");
   const top = box.scrollTop;
@@ -945,23 +1404,60 @@ function showResponse() {
   return el("button", { type: "button", class: "linkbtn", onclick: () => go({ node: "response" }) }, "Show the response");
 }
 
-function workflowDetails(w) {
+// testsDetails is the list of a workflow's tests, with the round just run on top.
+function testsDetails(w) {
+  const v = state.editable ? roundView(w.name) : null;
   return [
-    header("workflow", "workflow", w.name, "Workflow"),
-    section("Definition", pairs([
-      ["File", el("span", { class: "mono" }, w.path)],
-      ["Trigger", el("span", { class: "mono" }, w.trigger || "none: the server does not run it")],
-      w.input ? ["Takes", el("span", { class: "mono" }, w.input)] : null,
-      w.respond ? ["Answers", [el("span", { class: "mono" }, w.respond.status), " ", showResponse()]] : null,
-      ["Steps", w.steps.length],
-      ["Tests", w.tests + (w.tests && !state.editable ? ", run with flowmaker test" : "")],
-      state.commit ? ["Version", el("span", { class: "mono" }, state.commit)] : null,
-    ])),
-    section("Steps", outline(w), el("p", { class: "muted small" }, "A step with an IF condition is skipped when the condition is false."),
-      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger" + (w.respond ? ", a step or the response" : " or a step") + " to edit it. Saved changes are written to " + w.path + ".") : null,
-      canAdd(w) ? el("button", { type: "button", class: "btn addstep", "data-focus": "add-outline", onclick: () => openAdd("-") }, icon("plus", 14), "Add a step", el("kbd", {}, "A")) : null),
-    testsSection(w),
-    isWebhook(w) ? section("Try it", example(w), el("p", { class: "muted small" }, answerNote(w))) : null,
+    header("workflow", "tests", "Tests", w.name, true),
+    v ? section("", roundBox(w, v)) : null,
+    state.editable ? testsSection(w, "") : section("", el("p", { class: "muted" }, plural(w.tests || 0, "test") + " in " + w.path + ". Run them with flowmaker test.")),
+  ];
+}
+
+// runsDetails lists a workflow's runs, newest first: a component's test runs,
+// as it has none of its own. A workflow's test runs are with its tests.
+function runsDetails(w) {
+  const comp = isComp(w);
+  const runs = state.runs.filter((r) => r.workflow === w.name && (comp ? isTestRun(r) : !isTestRun(r)));
+  const none = comp
+    ? (state.editable ? "None yet. Run its tests and each one appears here." : "None. Tests of a component run with flowmaker test.")
+    : w.trigger ? "None yet. A run appears here each time the trigger fires." : "The server does not run this workflow: it has no webhook or cron trigger.";
+  return [
+    header("workflow", "runs", comp ? "Test runs" : "Runs", comp ? compTitle(w) : w.name, true),
+    section("", runs.length ? el("div", { class: "runlist" }, runs.map(runRow)) : el("p", { class: "muted" }, none)),
+  ];
+}
+
+// runRow is one run in the list: how it went, when, how long it took and what it did.
+function runRow(r) {
+  const test = isTestRun(r), V = test ? VERDICT[verdictOf(r)] : null;
+  const tone = test ? rowTone(verdictOf(r)) : r.status;
+  return el("button", {
+      type: "button", class: "row run " + tone, "data-focus": "run:" + r.run,
+      "aria-label": (test ? "Test " + r.test + ", " + V.word : "Run at " + when(r.started) + ", " + r.status) + (test ? ", " + when(r.started) : ""),
+      onclick: () => go({ run: r.run, node: null }),
+    },
+    statusMark(test ? V.mark : r.status, 11),
+    el("span", { class: "name" }, test ? r.test : when(r.started)),
+    el("span", { class: "aside" }, r.status === "running" ? "running" : test && verdictOf(r) === "unrun" ? "" : duration(r.ms)),
+    el("span", { class: "sub" }, test ? testOutcome(r) + " · " + when(r.started) : outcome(r)));
+}
+
+// backTo is the way from a run back to the list it was picked from.
+function backTo(w, run) {
+  const tests = isTestRun(run) && !isComp(w);
+  return el("button", { type: "button", class: "btn small", "data-focus": "back-list", onclick: () => go({ list: tests ? "tests" : "runs", run: null, node: null }) }, tests ? "All tests" : "All runs");
+}
+
+// pendingDetails is what the panel shows while changes wait to be saved, or
+// after a save that failed: the steps changed, each a way back into it. A save
+// that worked is told by the Changes chip instead.
+function pendingDetails(w) {
+  const names = dirtyNodes(w.name);
+  return [
+    header("workflow", "workflow", names.length ? "Unsaved changes" : "Not saved", w.name, false),
+    names.length ? section("Changed", el("div", { class: "chips" }, names.map((id) =>
+      el("button", { type: "button", class: "pill link mono", title: "Open " + nodeName(id), onclick: () => (canOpen(w, id) ? openEditor(id) : go({ node: id })) }, nodeName(id))))) : null,
   ];
 }
 
@@ -1006,8 +1502,10 @@ function componentDetails(w) {
   return [
     header(kind, kind, compTitle(w), "Component · " + compKindWord(w)),
     w.description ? section("", el("p", { class: "lede" }, w.description)) : null,
+    w.source ? section("From git", el("p", {}, mono(w.source)),
+      el("p", { class: "muted small" }, "Pinned to a commit in flowmaker.lock, so it is the same on every machine. It is changed at its source; flowmaker get -u takes the new commit.")) : null,
     section("Definition", pairs([
-      ["File", mono(w.path)],
+      w.source ? null : ["File", mono(w.path)],
       ["Made of", w.gives ? plural(w.steps.length, "step") + " of its own" : "One piece of work: " + (KIND_NAMES[kind] || kind).toLowerCase()],
       ["Tests", w.tests + (w.tests && !state.editable ? ", run with flowmaker test" : "")],
       state.commit ? ["Version", mono(state.commit)] : null,
@@ -1100,7 +1598,7 @@ function waterfall(w, run) {
 function runDetails(w, run) {
   if (isTestRun(run)) return testRunDetails(w, run);
   return [
-    header("workflow", "run", run.run, "Run of " + run.workflow),
+    header("workflow", "run", run.run, "Run of " + run.workflow, false, backTo(w, run)),
     section("Result",
       statusPanel(run.status, run.status !== "running" ? el("div", { class: "muted" }, "took " + duration(run.ms) + ", started " + when(run.started)) : null),
       run.error ? el("pre", { class: "error" }, run.error) : null,
@@ -1223,7 +1721,6 @@ function stepDetails(w, step, run, hasForm) {
       step.kind === "flow" ? null : el("p", { class: "muted small" }, "Written once in " + step.uses + " and shared by every step that uses it. This step only chooses its input. Change what it does in the component.")) : null,
     step.fields.length && !hasForm && !step.component ? section("Settings", pairs(step.fields.map(([label, value]) => [label, el("span", { class: "mono" }, value)]))) : null,
     readsChips(w, step.reads),
-    canAdd(w) ? structureSection(w, step) : null,
   ];
 }
 
@@ -1240,16 +1737,6 @@ function componentLink(step) {
         el("span", { class: "cdesc" }, x.description || compKindWord(x)),
         el("span", { class: "cmeta" }, compKindWord(x) + " · used by " + plural(usesOf(x), "step"))),
       el("span", { class: "copen" }, "Open", icon("open", 13))));
-}
-
-// structureSection is where a step is added after this one, or removed.
-function structureSection(w, step) {
-  const lost = draftCountFor(w.name, step.id);
-  return section("Add or remove",
-    el("button", { type: "button", class: "btn addstep", "data-focus": "add-after", onclick: () => openAdd(step.id) }, icon("plus", 14), "Add a step after this one"),
-    removeButton(w, step),
-    el("p", { class: "muted small" }, "Removing takes the step out of " + w.path + ". Steps, the response and tests that still use its output must be changed first."
-      + (lost ? " Its " + plural(lost, "unsaved change") + " would be lost." : "")));
 }
 
 // removeButton asks twice, like Discard: the first click arms it, the second removes.
@@ -1364,7 +1851,8 @@ let uiTick = 0;         // bumped when something outside the data changes what i
 let formId = 0;
 let form = null;        // the form now on the page: { key, workflow, node, fields, controls, root }
 let flagSig = "";       // which steps had unsaved changes the last time the flags were drawn
-const drafts = {};      // workflow -> { fields: { pathKey: { path, value, node, label, group } }, prompts: { step: text } }
+const drafts = {};      // workflow -> { fields: { pathKey: { path, value, node, label, group } }, prompts: { step: text }, schemas: { step: { fields } or { text } } }
+const schemaCache = {}; // "workflow|step" -> { state, file, text, rev, fields, wfRev, inflight, error }: an AI step's answer fields
 const adds = {};        // workflow -> the step being added: { after, component, id, idTouched, when, values }
 let adder = null;       // the add-a-step form now on the page
 let making = null;      // the workflow being made: { root, name, trigger, path, pathTouched, cron, step } (step as in adds)
@@ -1377,7 +1865,7 @@ let changesEpoch = 0;   // bumped by every save, so the diff is fetched again
 const insp = { head: null, body: null, formslot: null, rest: null, bar: null };
 
 const pathKey = (path) => JSON.stringify(path);
-const draftsOf = (name) => drafts[name] || (drafts[name] = { fields: {}, prompts: {} });
+const draftsOf = (name) => drafts[name] || (drafts[name] = { fields: {}, prompts: {}, schemas: {} });
 const uiOf = (name) => ui[name] || (ui[name] = { saving: false, notice: null, conflicts: {}, armed: false, armTimer: 0 });
 const workflowByName = (name) => state.workflows.find((x) => x.name === name);
 const plural = (n, one, many) => n + " " + (n === 1 ? one : many || one + "s");
@@ -1428,26 +1916,30 @@ function pruneDrafts(w) {
     const p = promptCache[w.name + "|" + step];
     if (!w.steps.some((s) => s.id === step) || (p && p.state === "ready" && p.text === text)) delete d.prompts[step];
   }
+  for (const [step, draft] of Object.entries(d.schemas)) {
+    const c = schemaCache[schemaKey(w.name, step)];
+    if (!w.steps.some((s) => s.id === step) || (c && c.state === "ready" && schemaSame(draft, c))) delete d.schemas[step];
+  }
 }
 
 function dirtyCount(name) {
   const d = drafts[name];
-  return d ? Object.keys(d.fields).length + Object.keys(d.prompts).length : 0;
+  return d ? Object.keys(d.fields).length + Object.keys(d.prompts).length + Object.keys(d.schemas).length : 0;
 }
 // draftCountFor counts the unsaved changes that belong to one step.
 function draftCountFor(name, node) {
   const d = drafts[name];
   if (!d) return 0;
-  return Object.values(d.fields).filter((e) => e.node === node).length + (d.prompts[node] !== undefined ? 1 : 0);
+  return Object.values(d.fields).filter((e) => e.node === node).length + (d.prompts[node] !== undefined ? 1 : 0) + (d.schemas[node] !== undefined ? 1 : 0);
 }
 function dirtyNodes(name) {
   const d = drafts[name];
   if (!d) return [];
-  return [...new Set([...Object.values(d.fields).map((e) => e.node), ...Object.keys(d.prompts)])];
+  return [...new Set([...Object.values(d.fields).map((e) => e.node), ...Object.keys(d.prompts), ...Object.keys(d.schemas)])];
 }
 const editedNodes = (w) => new Set(state.editable ? dirtyNodes(w.name) : []);
-const addTouched = (a) => !!a && (a.idTouched || a.when.trim() !== "" || Object.values(a.values).some((v) => v.trim() !== ""));
-const anyDirty = () => state.editable && (state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name])) || Object.values(keeps).some((k) => k.touched) || makeTouched());
+const addTouched = (a) => !!a && (a.edited || a.idTouched || a.when.trim() !== "" || Object.values(a.values).some((v) => v.trim() !== ""));
+const anyDirty = () => state.editable && (state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name])) || Object.values(keeps).some((k) => k.touched) || makeTouched() || svcTouched());
 
 // adopt takes in a fresh answer from /api/state. A workflow whose file changed
 // without this page saving it keeps the person's drafts, on top of the new text.
@@ -1510,6 +2002,9 @@ function reattach(name, prev, w) {
   for (const step of Object.keys(d.prompts)) {
     if (!w.steps.some((s) => s.id === step)) { dropped.push({ node: step, label: "Prompt" }); delete d.prompts[step]; }
   }
+  for (const step of Object.keys(d.schemas)) {
+    if (!w.steps.some((s) => s.id === step)) { dropped.push({ node: step, label: "Answer fields" }); delete d.schemas[step]; }
+  }
   d.fields = fields;
   st.conflicts = conflicts;
   return dropped;
@@ -1518,7 +2013,7 @@ function reattach(name, prev, w) {
 function changedOutside(name, prev, w) {
   const st = uiOf(name), d = draftsOf(name);
   const dropped = reattach(name, prev, w);
-  const kept = Object.keys(d.fields).length + Object.keys(d.prompts).length;
+  const kept = dirtyCount(name);
   const lost = [...(st.notice && st.notice.dropped ? st.notice.dropped : []), ...dropped];
   if (st.notice && st.notice.kind === "conflict") st.notice = { ...st.notice, kept, dropped: lost.length ? lost : null };
   else if (kept > 0 || lost.length || (view && view.w.name === name && selected.node)) st.notice = { kind: "external", kept, dropped: lost.length ? lost : null };
@@ -1619,6 +2114,8 @@ function paintRow(c) {
   const fresh = uiOf(c.workflow).conflicts[c.key];
   c.conflict.hidden = !(edited && fresh !== undefined);
   if (!c.conflict.hidden) c.conflict.replaceChildren("The file now says: ", el("span", { class: "mono" }, fresh.length > 240 ? fresh.slice(0, 240) + "…" : fresh));
+  // The node editor lays some fields out in its own way and repaints them here.
+  if (c.after) c.after(c);
 }
 
 function buildForm(w, nodeId, fields, key) {
@@ -1676,10 +2173,11 @@ function showForm(w, nodeId, fields) {
 
 // syncForm brings the controls up to date with the data and the drafts without
 // touching a control whose text already matches.
-function syncForm(w) {
-  if (!form || form.workflow !== w.name) return;
-  form.controls.forEach((c, i) => {
-    c.field = form.fields[i];
+function syncForm(w, other) {
+  const f = other || form;
+  if (!f || f.workflow !== w.name) return;
+  f.controls.forEach((c, i) => {
+    c.field = f.fields[i];
     if (c.kind === "prompt") return syncPrompt(c, w);
     c.base = c.field.value;
     const d = draftOf(c);
@@ -1733,6 +2231,7 @@ function loadPrompt(w, step, force) {
 
 // draftChanged refreshes what shows unsaved changes, other than the form.
 function draftChanged(name, force) {
+  syncEditorValues();
   const w = workflowByName(name);
   if (!w || !view || view.w.name !== name) { updateBar(); return; }
   updateBar();
@@ -1746,8 +2245,9 @@ function draftChanged(name, force) {
     node.setAttribute("aria-label", node.dataset.label + (on ? ", unsaved changes" : ""));
   }
   for (const node of document.querySelectorAll("#inspector [data-node]")) node.classList.toggle("edited", edited.has(node.dataset.node));
-  renderSide(w);
-  $("changes").replaceChildren(...(state.editable && !isComp(w) ? [changesChip()] : []));
+  $("changes").replaceChildren(...(state.editable && !isComp(w) ? [changesChip(w)] : []));
+  // With nothing picked the panel lists the changed steps, or is there only for them.
+  if (!isComp(w) && !selected.node && !selected.run && !selected.add && !selected.test && !selected.make && !selected.list) { uiTick++; render(); }
 }
 
 // flagFor marks a workflow in the list on the left: a file problem, or unsaved changes.
@@ -1762,16 +2262,20 @@ function flagFor(x) {
     n ? el("span", { class: "flag edit", title: plural(n, "unsaved change"), role: "img", "aria-label": plural(n, "unsaved change") }) : null);
 }
 
-function changesChip() {
+// changesChip opens what changed in the files. Right after a save it says so,
+// until the changes are looked at.
+function changesChip(w) {
   const uncommitted = /uncommitted/.test(state.commit || "");
+  const st = uiOf(w.name);
+  const saved = !!st.notice && st.notice.kind === "saved";
   return el("button", {
       type: "button", class: "chip changes" + (selected.changes ? " on" : ""), "data-focus": "changes",
       "aria-pressed": selected.changes ? "true" : "false",
-      title: "Show what changed in the workflow files, as git sees it",
-      onclick: () => go({ changes: !selected.changes }),
+      title: "Show what changed in the workflow files, as git sees it" + (state.commit ? ". Running " + state.commit : ""),
+      onclick: () => { if (saved) st.notice = null; go({ changes: !selected.changes }); },
     },
     uncommitted ? el("span", { class: "dot edit", title: "There are uncommitted changes" }) : null,
-    "Changes");
+    saved ? (uncommitted ? "Saved · not committed" : "Saved") : "Changes");
 }
 
 function problemBanner(w) {
@@ -1819,6 +2323,7 @@ function disarm(name) {
 }
 
 function updateBar() {
+  paintFoot();
   const b = insp.bar;
   if (!b || !view) return;
   if (view.w.draft) return paintMakeBar(b);
@@ -1860,8 +2365,8 @@ function updateBar() {
   }
   if (adding) {
     // The same bar serves the form for a new step: Cancel and Add step.
-    const comp = componentOf(w, addOf(w.name).component);
-    b.status.replaceChildren(...(st.saving ? ["Adding…"] : comp ? ["Adds a step to ", el("span", { class: "mono" }, w.path)] : [componentsOf(w).length ? "Choose a component to add." : "Nothing to add yet."]));
+    const comp = chosenOf(w, addOf(w.name));
+    b.status.replaceChildren(...(st.saving ? ["Adding…"] : comp ? comp.kind === "ai" && BUILTIN.ai === comp ? ["Adds the step, with a prompt file and a schema file."] : ["Adds a step to ", el("span", { class: "mono" }, w.path)] : ["Choose what kind of step to add."]));
     b.status.classList.remove("dirty");
     b.save.setAttribute("aria-disabled", st.saving || !comp ? "true" : "false");
     b.discard.setAttribute("aria-disabled", st.saving ? "true" : "false");
@@ -1893,7 +2398,9 @@ function updateBar() {
 
 function dismissNotice(name) {
   uiOf(name).notice = null;
-  updateBar();
+  // The panel may have been there only for the notice.
+  uiTick++;
+  render();
 }
 
 // noticeView says in plain words what happened to a save, near the form.
@@ -1932,7 +2439,7 @@ function noticeView(n, w) {
               ? "Nothing was written, so the " + plural(usesOf(w), "step") + " that use" + (usesOf(w) === 1 ? "s" : "") + " " + compTitle(w) + " still work as before."
               : compTitle(w) + " is shared by " + plural(usesOf(w), "step") + ", and the server checks them with it, so a change that breaks one of them is refused. Nothing was written."));
       }
-      if (isMake && n.error) text.push(el("p", {}, n.error));
+      if ((isMake || n.why === "schema") && n.error) text.push(el("p", {}, n.error));
       text.push(el("p", {}, isRemove ? "What the server found:" : isAdd ? "Fix this and try again:" : "Fix this and save again:"),
         el("ul", { class: "problems" }, n.problems.map((p) => problemItem(p, w, n.did === "add" ? n.id : null))));
     } else text.push(el("p", {}, n.error || "The server did not accept the change."));
@@ -1946,7 +2453,7 @@ function noticeView(n, w) {
           : isUntest ? "Look at the tests again, then remove it again if it is still what you want."
           : "Look at the steps again, then remove it again if it is still what you want."));
     } else {
-      text.push(el("p", {}, (n.what === "prompt" ? "The prompt file was changed after this page read it." : "The workflow file was changed after this page read it.")
+      text.push(el("p", {}, (n.what === "prompt" ? "The prompt file was changed after this page read it." : n.what === "schema" ? "The schema file was changed after this page read it." : "The workflow file was changed after this page read it.")
         + " The form now shows what is in the file" + (n.kept ? ", with your " + plural(n.kept, "unsaved edit") + " on top." : ".")),
         el("p", {}, n.kept ? "Check your edits, then save again." : "Nothing of yours was lost."));
     }
@@ -2043,7 +2550,8 @@ async function saveCurrent() {
   // The server calls a component's way out "output"; here its id cannot be a step's.
   const fields = Object.values(d.fields).map((e) => ({ path: e.path, value: e.value, node: e.node === OUT ? "output" : e.node }));
   const texts = Object.entries(d.prompts).map(([step, text]) => ({ step, text }));
-  if (!fields.length && !texts.length) return;
+  const schemas = Object.entries(d.schemas);
+  if (!fields.length && !texts.length && !schemas.length) return;
 
   st.saving = true;
   st.notice = null;
@@ -2093,6 +2601,30 @@ async function saveCurrent() {
         }
       }
     }
+    // The answer's fields go last, once the file that names the schema is as it should be.
+    if (!failure) {
+      for (const [step, draft] of schemas) {
+        const key = schemaKey(name, step), cached = schemaCache[key];
+        if (!cached || cached.state !== "ready") { failure = { kind: "error", error: "The answer's fields of " + step + " have not been read yet, so they were not saved." }; break; }
+        const body = { workflow: name, step, rev: cached.rev };
+        if (draft.text !== undefined) body.text = draft.text; else body.fields = draft.fields;
+        const r = await request("POST", "/api/schema", body);
+        if (r.ok) {
+          epoch++;
+          changesEpoch++;
+          schemaCache[key] = { state: "ready", file: r.body.file, text: r.body.text, rev: r.body.rev, fields: r.body.fields, wfRev: (workflowByName(name) || w).rev };
+          if (d.schemas[step] === draft) delete d.schemas[step];
+          files.push(folderOf(w.path) + "/" + r.body.file);
+        } else {
+          failure = failureOf(r, "schema", { why: "schema" });
+          if (r.status === 409) {
+            await loadSchema(workflowByName(name) || w, step, true);
+            failure.kept = dirtyCount(name);
+          }
+          break;
+        }
+      }
+    }
   } catch (err) {
     failure = { kind: "network" };
   }
@@ -2103,7 +2635,7 @@ async function saveCurrent() {
   } else st.notice = { kind: "saved", files };
 
   if (failure && failure.kind === "conflict" && failure.what === "workflow") {
-    st.notice = { ...failure, kept: Object.keys(d.fields).length + Object.keys(d.prompts).length };
+    st.notice = { ...failure, kept: dirtyCount(name) };
     await refresh();
     // The poll noticed the new file and counted the edits on top of it.
   } else {
@@ -2134,7 +2666,7 @@ function discardCurrent() {
   }
   clearTimeout(st.armTimer);
   st.armed = false;
-  drafts[name] = { fields: {}, prompts: {} };
+  drafts[name] = { fields: {}, prompts: {}, schemas: {} };
   st.conflicts = {};
   st.notice = null;
   if (form) syncForm(workflowByName(name));
@@ -2149,8 +2681,275 @@ function discardCurrent() {
 // another step, or to a change of the file underneath.
 
 const ID_OK = /^[A-Za-z0-9_]+$/;
-const addOf = (name) => adds[name] || (adds[name] = { after: "", component: null, id: "", idTouched: false, when: "", values: {} });
-const componentsOf = (w) => w.components || [];
+const addOf = (name) => adds[name] || (adds[name] = {
+  after: "", component: null, kind: null, id: "", idTouched: false, when: "", values: {}, edited: false,
+  method: "POST", url: "", input: "${trigger.body}", prompt: "",
+  models: { decide: "openrouter/cloudflare/clef", ai: "openrouter/deepseek/deepseek-v4.1-flash" },
+  questions: [blankQuestion()], fields: [blankField()],
+});
+
+// The kinds of step that do their own work. The chooser offers them next to the
+// components, and the form for one is made from the same parts.
+const BUILTIN = {
+  ai: { use: "@ai", kind: "ai", name: "AI", idBase: "ai", group: "Ask a model", text: "Write or extract, in fields you define", inputs: [] },
+  decide: { use: "@decide", kind: "decide", name: "Decide", idBase: "decide", group: "Ask a model", text: "Yes or no, one of a list, or a score", inputs: [] },
+  http: { use: "@http", kind: "http", name: "HTTP request", idBase: "request", group: "Act", text: "Send to any API", inputs: [] },
+};
+const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+// chosenOf is what the form is for: a kind of step that does its own work, or a component.
+const chosenOf = (w, a) => (a.kind ? BUILTIN[a.kind] : componentOf(w, a.component));
+
+// ---- the answer's fields and a decision's questions ----
+//
+// Two editors made of plain rows: the table of fields an AI step answers with,
+// which the node editor uses for an existing step as well, and the cards of the
+// questions of a decision. Each edits an array of rows in place and says so by
+// calling onChange; neither knows where the rows are kept.
+
+const FIELD_TYPES = [["text", "Text"], ["number", "Number"], ["whole number", "Whole number"], ["yes or no", "Yes or no"], ["list of text", "List of text"], ["one of", "One of a list"]];
+const QUESTION_TYPES = [["yes or no", "Yes or no", "Is it urgent?"], ["one of", "One of a list", "Which language?"], ["score", "A score", "How risky is it?"]];
+const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function blankField() { return { name: "", type: "text", required: true, description: "", options: "" }; }
+function blankQuestion() { return { name: "", ask: "", type: "yes or no", yesIf: "", noIf: "", answers: [] }; }
+const splitOptions = (text) => String(text || "").split(",").map((x) => x.trim()).filter(Boolean);
+const rowOfField = (f) => ({ name: f.name, type: f.type, required: !!f.required, description: f.description || "", options: (f.options || []).join(", ") });
+const isBlankField = (r) => r.name.trim() === "" && r.description.trim() === "" && r.options.trim() === "";
+
+// fieldsOut is the rows as the server takes them. A row with nothing in it is left out.
+function fieldsOut(list) {
+  return list.filter((r) => !isBlankField(r)).map((r) => {
+    const f = { name: r.name.trim(), type: r.type, required: !!r.required };
+    if (r.description.trim()) f.description = r.description.trim();
+    if (r.type === "one of") f.options = splitOptions(r.options);
+    return f;
+  });
+}
+
+// fieldProblems says what the server would refuse, so that it can be told before.
+function fieldProblems(list) {
+  const out = [], seen = new Set();
+  for (const f of fieldsOut(list)) {
+    if (!f.name) out.push("A field has no name.");
+    else if (!NAME_RE.test(f.name)) out.push("“" + f.name + "” is not a field name: use letters, digits and _, and do not start with a digit.");
+    else if (seen.has(f.name)) out.push("There are two fields called " + f.name + ".");
+    seen.add(f.name);
+    if (f.type === "one of" && f.options.length < 2) out.push((f.name ? f.name : "A field") + " is one of a list, which needs at least two options.");
+  }
+  return out;
+}
+
+function questionProblems(list) {
+  const out = [], seen = new Set();
+  list.forEach((q, i) => {
+    const who = q.name.trim() || "Question " + (i + 1);
+    if (!q.name.trim()) out.push(who + " has no name.");
+    else if (!NAME_RE.test(q.name.trim())) out.push("“" + q.name.trim() + "” is not a question name: use letters, digits and _, and do not start with a digit.");
+    else if (seen.has(q.name.trim())) out.push("There are two questions called " + q.name.trim() + ".");
+    seen.add(q.name.trim());
+    if (!q.ask.trim()) out.push(who + " has nothing to ask.");
+    if (q.type === "yes or no") { if (!!q.yesIf.trim() !== !!q.noIf.trim()) out.push(who + ": give both “Yes if” and “No if”, or neither."); }
+    else if (q.answers.filter((a) => a.name.trim()).length < 2) out.push(who + " needs at least two answers.");
+  });
+  return out;
+}
+
+const problemList = (box, problems) => {
+  box.hidden = !problems.length;
+  box.replaceChildren(...problems.map((t) => el("div", {}, t)));
+};
+
+function textIn(props, value, onInput) {
+  const box = el("input", { type: "text", class: "in" + (props.mono ? " mono" : ""), spellcheck: "false", autocomplete: "off", autocapitalize: "off", id: props.id, placeholder: props.placeholder, "aria-label": props.label });
+  box.value = value;
+  box.addEventListener("input", () => onInput(box.value));
+  return box;
+}
+
+// buildFieldTable: one row for each field of the answer: name, type, whether the
+// model must give it, and what goes in it. A type of "One of a list" brings a
+// row for its options.
+function buildFieldTable(list, onChange, uid) {
+  const T = { list };
+  let n = 0;
+  const body = el("div", { class: "frows" });
+  const warn = el("p", { class: "conflict fwarn", hidden: true, role: "status" });
+  // What is wrong is not said before anything has been typed.
+  let touched = false;
+  const repaint = () => problemList(warn, touched ? fieldProblems(list) : []);
+  const changed = (kind) => { if (kind === "input") touched = true; repaint(); onChange(kind); };
+  const add = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add field");
+  const row = (r, i) => {
+    const id = "ff" + uid + "x" + (++n);
+    const name = textIn({ mono: true, id: id + "n", placeholder: "field_name", label: "Name of field " + (i + 1) }, r.name, (v) => { r.name = v; repaint(); changed("input"); });
+    const type = el("select", { id: id + "t", class: "in", "aria-label": "Type of field " + (i + 1) }, FIELD_TYPES.map(([v, t]) => el("option", { value: v }, t)));
+    type.value = r.type;
+    const req = el("input", { type: "checkbox", id: id + "r" });
+    req.checked = r.required;
+    const desc = textIn({ id: id + "d", placeholder: "What goes in it", label: "What goes in field " + (i + 1) }, r.description, (v) => { r.description = v; repaint(); changed("input"); });
+    const opts = textIn({ mono: true, id: id + "o", placeholder: "Options, separated by commas", label: "Options of field " + (i + 1) }, r.options, (v) => { r.options = v; repaint(); changed("input"); });
+    const optRow = el("div", { class: "fopts", hidden: r.type !== "one of" }, opts);
+    type.addEventListener("change", () => { r.type = type.value; optRow.hidden = r.type !== "one of"; repaint(); changed("input"); });
+    req.addEventListener("change", () => { r.required = req.checked; changed("input"); });
+    const rm = el("button", { type: "button", class: "fremove", title: "Remove this field", "aria-label": "Remove field " + (i + 1) + (r.name.trim() ? ", " + r.name.trim() : "") }, icon("trash", 14));
+    rm.addEventListener("click", () => {
+      list.splice(list.indexOf(r), 1);
+      T.rebuild();
+      changed("struct");
+      add.focus();
+    });
+    return el("div", { class: "frow" }, name, type, el("label", { class: "freq" }, req, el("span", {}, "Required")), desc, rm, optRow);
+  };
+  T.rebuild = () => { body.replaceChildren(...list.map(row)); repaint(); };
+  add.addEventListener("click", () => {
+    list.push(blankField());
+    T.rebuild();
+    const last = body.lastElementChild && body.lastElementChild.querySelector("input");
+    if (last) last.focus();
+    changed("struct");
+  });
+  T.root = el("div", { class: "ftable" },
+    el("div", { class: "fhead", "aria-hidden": "true" }, el("span", {}, "Field"), el("span", {}, "Type"), el("span", {}, "Required"), el("span", {}, "What goes in it"), el("span")),
+    body, el("div", { class: "factions" }, add, el("span", { class: "fnote" }, "The model must answer with these fields and no others.")), warn);
+  T.rebuild();
+  return T;
+}
+
+// buildQuestionList: a card for each question of a decision. It asks, then says
+// how it is answered: yes or no, one of a list, or a score, which are
+// answers from lowest to highest.
+function buildQuestionList(list, onChange, uid) {
+  const T = { list };
+  let n = 0;
+  const holder = el("div", { class: "qcards" });
+  const warn = el("p", { class: "conflict fwarn", hidden: true, role: "status" });
+  let touched = false;
+  const repaint = () => problemList(warn, touched ? questionProblems(list) : []);
+  const changed = (kind) => { if (kind === "input") touched = true; repaint(); onChange(kind); };
+  const add = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add question");
+  const card = (q, qi) => {
+    const id = "fq" + uid + "x" + (++n);
+    const answers = el("div", { class: "qanswers" });
+    const yn = el("div", { class: "qyn" });
+    const kindBtns = QUESTION_TYPES.map(([v, text]) => {
+      const b = el("button", { type: "button", role: "radio", class: "qtype", "data-type": v }, text);
+      b.addEventListener("click", () => {
+        if (q.type === v) return;
+        q.type = v;
+        if (v !== "yes or no") while (q.answers.length < 2) q.answers.push({ name: "", meaning: "" });
+        paint();
+        changed("struct");
+        b.focus();
+      });
+      return b;
+    });
+    const name = textIn({ mono: true, id: id + "n", placeholder: "angry" }, q.name, (v) => { q.name = v; repaint(); changed("input"); });
+    const ask = textIn({ id: id + "a", placeholder: QUESTION_TYPES.find((t) => t[0] === q.type)[2] }, q.ask, (v) => { q.ask = v; repaint(); changed("input"); });
+    const yes = textIn({ id: id + "y", placeholder: "For example: they say they will cancel" }, q.yesIf, (v) => { q.yesIf = v; repaint(); changed("input"); });
+    const no = textIn({ id: id + "z", placeholder: "For example: they only ask a question" }, q.noIf, (v) => { q.noIf = v; repaint(); changed("input"); });
+    const field = (label, box, hint) => el("div", { class: "field" }, el("div", { class: "lab" }, el("label", { for: box.id }, label)), box, hint ? el("p", { class: "hint-text" }, hint) : null);
+    yn.append(field("Yes if", yes), field("No if", no), el("p", { class: "hint-text qhint" }, "Optional. Say what means yes and what means no, both or neither."));
+    const scored = () => q.type === "score";
+    const paintAnswers = () => {
+      answers.replaceChildren(
+        el("div", { class: "qahead" }, el("span", {}, "Answer"), el("span", {}, scored() ? "Means, lowest to highest" : "Means"), el("span")),
+        ...q.answers.map((a, ai) => {
+          const aid = id + "a" + ai;
+          const nm = textIn({ mono: true, id: aid + "n", placeholder: scored() ? (ai === 0 ? "low" : ai === q.answers.length - 1 ? "high" : "medium") : "answer", label: "Name of answer " + (ai + 1) + " of " + (q.name.trim() || "question " + (qi + 1)) }, a.name, (v) => { a.name = v; repaint(); changed("input"); });
+          const mn = textIn({ id: aid + "m", placeholder: "What it means", label: "What answer " + (ai + 1) + " means" }, a.meaning, (v) => { a.meaning = v; changed("input"); });
+          const rm = el("button", { type: "button", class: "fremove", title: "Remove this answer", "aria-label": "Remove answer " + (ai + 1) }, icon("trash", 14));
+          rm.addEventListener("click", () => { q.answers.splice(ai, 1); paintAnswers(); repaint(); changed("struct"); addA.focus(); });
+          return el("div", { class: "qarow" }, nm, mn, rm);
+        }),
+        addA);
+    };
+    const addA = el("button", { type: "button", class: "btn small qadd" }, icon("plus", 12), "Add answer");
+    addA.addEventListener("click", () => {
+      q.answers.push({ name: "", meaning: "" });
+      paintAnswers();
+      const rows = answers.querySelectorAll(".qarow");
+      const last = rows[rows.length - 1];
+      if (last) last.querySelector("input").focus();
+      repaint();
+      changed("struct");
+    });
+    const paint = () => {
+      for (const b of kindBtns) b.setAttribute("aria-checked", b.dataset.type === q.type ? "true" : "false");
+      for (const b of kindBtns) b.tabIndex = b.dataset.type === q.type ? 0 : -1;
+      yn.hidden = q.type !== "yes or no";
+      answers.hidden = q.type === "yes or no";
+      ask.placeholder = QUESTION_TYPES.find((t) => t[0] === q.type)[2];
+      if (!answers.hidden) paintAnswers();
+      repaint();
+    };
+    const group = el("div", { class: "qtypes", role: "radiogroup", "aria-label": "Answer with, for question " + (qi + 1) }, kindBtns);
+    group.addEventListener("keydown", (e) => {
+      const d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+      if (!d) return;
+      e.preventDefault();
+      const at = QUESTION_TYPES.findIndex((t) => t[0] === q.type), next = QUESTION_TYPES[(at + d + 3) % 3][0];
+      kindBtns.find((b) => b.dataset.type === next).click();
+    });
+    const rm = el("button", { type: "button", class: "fremove", title: "Remove this question", "aria-label": "Remove question " + (qi + 1) + (q.name.trim() ? ", " + q.name.trim() : "") }, icon("trash", 14));
+    rm.addEventListener("click", () => { list.splice(list.indexOf(q), 1); T.rebuild(); changed("struct"); add.focus(); });
+    const el2 = el("div", { class: "ned-q qcard" },
+      el("div", { class: "ned-qhead" }, el("span", { class: "qnum" }, "Question " + (qi + 1)), el("span", { class: "grow" }), rm),
+      field("Name", name, qi === 0 ? "A later step reads the answer as step_id.name.value." : null),
+      field("Ask", ask),
+      el("div", { class: "field" }, el("div", { class: "lab" }, el("span", { class: "qlab", id: id + "g" }, "Answer with")), group),
+      yn, answers);
+    paint();
+    return el2;
+  };
+  T.rebuild = () => { holder.replaceChildren(...list.map(card)); repaint(); };
+  add.addEventListener("click", () => {
+    list.push(blankQuestion());
+    T.rebuild();
+    const last = holder.lastElementChild && holder.lastElementChild.querySelector("input");
+    if (last) last.focus();
+    changed("struct");
+  });
+  T.root = el("div", { class: "qlist" }, holder, el("div", { class: "factions" }, add), warn);
+  T.rebuild();
+  return T;
+}
+
+// A question with its answers, as the server takes it.
+function questionsOut(list) {
+  return list.map((q) => {
+    const o = { name: q.name.trim(), ask: q.ask.trim(), type: q.type };
+    if (q.type === "yes or no") {
+      if (q.yesIf.trim() || q.noIf.trim()) { o.yesIf = q.yesIf.trim(); o.noIf = q.noIf.trim(); }
+    } else o.answers = q.answers.filter((a) => a.name.trim() || a.meaning.trim()).map((a) => ({ name: a.name.trim(), meaning: a.meaning.trim() }));
+    return o;
+  });
+}
+// A workflow is offered its own components, then those of the market that it
+// does not have yet.
+const componentsOf = (w) => {
+  const own = w.components || [];
+  return [...own, ...marketList().filter((e) => !own.some((c) => c.use === e.use)).map((e) => ({ ...e, market: true }))];
+};
+
+// ---- the market ----
+//
+// The server reads the list of components in git that anyone may take, from
+// where it was told to, and the page asks for it once. A step added from one
+// has the server take it from git and pin it in flowmaker.lock.
+
+const market = { state: "idle", services: [], error: null, source: "" };
+const marketList = () => (market.state === "ready" ? market.services : []);
+async function loadMarket(again) {
+  if (!state.editable || market.state === "loading" || (market.state === "ready" && !again)) return;
+  market.state = "loading";
+  try {
+    const m = await getJSON("/api/market");
+    Object.assign(market, { state: m.error ? "error" : "ready", services: m.services || [], error: m.error || null, source: m.source || "", skipped: m.skipped || 0 });
+  } catch (err) {
+    Object.assign(market, { state: "error", services: [], error: "The page could not reach the server." });
+  }
+  uiTick++;
+  render();
+}
 // A workflow is offered components from other folders too, so two can share a
 // name: one is told from another by its use, the path it is used by.
 const componentOf = (w, use) => componentsOf(w).find((c) => c.use === use) || null;
@@ -2200,6 +2999,7 @@ function hideAdder() {
 }
 
 function showAdder(w) {
+  loadMarket();
   if (!adder || adder.workflow !== w.name) {
     adder = buildAdder(w);
     // What the last save said is not news in a new form.
@@ -2215,15 +3015,13 @@ function focusAdder() {
   const A = adder;
   if (!A) return;
   const a = addOf(A.workflow);
-  const t = componentsOf(workflowByName(A.workflow) || { components: [] }).length === 0 ? insp.head.querySelector(".x")
-    : !a.component ? A.picker.querySelector("input[type=radio]")
-    : A.targets[1] || A.idBox;
+  const t = !a.component && !a.kind ? A.search : A.targets[1] || A.idBox;
   if (t) t.focus({ preventScroll: false });
 }
 
 function buildAdder(w) {
   const uid = ++formId;
-  const A = { workflow: w.name, from: undefined, posSig: "", compSig: "", detailKey: "", refSig: "", target: null, targets: [], uid, idBox: null };
+  const A = { workflow: w.name, from: undefined, posSig: "", compSig: "", detailKey: "", refSig: "", target: null, targets: [], uid, idBox: null, query: "", expanded: true, summarySig: "" };
   const posId = "pos" + uid;
   A.pos = el("select", { id: posId, class: "in" });
   A.pos.addEventListener("change", () => {
@@ -2238,26 +3036,94 @@ function buildAdder(w) {
     A.pos,
     el("p", { class: "hint-text" }, "Steps run in the order they have in the file, so this decides when it runs."),
     A.posWarn);
+
+  // The chooser: a search box, then the kinds of step in groups.
+  const group = "comp" + uid;
+  A.search = el("input", { id: "find" + uid, type: "text", class: "in find", placeholder: "What happens next?", autocomplete: "off", spellcheck: "false" });
+  A.search.addEventListener("input", () => { A.query = A.search.value; filterChoices(A); });
+  A.search.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      const first = A.groups.querySelector(".choice:not([hidden]) input");
+      if (first) first.click();
+    }
+  });
+  A.builtinEls = {};
+  const builtinRow = (b) => {
+    const input = el("input", { type: "radio", name: group, value: b.use });
+    input.addEventListener("change", () => { if (input.checked) pickKind(A.workflow, b.kind); });
+    const row = el("label", { class: "choice kind-" + b.kind },
+      input, kindTile(b.kind, 38),
+      el("span", { class: "ctext" }, el("span", { class: "chead" }, el("span", { class: "cname" }, b.name), el("span", { class: "ckind" }, KIND_LABEL[b.kind])), el("span", { class: "cdesc" }, b.text)));
+    A.builtinEls[b.kind] = { row, input };
+    return row;
+  };
+  const cgroup = (title, ...rows) => el("div", { class: "cgroup" }, el("div", { class: "cgroup-h" }, title), el("div", { class: "choices", role: "presentation" }, rows));
+  A.gModel = cgroup("Ask a model", builtinRow(BUILTIN.ai), builtinRow(BUILTIN.decide));
+  A.gAct = cgroup("Act", builtinRow(BUILTIN.http));
   A.choices = el("div", { class: "choices", role: "presentation" });
-  A.picker = el("fieldset", { class: "picker" }, el("legend", {}, "Component"), A.choices);
+  A.noComps = el("p", { class: "muted small nocomps" }, "None yet. A component is a step written once, with named inputs, in components/<name>/component.yaml in the workflow's folder.");
+  A.gComp = el("div", { class: "cgroup" }, el("div", { class: "cgroup-h" }, "Your components"), A.choices, A.noComps);
+  A.mchoices = el("div", { class: "choices", role: "presentation" });
+  A.gMarket = el("div", { class: "cgroup" }, el("div", { class: "cgroup-h" }, "From the market"), A.mchoices);
+  A.noMatch = el("p", { class: "muted small", hidden: true, role: "status" });
+  A.groups = el("div", { class: "cgroups" }, A.gModel, A.gAct, A.gComp, A.gMarket, A.noMatch);
+  A.finder = el("div", { class: "finder" }, el("label", { class: "vh", for: "find" + uid }, "Find a kind of step"), A.search);
+  // Once a kind is chosen the chooser folds into one line, to be opened again by Change.
+  A.summary = el("div", { class: "chosen", hidden: true });
+  A.picker = el("fieldset", { class: "picker chooser" }, el("legend", {}, "Kind of step"), A.summary, A.finder, A.groups);
   A.detail = el("div", { class: "adddetail" });
-  A.empty = el("div", { class: "emptystate" });
-  A.root = el("section", { class: "editform addform" }, A.empty, A.posField, A.picker, A.detail);
+  A.root = el("section", { class: "editform addform" }, A.posField, A.picker, A.detail);
   A.pick = (use) => pickComponent(A.workflow, use);
   A.submit = () => addStep();
   return A;
 }
 
+// filterChoices hides what the search does not match, and a group with nothing left.
+function filterChoices(A) {
+  const q = A.query.trim().toLowerCase();
+  let shown = 0;
+  for (const g of [A.gModel, A.gAct, A.gComp, A.gMarket]) {
+    let any = 0;
+    for (const row of g.querySelectorAll(".choice")) {
+      const on = !q || row.textContent.toLowerCase().includes(q);
+      row.hidden = !on;
+      if (on) any++;
+    }
+    g.hidden = !any && !(g === A.gComp && !q && !g.querySelector(".choice"));
+    shown += any;
+  }
+  A.noMatch.hidden = !(q && !shown);
+  A.noMatch.textContent = "Nothing is called “" + A.query.trim() + "”.";
+}
+
+function pickKind(name, kind) {
+  const a = addOf(name);
+  a.kind = kind;
+  a.component = null;
+  const w = workflowByName(name);
+  if (!a.idTouched && w) a.id = freeId(w, BUILTIN[kind].idBase);
+  const A = adder;
+  if (A) A.expanded = false;
+  if (w) syncAdder(w);
+  updateBar();
+  if (A && (A.targets[1] || A.idBox)) (A.targets[1] || A.idBox).focus();
+}
+
 function pickComponent(name, use) {
   const a = addOf(name);
   a.component = use;
+  a.kind = null;
   const w = workflowByName(name);
+  const A = adder;
+  if (A) A.expanded = false;
   if (w) {
     const comp = componentOf(w, use);
     if (!a.idTouched) a.id = freeId(w, comp ? comp.name : use);
     syncAdder(w);
   }
   updateBar();
+  if (A && (A.targets[1] || A.idBox)) (A.targets[1] || A.idBox).focus();
 }
 
 // settleChoice keeps the component chosen one that is still offered, and picks
@@ -2276,7 +3142,7 @@ function syncChoices(A, comps, current, far) {
     A.compSig = sig;
     const group = "comp" + A.uid;
     A.choiceEls = {};
-    A.choices.replaceChildren(...comps.map((c) => {
+    const rowOf = (c) => {
       const input = el("input", { type: "radio", name: group, value: c.use });
       input.addEventListener("change", () => { if (input.checked) A.pick(c.use); });
       const row = el("label", { class: "choice kind-" + c.kind },
@@ -2288,7 +3154,9 @@ function syncChoices(A, comps, current, far) {
           el("span", { class: "cin mono" }, (c.inputs || []).length ? "Takes " + c.inputs.map((i) => i.name).join(", ") : "Takes no input")));
       A.choiceEls[c.use] = { row, input };
       return row;
-    }));
+    };
+    A.choices.replaceChildren(...comps.filter((c) => !c.market).map(rowOf));
+    A.mchoices.replaceChildren(...comps.filter((c) => c.market).map(rowOf));
   }
   for (const [use, c] of Object.entries(A.choiceEls)) {
     c.input.checked = current === use;
@@ -2301,10 +3169,11 @@ function syncChoices(A, comps, current, far) {
 function syncDetail(A, w, comp, a, sig) {
   const key = comp.use + "|" + JSON.stringify(comp.inputs || []);
   if (key !== A.detailKey) { A.detailKey = key; A.refSig = ""; buildDetail(A, w, comp); }
-  if (!a.idTouched) a.id = freeId(w, comp.name);
+  if (!a.idTouched) a.id = freeId(w, comp.idBase || comp.name);
   setValue(A.idBox, a.id);
   setValue(A.whenBox, a.when);
   (comp.inputs || []).forEach((inp, i) => setValue(A.targets[i + 1], a.values[inp.name] || ""));
+  if (comp.kind && BUILTIN[comp.kind] === comp && A.kindSync) A.kindSync(a);
   idNote(A, w, a);
   if (sig !== A.refSig) { A.refSig = sig; buildRefs(A, w, a.after); }
 }
@@ -2314,21 +3183,6 @@ function syncAdder(w) {
   if (!A || A.workflow !== w.name) return;
   const comps = componentsOf(w);
   if (A.from !== selected.add) { A.from = selected.add; a.after = resolveAfter(w, selected.add); }
-
-  // Nothing to add from: say where components come from.
-  A.empty.hidden = comps.length > 0;
-  A.posField.hidden = A.picker.hidden = A.detail.hidden = comps.length === 0;
-  if (!comps.length) {
-    if (!A.empty.firstChild) {
-      const folder = folderOf(w.path) + "/components/";
-      A.empty.replaceChildren(
-        el("div", { class: "etitle" }, "No components in this workflow yet"),
-        el("p", {}, "A step is added from a component: a step written once, with named inputs, that any workflow can use."),
-        el("p", {}, "Components live in ", el("span", { class: "mono" }, "components/<name>/component.yaml"), " in the workflow's folder, here ", el("span", { class: "mono" }, folder + "<name>/component.yaml"), "."),
-        el("p", { class: "muted small" }, "Write one in your editor and commit it. This page notices by itself, and it appears here."));
-    }
-    return;
-  }
 
   // Position.
   const valid = a.after === "trigger" || w.steps.some((s) => s.id === a.after);
@@ -2343,12 +3197,33 @@ function syncAdder(w) {
   A.pos.value = valid ? a.after : "";
   A.posWarn.hidden = valid;
 
-  // Components.
-  settleChoice(w, comps, a);
-  syncChoices(A, comps, a.component, (c) => c.use.startsWith("../"));
+  // What to add: a component that is no longer offered is let go.
+  if (a.component && !comps.some((c) => c.use === a.component)) a.component = null;
+  syncChoices(A, comps, a.component, (c) => c.use.startsWith("../") || !!c.market);
+  for (const [kind, c] of Object.entries(A.builtinEls)) {
+    c.input.checked = a.kind === kind;
+    c.row.classList.toggle("on", a.kind === kind);
+  }
+  A.noComps.hidden = comps.some((c) => !c.market);
+  const comp = chosenOf(w, a);
+  if (!comp) A.expanded = true;
+  A.groups.hidden = A.finder.hidden = !A.expanded;
+  A.summary.hidden = A.expanded;
+  filterChoices(A);
+  if (comp) {
+    const sig = comp.use + "|" + comp.name + "|" + (comp.kind || "");
+    if (sig !== A.summarySig) {
+      A.summarySig = sig;
+      const change = el("button", { type: "button", class: "linkbtn" }, "Change");
+      change.addEventListener("click", () => { A.expanded = true; A.search.value = ""; A.query = ""; const now = workflowByName(A.workflow); if (now) syncAdder(now); A.search.focus(); });
+      A.summary.replaceChildren(kindTile(comp.kind, 34),
+        el("span", { class: "ctext" }, el("span", { class: "cname" + (comp.use.startsWith("@") ? "" : " mono") }, comp.name), el("span", { class: "ckind" }, comp.use.startsWith("@") ? comp.text : (KIND_LABEL[comp.kind] || comp.kind) + " component")),
+        change);
+      A.summary.className = "chosen kind-" + comp.kind;
+    }
+  } else A.summarySig = "";
 
   // The step itself.
-  const comp = componentOf(w, a.component);
   A.detail.hidden = !comp;
   if (!comp) { A.detailKey = ""; return; }
   syncDetail(A, w, comp, a, w.name + "|" + a.after + "|" + w.steps.map((s) => s.id + ":" + (s.outputs || []).join("+")).join(",") + "|" + JSON.stringify(w.sample || null));
@@ -2405,7 +3280,8 @@ function buildDetail(A, w, comp) {
     "Empty means the step always runs." + (decide ? " For example " + decide.id + "." + decide.questions[0].name + ".value == \"…\"." : ""));
   A.targets.push(A.whenBox);
 
-  const fields = (comp.inputs || []).map((inp) => {
+  A.kindSync = null;
+  const fields = BUILTIN[comp.kind] === comp ? [] : (comp.inputs || []).map((inp) => {
     const id = "sin" + A.uid + "x" + inp.name.replace(/[^A-Za-z0-9_]/g, "_");
     // One line, so that Enter adds the step; an expression for an object or a list may need more.
     const long = inp.type === "object" || inp.type === "list" || inp.type === "any";
@@ -2419,15 +3295,72 @@ function buildDetail(A, w, comp) {
       : null;
     return plainField(A, inp.name, el("span", { class: "tag", title: "Type: " + inp.type }, inp.type), box, hint);
   });
-  const inputs = fields.length
+  const inputs = BUILTIN[comp.kind] === comp ? buildKindFields(A, w, a, comp.kind, textBox, remember)
+    : fields.length
     ? el("fieldset", { class: "group" }, el("legend", {}, "Inputs"), fields)
     : el("p", { class: "muted small" }, comp.name + " takes no input.");
 
   A.refs = el("div", { class: "refs" });
   A.detail.replaceChildren(...[
-    el("h2", { class: "sub" }, "New " + (KIND_LABEL[comp.kind] || comp.kind) + " step from " + comp.name),
+    el("h2", { class: "sub" }, BUILTIN[comp.kind] === comp ? "New " + comp.name + " step" : "New " + (KIND_LABEL[comp.kind] || comp.kind) + " step from " + comp.name),
     comp.kind === "flow" ? el("p", { class: "muted small flownote" }, "Runs steps of its own, written in the component's file. This step only chooses what goes in.") : null,
     idField, A.refs, whenField, inputs].filter(Boolean));
+}
+
+// buildKindFields makes the fields of a step that does its own work, and
+// A.kindSync, which puts what has been typed (kept in `a`) back into them.
+function buildKindFields(A, w, a, kind, textBox, remember) {
+  const edit = (apply) => (v) => { apply(v); a.edited = true; };
+  const sync = [];
+  const field = (label, box, hint, tag) => plainField(A, label, tag || null, box, hint);
+  const out = [];
+  const modelBox = () => {
+    const id = "smd" + A.uid + "x";
+    const box = textBox(id, { mono: true, set: edit((v) => { a.models[kind] = v; }) });
+    sync.push(() => setValue(box, a.models[kind]));
+    return field("Model", box, "As the server names it: provider, then the model.");
+  };
+  // A field that takes a whole key: a key clicked above replaces what is there.
+  const inputBox = () => {
+    const id = "sin" + A.uid + "xread";
+    const box = textBox(id, { mono: true, set: edit((v) => { a.input = v; }) });
+    box.dataset.whole = "1";
+    remember(box);
+    A.targets.push(box);
+    sync.push(() => setValue(box, a.input));
+    return field("What it reads", box, A.readHint || "A key, such as ${trigger.body}. Click one above to put it here.");
+  };
+  if (kind === "http") {
+    const mid = "smt" + A.uid + "x";
+    const method = el("select", { id: mid, class: "in" }, METHODS.map((m) => el("option", { value: m }, m)));
+    method.addEventListener("change", () => { a.method = method.value; a.edited = true; updateBar(); });
+    sync.push(() => { method.value = a.method; });
+    const uid = "sur" + A.uid + "x";
+    const url = textBox(uid, { mono: true, set: edit((v) => { a.url = v; }) });
+    remember(url);
+    A.targets.push(url);
+    sync.push(() => setValue(url, a.url));
+    out.push(el("div", { class: "field" }, el("div", { class: "lab" }, el("label", { for: mid }, "Method")), method),
+      field("URL", url, "For example ${env.BILLING_URL}. Click a key above to put it here."));
+  } else if (kind === "decide") {
+    A.questions = buildQuestionList(a.questions, () => { a.edited = true; updateBar(); }, A.uid);
+    out.push(modelBox(), inputBox(),
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Questions")),
+      A.questions.root);
+  } else if (kind === "ai") {
+    const pid = "spr" + A.uid + "x";
+    const prompt = el("textarea", { id: pid, class: "in mono prompt", rows: 10, spellcheck: "false", placeholder: "Tell the model what to do with what it reads." });
+    prompt.addEventListener("input", () => { a.prompt = prompt.value; a.edited = true; updateBar(); });
+    sync.push(() => setValue(prompt, a.prompt));
+    A.fieldTable = buildFieldTable(a.fields, () => { a.edited = true; updateBar(); }, A.uid);
+    out.push(modelBox(), inputBox(),
+      el("div", { class: "field" }, el("div", { class: "lab" }, el("label", { for: pid }, "Instructions")), prompt,
+        el("p", { class: "hint-text" }, A.promptHint || "Written to prompts/<step id>.md and sent as it is: the model gets what it reads apart from it, so no ${...} goes here.")),
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "The answer has these fields")),
+      A.fieldTable.root);
+  }
+  A.kindSync = () => sync.forEach((f) => f());
+  return el("div", { class: "kindfields" }, out);
 }
 
 // buildRefs shows what can be referred to at the chosen position. A click puts
@@ -2455,6 +3388,8 @@ function insertRef(A, chip) {
   const raw = t.dataset.raw === "1";
   const text = raw ? chip.text : "${" + chip.text + "}";
   t.focus();
+  // A field that takes one key has it replaced, not added to.
+  if (t.dataset.whole === "1" && (t.value.trim() === "" || WHOLE_REF.test(t.value.trim())) && !chip.open) t.select();
   const from = t.selectionStart == null ? t.value.length : t.selectionStart, to = t.selectionEnd == null ? from : t.selectionEnd;
   t.setRangeText(text, from, to, "end");
   // An unfinished reference leaves the caret where the rest is typed.
@@ -2466,7 +3401,7 @@ async function addStep() {
   if (!view || !state.editable) return;
   const name = view.w.name, w = workflowByName(name), st = uiOf(name), a = addOf(name);
   if (!w || w.problem || st.saving) return;
-  const comp = componentOf(w, a.component);
+  const comp = chosenOf(w, a);
   if (!comp) return;
   if (a.after !== "trigger" && !w.steps.some((s) => s.id === a.after)) {
     st.notice = { kind: "error", did: "add", error: "The step this was to go after is no longer in the workflow. Choose a position and add it again." };
@@ -2479,12 +3414,18 @@ async function addStep() {
     const v = a.values[inp.name] || "";
     if (v.trim() !== "") given[inp.name] = v;
   }
+  // A kind that does its own work says what it does; a component says which one and what goes in.
+  const add = { id, after: a.after, when: a.when.trim() };
+  if (a.kind === "http") Object.assign(add, { kind: "http", method: a.method, url: a.url.trim() });
+  else if (a.kind === "decide") Object.assign(add, { kind: "decide", model: a.models.decide.trim(), input: a.input.trim(), questions: questionsOut(a.questions) });
+  else if (a.kind === "ai") Object.assign(add, { kind: "ai", model: a.models.ai.trim(), input: a.input.trim(), prompt: a.prompt, fields: fieldsOut(a.fields) });
+  else Object.assign(add, { use: comp.use, with: given });
   st.saving = true;
   st.notice = null;
   updateBar();
   let r = null, failure = null;
   try {
-    r = await request("POST", "/api/steps", { workflow: name, rev: w.rev, add: { id, after: a.after, use: comp.use, when: a.when.trim(), with: given } });
+    r = await request("POST", "/api/steps", { workflow: name, rev: w.rev, add });
   } catch (err) {
     failure = { kind: "network", did: "add", id };
   }
@@ -2602,7 +3543,7 @@ function makerBase(m) {
 function draftWorkflow() {
   const m = makeOf(), w = makerBase(m), comp = settleMaker(m, makerComps());
   if (comp) {
-    w.steps = [{ id: m.step.id.trim() || "step", kind: comp.kind, subtitle: comp.name, when: m.step.when.trim(), reads: [], outputs: [], inner: comp.inner || undefined }];
+    w.steps = [{ id: m.step.id.trim() || "step", kind: comp.kind, subtitle: comp.name, component: comp.name, when: m.step.when.trim(), reads: [], outputs: [], inner: comp.inner || undefined }];
   }
   return w;
 }
@@ -2893,21 +3834,6 @@ function testOutcome(r) {
   return outcome(r);
 }
 
-function testRunRow(w, r) {
-  const v = verdictOf(r), V = VERDICT[v];
-  return el("button", {
-      class: "row run test " + rowTone(v), type: "button", "aria-current": r.run === selected.run ? "true" : null,
-      "aria-label": "Test " + r.test + ", " + V.word + ", " + when(r.started),
-      title: r.test,
-      onclick: () => go({ run: r.run === selected.run ? null : r.run, node: null }),
-    },
-    statusMark(V.mark, 11),
-    el("span", { class: "name who" }, el("span", { class: "eyebrow" }, el("b", {}, "Test"), " · " + when(r.started)), el("span", { class: "tn" }, r.test)),
-    el("span", { class: "aside" }, v === "running" ? "running" : v === "unrun" ? "" : duration(r.ms)),
-    el("span", { class: "seg", "aria-hidden": "true" }, w.steps.map((s) => el("i", { class: progress(r, s.id) }))),
-    el("span", { class: "sub" }, testOutcome(r)));
-}
-
 // ---- the round ----
 
 function syncRounds() {
@@ -3004,7 +3930,7 @@ async function startTests(name, index) {
 function clearRound(name) {
   delete rounds[name];
   uiTick++;
-  afterRender = () => { const b = document.querySelector('[data-focus="side:test-all"]'); if (b) b.focus({ preventScroll: true }); };
+  afterRender = () => { const b = document.querySelector('[data-focus="ov:test-all"]'); if (b) b.focus({ preventScroll: true }); };
   render();
 }
 
@@ -3027,7 +3953,12 @@ function startButton(w, index, label, focus, opts) {
       "aria-disabled": busy ? "true" : "false",
       title: busy ? "Tests are running" : "Runs the saved file. Calls the models for real and sends no requests.",
     }, icon("run", 12), label);
-  b.addEventListener("click", () => { if (!busy) startTests(w.name, index); });
+  b.addEventListener("click", () => {
+    if (busy) return;
+    // From the drawing, the list of tests opens so the results can be seen.
+    if (o.show) go({ list: "tests", run: null, node: null });
+    startTests(w.name, index);
+  });
   return b;
 }
 
@@ -3051,23 +3982,7 @@ function testErrorNotice(w) {
   return el("div", { class: "notice bad", role: "alert" }, el("div", { class: "nhead" }, el("strong", {}, "The tests did not start"), close), el("p", {}, st.error));
 }
 
-// ---- left: the round ----
-
-function testsBlock(w) {
-  const cases = w.cases || [];
-  if (!state.editable || !cases.length) return [];
-  const v = roundView(w.name);
-  return [
-    el("h2", {}, "Tests", el("span", { class: "count" }, cases.length)),
-    el("div", { class: "testbox" },
-      unsavedNote(w),
-      testErrorNotice(w),
-      v ? roundBox(w, v) : canTest(w)
-        ? el("div", { class: "idle" }, startButton(w, null, "Run all tests", "side:test-all", { block: true }),
-            el("p", { class: "tnote" }, "Calls the models for real. Sends no requests."))
-        : el("p", { class: "tnote" }, "Tests cannot run while the file has a problem.")),
-  ];
-}
+// ---- the round ----
 
 function roundBox(w, v) {
   const s = roundSummary(v);
@@ -3099,7 +4014,7 @@ function roundBox(w, v) {
     el("div", { class: "rlist" }, list),
     v.round.unsaved ? el("p", { class: "tnote" }, "Ran the saved file. " + plural(v.round.unsaved, "unsaved change") + (v.round.unsaved === 1 ? " was" : " were") + " not in it.") : null,
     stale ? el("p", { class: "tnote" }, "The file was saved after this round started.") : null,
-    !v.active && canTest(w) ? startButton(w, null, "Run all again", "side:test-all", { small: true }) : null);
+    !v.active && canTest(w) ? startButton(w, null, "Run all again", "round:test-all", { small: true }) : null);
 }
 
 // ---- the checks ----
@@ -3182,7 +4097,7 @@ function testRunDetails(w, run) {
 
   const again = spec && canTest(w) ? startButton(w, idx, "Run this test again", "insp:test-again", { small: true }) : null;
   return [
-    header("workflow", "run", run.test, "Test run of " + (comp ? "component " + compTitle(w) : run.workflow)),
+    header("workflow", "run", run.test, "Test run of " + (comp ? "component " + compTitle(w) : run.workflow), false, backTo(w, run)),
     section("Result", panel,
       run.error ? el("pre", { class: v === "unrun" ? "plain" : "error" }, run.error) : null,
       again ? el("div", { class: "againrow" }, again) : null,
@@ -3226,11 +4141,13 @@ function latestTestRun(name, test) {
   return best;
 }
 
-function testsSection(w) {
+// testsSection lists the tests under the given heading: "Tests" with a
+// component's details, none in the list of a workflow's tests.
+function testsSection(w, title = "Tests") {
   if (!state.editable) return null;
   const cases = w.cases || [];
   if (!cases.length) {
-    return section("Tests", el("div", { class: "emptystate" },
+    return section(title, el("div", { class: "emptystate" },
       el("div", { class: "etitle" }, "No tests yet"),
       canAddTest(w) ? el("p", {}, "Keep a run that did the right thing as a test: open a run and choose ", el("strong", {}, "Keep as a test"), ". Or write one from nothing.") : null,
       canAddTest(w) ? el("p", {}, newTestButton(w)) : null,
@@ -3240,11 +4157,11 @@ function testsSection(w) {
       el("p", { class: "muted small" }, "Write them in your editor and commit. This page notices by itself, and they appear here.")));
   }
   const v = roundView(w.name);
-  return section("Tests",
+  return section(title,
     el("p", { class: "muted" }, "Tests call the AI models for real, so they check what the model actually answers. No HTTP request is sent. They run the saved file."),
     canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) ? startButton(w, null, "Run all tests", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null)
       : el("p", { class: "muted small" }, "Tests cannot run while the file has a problem."),
-    canAddTest(w) ? el("p", { class: "muted small" }, "To keep a run as a test, open it on the left and choose Keep as a test.") : null,
+    canAddTest(w) ? el("p", { class: "muted small" }, "To keep a run as a test, open it and choose Keep as a test.") : null,
     unsavedNote(w),
     testErrorNotice(w),
     el("ul", { class: "tcases" }, cases.map((c, i) => testCase(w, c, i, v))));
@@ -3875,24 +4792,1321 @@ function renderChanges(w) {
   ].filter(Boolean));
 }
 
+// ---- the node editor ----
+//
+// A large dialog over the dimmed drawing, for one step: what the step can read
+// on the left, its fields laid out by meaning in the middle, what it put out on
+// the right. It is the address /e/<step>. It keeps no copy of the file: what is
+// typed goes into `drafts` through the same controls as the details column
+// (makeControl), so the two always agree, and its footer is the save bar of the
+// page in another place. Only a step of a workflow opens it, on a server that
+// edits files; a component's own steps do not.
+
+const WHOLE_REF = /^\$\{\s*([^{}]+?)\s*\}$/;
+const SOURCE_WORD = { trigger: "the request", decide: "decided", ai: "wrote", http: "sent", flow: "ran" };
+
+// ---- the trigger and the response, in the editor ----
+//
+// The trigger and the response open in the node editor too, in the shape of
+// a step: nodeOf gives each an id, a kind and the fields the page may change.
+// What starts the workflow, and which fields the response's body has, change
+// at once, as adding or removing a step does; values are drafts like any.
+
+function nodeOf(w, id) {
+  if (!w) return null;
+  if (id === "trigger") return w.edit && w.edit.length ? { id, kind: "trigger", end: true, edit: w.edit, reads: [], outputs: [] } : null;
+  if (id === "response") return w.respond && w.respond.edit ? { id, kind: "response", end: true, edit: w.respond.edit, reads: w.respond.reads || [], outputs: [] } : null;
+  return w.steps.find((s) => s.id === id) || null;
+}
+
+// endTitle is what the editor calls the trigger or the response.
+const endTitle = (w, step) => (step.kind === "trigger" ? (isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Trigger") : "Response");
+
+// changeNow makes a change of shape at once and says how it went, as adding
+// a step does: a field of the body in or out, or what starts the workflow.
+async function changeNow(name, url, extra, title) {
+  const w = workflowByName(name), st = uiOf(name);
+  if (!w || st.saving) return;
+  st.saving = true;
+  st.notice = null;
+  updateBar();
+  let r = null, failure = null;
+  try {
+    r = await request("POST", url, { workflow: name, rev: w.rev, ...extra });
+  } catch (err) {
+    failure = { kind: "network" };
+  }
+  st.saving = false;
+  if (!failure && r.ok && r.body.workflow) {
+    epoch++;
+    changesEpoch++;
+    const prev = workflowByName(name);
+    replaceWorkflow(r.body.workflow);
+    known[name] = r.body.workflow.rev;
+    const dropped = reattach(name, prev, r.body.workflow);
+    st.notice = { kind: "saved", title, files: [r.body.workflow.path || w.path], dropped: dropped.length ? dropped : null };
+  } else st.notice = failure || failureOf(r, "workflow");
+  await refresh();
+  uiTick++;
+  shown = "";
+  render();
+}
+
+function switchTrigger(name, to, value) {
+  if (!value) return;
+  if (to === "webhook" && !value.startsWith("/")) value = "/" + value;
+  changeNow(name, "/api/trigger", to === "cron" ? { cron: value } : { webhook: value }, to === "cron" ? "Now runs on " + value : "Now starts on POST " + value);
+}
+
+function buildTriggerForm(w, step, key) {
+  const f = { key, workflow: w.name, node: "trigger", fields: step.edit, controls: [], root: ed.midBody };
+  const cs = step.edit.map((field) => {
+    const c = makeControl(f, field);
+    c.refable = false;
+    f.controls.push(c);
+    return c;
+  });
+  const at = (...path) => cs.find((c) => pathKey(c.field.path) === pathKey(path));
+  const path = at("trigger", "webhook"), schema = at("trigger", "input"), cron = at("trigger", "cron");
+  const webhook = isWebhook(w), schedule = !webhook && !!w.trigger;
+
+  // Starts on: a request or a schedule. Choosing the other asks for its path or its cron line.
+  const switchBox = el("div", { class: "ned-switch", hidden: true });
+  const openSwitch = (to) => {
+    const box = el("input", { type: "text", class: "in mono", placeholder: to === "cron" ? "0 9 * * *" : "/" + w.name, "aria-label": to === "cron" ? "The schedule, as a cron line" : "The path of the request" });
+    const ok = el("button", { type: "button", class: "btn primary small" }, to === "cron" ? "Run it on this schedule" : "Start it on this path");
+    const cancel = el("button", { type: "button", class: "btn small" }, "Cancel");
+    ok.addEventListener("click", () => switchTrigger(w.name, to, box.value.trim()));
+    cancel.addEventListener("click", () => { switchBox.hidden = true; switchBox.replaceChildren(); });
+    box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); ok.click(); } });
+    const loses = to === "cron"
+      ? (webhook ? " It stops answering " + w.trigger + "." + (w.respond ? " A workflow that answers its caller cannot run on a schedule, so its response has to come out of the file first." : "") : "")
+      : (schedule ? " It stops running on " + w.trigger.replace(/^cron /, "") + "." : "");
+    switchBox.replaceChildren(
+      el("p", { class: "ned-words" }, (to === "cron" ? "Run it on a schedule instead of on requests." : "Start it on requests instead of a schedule.") + loses + " This is written at once."),
+      el("div", { class: "ned-switchrow" }, box, ok, cancel));
+    switchBox.hidden = false;
+    box.focus();
+  };
+  const card = (on, to, title, text, iconName) => {
+    const b = el("button", { type: "button", class: "ned-start", "aria-pressed": on ? "true" : "false" },
+      el("span", { class: "tile kind-trigger" }, icon(iconName, 16)),
+      el("span", { class: "ctext" }, el("span", { class: "cname" }, title), el("span", { class: "cdesc" }, text)));
+    b.addEventListener("click", () => { if (!on) openSwitch(to); });
+    return b;
+  };
+  const params = [
+    el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Starts on")),
+    el("div", { class: "ned-starts", role: "group", "aria-label": "Starts on" },
+      card(webhook, "webhook", "A request", "POST to a path of this server", "trigger"),
+      card(schedule, "cron", "A schedule", "At the times a cron line gives", "clock")),
+    switchBox,
+  ];
+  if (path) {
+    relabel(path, "Path");
+    path.input.classList.add("mono");
+    const holder = el("div", { class: "ned-prefixed" }, el("span", { class: "ned-prefix mono", "aria-hidden": "true" }, "POST"));
+    path.input.replaceWith(holder);
+    holder.append(path.input);
+    params.push(path.row, el("p", { class: "ned-words" }, "Once it is saved, whatever sends to " + w.trigger.slice(5) + " must send to the new path."));
+  }
+  if (cron) {
+    relabel(cron, "Schedule");
+    cron.input.classList.add("mono");
+    params.push(cron.row, el("p", { class: "ned-words" }, "Minute, hour, day of the month, month and day of the week, as cron writes them."));
+  }
+  if (schema) { relabel(schema, "The body must match"); params.push(schema.row); }
+  for (const c of cs) if (c !== path && c !== schema && c !== cron) params.push(c.row);
+  if (webhook) {
+    const open = el("button", { type: "button", class: "linkbtn" }, "Open the response");
+    open.addEventListener("click", () => openEditor("response"));
+    params.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "The caller gets")),
+      el("p", { class: "ned-callergets" }, w.respond ? ["What the response says, once the steps have run. ", open] : "The run's id at once, or with ?wait=true the finished run."));
+  }
+  f.params = params;
+  f.settings = [];
+  return f;
+}
+
+// takeOut is the way to take a field out of the body: like Discard, the first
+// click arms it and the second does it.
+function takeOut(w, name) {
+  const b = el("button", { type: "button", class: "linkbtn ned-takeout", title: "Take " + name + " out of the body" }, "Take out");
+  let armed = false, timer = 0;
+  b.addEventListener("click", () => {
+    if (!armed) {
+      armed = true;
+      b.textContent = "Take " + name + " out?";
+      b.classList.add("armed");
+      timer = setTimeout(() => { armed = false; b.textContent = "Take out"; b.classList.remove("armed"); }, 4000);
+      return;
+    }
+    clearTimeout(timer);
+    changeNow(w.name, "/api/edit", { edits: [{ path: ["respond", "body", name], value: "", remove: true, node: "response" }] }, "Took " + name + " out of the body");
+  });
+  return b;
+}
+
+// addField is a row to add a field to the body: its name and its value, which
+// a key from the left can be dropped on.
+function addField(w) {
+  const name = el("input", { type: "text", class: "in mono", placeholder: "name", "aria-label": "Name of the new field", spellcheck: "false", autocomplete: "off" });
+  const value = el("input", { type: "text", class: "in", placeholder: "a value, or drop a key here", "aria-label": "Value of the new field", spellcheck: "false", autocomplete: "off" });
+  const add = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add a field");
+  const note = el("p", { class: "conflict", hidden: true });
+  const send = () => {
+    const n = name.value.trim(), v = value.value.trim();
+    note.hidden = !!(n && v);
+    note.textContent = !n ? "Give the field a name." : !v ? "Give " + n + " a value." : "";
+    if (n && v) changeNow(w.name, "/api/edit", { edits: [{ path: ["respond", "body", n], value: v, node: "response" }] }, "Added " + n + " to the body");
+  };
+  add.addEventListener("click", send);
+  for (const box of [name, value]) box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); send(); } });
+  value.addEventListener("dragover", (e) => { if (dragRef) { e.preventDefault(); value.classList.add("drop"); } });
+  value.addEventListener("dragleave", () => value.classList.remove("drop"));
+  value.addEventListener("drop", (e) => {
+    value.classList.remove("drop");
+    if (!dragRef) return;
+    e.preventDefault();
+    value.value = "${" + dragRef.path + "}";
+    dragRef = null;
+    value.focus();
+  });
+  return el("div", { class: "ned-addfield" }, el("div", { class: "ned-addrow" }, name, value, add), note);
+}
+
+function buildResponseForm(w, step, key) {
+  const f = { key, workflow: w.name, node: "response", fields: step.edit, controls: [], root: ed.midBody };
+  const cs = step.edit.map((field) => {
+    const c = makeControl(f, field);
+    c.refable = field.kind === "text" || field.kind === "expression";
+    f.controls.push(c);
+    return c;
+  });
+  const status = cs.find((c) => pathKey(c.field.path) === pathKey(["respond", "status"]));
+  const body = cs.filter((c) => c.field.group === "Body");
+  const params = [];
+  if (status) { relabel(status, "Status"); params.push(status.row); }
+  params.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Body"), el("span", { class: "ned-count" }, String(body.length))));
+  const fields = el("div", { class: "ned-body" });
+  for (const c of body) {
+    if (c.refable) dataField(c);
+    c.row.classList.add("ned-bodyrow");
+    c.row.querySelector("label").classList.add("mono");
+    c.row.querySelector(".lab").append(takeOut(w, c.field.label));
+    fields.append(c.row);
+  }
+  const isMap = !!w.respond.body && typeof w.respond.body === "object" && !Array.isArray(w.respond.body);
+  if (isMap) fields.append(addField(w));
+  params.push(fields, el("p", { class: "ned-words" }, isMap
+    ? "A field takes a value as written, or a key from Input. The caller gets them as one JSON object."
+    : "The body is written as one value, not as fields, so its fields are changed in the file."));
+  for (const c of cs) if (c !== status && !body.includes(c)) params.push(c.row);
+  for (const c of cs) if (c.refable) wireDrop(c);
+  f.params = params;
+  f.settings = [];
+  return f;
+}
+
+// keyRow is one key in a column of the editor: its type, the key, and its value.
+function keyRow(r, source, kind, onPick) {
+  const shown = previewOf(r.value);
+  const p = refPill(r.path, source, kind, r.short);
+  p.addEventListener("click", () => onPick(r.path));
+  p.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick(r.path); } });
+  return el("div", { class: "ned-row" },
+    el("span", { class: "ned-type", "aria-hidden": "true" }, shown === null ? "·" : typeTag(r.value)),
+    p,
+    el("span", { class: "ned-val-text" + (shown === null ? " none" : ""), title: shown === null ? null : shown }, shown === null ? "" : shown));
+}
+
+// The trigger's left column: a request it took, and how to send one.
+function paintTriggerInput(w, ran) {
+  const got = ran && ran.trigger && typeof ran.trigger === "object" ? ran.trigger : null;
+  const sample = got ? (got.body !== undefined ? got.body : got) : w.sample;
+  put(ed.inCol.meta, got ? ["from run ", el("span", { class: "mono" }, ran.run)] : w.sample !== undefined ? "from its first test" : "none yet");
+  ed.inCol.seg.replaceChildren();
+  const body = [sample !== undefined ? jsonView(sample) : el("p", { class: "ned-plain" }, "No request has come yet, and no test gives one.")];
+  if (isWebhook(w)) {
+    body.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Try it")), example(w),
+      el("p", { class: "ned-words" }, w.respond ? "The request waits for the answer." : "With ?wait=true the answer is the finished run. Without it, the run's id comes back at once."));
+  } else if (w.trigger) body.push(el("p", { class: "ned-words" }, "It runs on its schedule. flowmaker run runs it now."));
+  ed.inCol.body.replaceChildren(...body);
+  setNote(ed.inCol, "");
+}
+
+const copyRef = (col, path) => {
+  const text = "${" + path + "}";
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => setNote(col, "Copied " + text + ". Paste it into a field of a step."), () => setNote(col, "Press Ctrl+C on " + text));
+  else setNote(col, text + " is what a step writes to use it.");
+};
+
+// The trigger's right column: what steps read of it, and which steps do.
+function paintTriggerOutput(w, ran) {
+  ed.outCol.seg.replaceChildren();
+  put(ed.outCol.meta, "what steps read");
+  const got = ran && ran.trigger && typeof ran.trigger === "object" ? ran.trigger : null;
+  const rows = [];
+  if (isWebhook(w) || !w.trigger) {
+    const sample = got ? got.body : w.sample;
+    rows.push({ path: "trigger.body", short: "body", value: sample });
+    flattenBody("trigger.body", sample, 0, rows);
+  } else rows.push({ path: "trigger.time", short: "time", value: got ? got.time : undefined });
+  const readers = w.steps.filter((s) => (s.reads || []).includes("trigger"));
+  const read = (s) => { const b = el("button", { type: "button", class: "pill link mono", title: "Open " + s.id }, s.id); b.addEventListener("click", () => openEditor(s.id)); return b; };
+  ed.outCol.body.replaceChildren(
+    el("div", { class: "ned-src kind-trigger" }, rows.map((r) => keyRow(r, "trigger", "trigger", (p) => copyRef(ed.outCol, p)))),
+    el("div", { class: "ned-later" }, el("span", { class: "ned-h" }, "Read by"),
+      readers.length ? el("div", { class: "ned-pills" }, readers.map(read)) : el("p", { class: "ned-plain" }, "No step reads it yet.")));
+  if (!ed.outCol.note.textContent) setNote(ed.outCol, "Click a key to copy it, then paste it into a field of a step.");
+}
+
+// The response's right column: what the caller got in the run on show.
+function paintResponseOutput(w, ran) {
+  ed.outCol.seg.replaceChildren();
+  const body = [];
+  if (!ran) {
+    ed.outCol.meta.replaceChildren("no run yet");
+    body.push(el("p", { class: "ned-plain" }, "Nothing has run yet, so no caller has been answered. Send the workflow a request with the curl command under the trigger, then come back."));
+  } else if (!ran.response) {
+    ed.outCol.meta.replaceChildren("run ", el("span", { class: "mono" }, ran.run));
+    body.push(el("p", { class: "ned-plain" }, ran.status === "running" ? "The run has not got this far yet."
+      : ran.status === "failed" ? "A step failed first, so the caller got 500 with only the run's id."
+      : "This run was not started by a request, so nobody was waiting for an answer."));
+  } else {
+    const got = ran.response;
+    ed.outCol.meta.replaceChildren(view.run ? "this run" : "last run");
+    body.push(el("div", { class: "ned-qrow" }, el("span", { class: "ref static kind-response" }, String(got.status)), el("span", { class: "ned-faint" }, got.status >= 400 ? "a status the workflow chose itself" : "answered")));
+    body.push(got.body !== undefined && got.body !== null ? jsonView(got.body) : el("p", { class: "ned-plain" }, "No body."));
+    const headers = got.headers ? Object.entries(got.headers) : [];
+    if (headers.length) body.push(el("div", { class: "ned-later" }, el("span", { class: "ned-h" }, "Headers"), pairs(headers.map(([k, v]) => [k, mono(String(v))]))));
+  }
+  const drafted = dirtyCount(w.name) && draftCountFor(w.name, "response");
+  if (drafted) body.push(el("p", { class: "ned-warn" }, "Unsaved: once saved, the next run answers with your " + plural(drafted, "change") + "."));
+  ed.outCol.body.replaceChildren(...body);
+  setNote(ed.outCol, "");
+}
+
+let ed = null;          // the editor now on the page, if any
+let dragRef = null;     // the key being dragged: { path, source }
+const stepTests = {};   // "workflow|step" -> { state: running | done | error, run, at, rev, unsaved, result, error }
+
+const canOpen = (w, id) => !!w && !!state.editable && !w.problem && !w.draft && !isComp(w) && !!nodeOf(w, id);
+function openEditor(id) { if (view && canOpen(view.w, id)) go({ node: id, edit: id }); }
+// Closing the editor leaves the step too: it has no other view to fall back to.
+// A save the editor already said was done is not said again behind it.
+function closeEditor() {
+  if (ed) {
+    const st = uiOf(ed.workflow);
+    if (st.notice && st.notice.kind === "saved") st.notice = null;
+  }
+  go({ edit: null, node: null });
+}
+// editing is the step the editor is open on: the one the address names, or a
+// step picked on the drawing, in a run or from a link, when it can be edited.
+const editing = (w) => (!w ? null : selected.edit || (selected.node && canOpen(w, selected.node) ? selected.node : null));
+
+const curOf = () => {
+  const w = ed ? workflowByName(ed.workflow) : null;
+  return { w, step: w ? nodeOf(w, ed.step) : null };
+};
+// The run the editor shows: the one picked, else the latest of the workflow.
+const runShown = () => (view ? view.run || view.auto : null);
+const testKey = () => ed.workflow + "|" + ed.step;
+
+function aboutStep(step) {
+  if (step.kind === "decide") return "Asks a decision model typed questions and gets probabilities back";
+  if (step.kind === "ai") return "Asks a model to write structured output";
+  if (step.kind === "flow") return "Runs the " + (step.component || "") + " component, made of " + plural((step.inner || []).length, "step");
+  if (step.kind === "http") return step.component ? "Sends a request, as the " + step.component + " component describes" : "Sends an HTTP request";
+  return KIND_NAMES[step.kind] || step.kind;
+}
+
+function ago(at) {
+  const s = Math.round((Date.now() - at) / 1000);
+  return s < 10 ? "just now" : s < 60 ? s + " s ago" : when(at);
+}
+
+const sourceKind = (w, id) => (id === "trigger" ? "trigger" : id === "env" ? "env" : (w.steps.find((s) => s.id === id) || {}).kind || "env");
+
+function seg(label, items, current, pick) {
+  return el("div", { class: "seg", role: "group", "aria-label": label }, items.map(([value, text]) => {
+    const b = el("button", { type: "button", "aria-pressed": current === value ? "true" : "false" }, text);
+    b.addEventListener("click", () => pick(value));
+    return b;
+  }));
+}
+
+function focusables(root) {
+  return [...root.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")]
+    .filter((n) => !n.disabled && n.getAttribute("tabindex") !== "-1" && !n.closest("[hidden]") && n.getClientRects().length > 0);
+}
+
+function sideColumn(which, title) {
+  const c = { which };
+  c.meta = el("span", { class: "ned-meta" });
+  c.seg = el("span", { class: "ned-seg" });
+  c.body = el("div", { class: "ned-colbody" });
+  c.note = el("div", { class: "ned-note", role: "status" });
+  c.fold = el("button", { type: "button", class: "ned-fold", "aria-expanded": "true" }, icon("chev", 13), title);
+  c.fold.addEventListener("click", () => {
+    ed.fold[which] = !ed.fold[which];
+    c.root.classList.toggle("folded", ed.fold[which]);
+    c.fold.setAttribute("aria-expanded", ed.fold[which] ? "false" : "true");
+  });
+  c.root = el("div", { class: "ned-col ned-" + which },
+    el("div", { class: "ned-colhead" }, el("span", { class: "ned-cap" }, title), c.fold, c.meta, el("span", { class: "grow" }), c.seg),
+    el("div", { class: "ned-colfold" }, c.body, c.note));
+  const folded = !!ed.fold[which];
+  c.root.classList.toggle("folded", folded);
+  c.fold.setAttribute("aria-expanded", folded ? "false" : "true");
+  return c;
+}
+
+function showEditor(w, step) {
+  hideEditor(true);
+  const narrow = window.innerWidth <= 900;
+  ed = { workflow: w.name, step: step.id, tab: "params", inMode: "schema", outMode: "fields", outSource: null, target: null, form: null, formKey: "", sig: "", diff: false, more: {}, fold: { in: narrow, out: narrow }, shownNotice: null };
+
+  ed.testBtn = el("button", { type: "button", class: "btn primary ned-testbtn", "data-test": "1" }, icon("run", 13), "Test step");
+  ed.testBtn.addEventListener("click", () => testStep());
+  const close = el("button", { type: "button", class: "ned-x", "aria-label": "Close the editor", title: "Close (Esc)" }, icon("close", 16));
+  close.addEventListener("click", () => closeEditor());
+  ed.line = el("span", { class: "ned-line" });
+  const head = el("header", { class: "ned-head kind-" + step.kind },
+    kindTile(step.kind, 42),
+    el("div", { class: "ned-names" },
+      el("div", { class: "ned-title" }, ed.title = el("h1", { class: (step.end ? "" : "mono ") + "ned-id" }, step.end ? endTitle(w, step) : step.id), el("span", { class: "ned-badge" }, KIND_LABEL[step.kind] || step.kind)),
+      ed.line),
+    el("span", { class: "grow" }), ed.testBtn, close);
+
+  ed.testBtn.hidden = !!step.end;
+  ed.inCol = sideColumn("in", step.kind === "trigger" ? "Sample request" : "Input");
+  ed.outCol = sideColumn("out", "Output");
+
+  ed.tabBtns = {};
+  const tabs = el("div", { class: "ned-tabs", role: "tablist", "aria-label": "Editing " + step.id });
+  // The trigger and the response have no settings of their own.
+  for (const [name, label] of step.end ? [["params", "Parameters"]] : [["params", "Parameters"], ["settings", "Settings"]]) {
+    const b = el("button", { type: "button", role: "tab", id: "nedtab-" + name, "aria-controls": "nedpanel-" + name }, label);
+    b.addEventListener("click", () => setTab(name, true));
+    b.addEventListener("keydown", (e) => {
+      if (step.end || (e.key !== "ArrowRight" && e.key !== "ArrowLeft")) return;
+      e.preventDefault();
+      setTab(name === "params" ? "settings" : "params", true);
+    });
+    ed.tabBtns[name] = b;
+    tabs.append(b);
+  }
+  ed.panels = {
+    params: el("div", { class: "ned-panel", id: "nedpanel-params", role: "tabpanel", "aria-labelledby": "nedtab-params" }),
+    settings: el("div", { class: "ned-panel", id: "nedpanel-settings", role: "tabpanel", "aria-labelledby": "nedtab-settings" }),
+  };
+  ed.midBody = el("div", { class: "ned-midbody" }, ed.panels.params, ed.panels.settings);
+  ed.midBody.addEventListener("focusin", (e) => {
+    const c = ed.form && ed.form.controls.find((x) => x.refable && x.row.contains(e.target));
+    if (c) ed.target = c;
+  });
+  const mid = el("div", { class: "ned-col ned-mid" }, tabs, ed.midBody);
+
+  ed.foot = buildFoot(w, step);
+  ed.dlg = el("section", { class: "nodeed", role: "dialog", "aria-modal": "true", "aria-label": "Editing " + step.id, tabindex: "-1" },
+    head, el("div", { class: "ned-cols" }, ed.inCol.root, mid, ed.outCol.root), ed.foot.root);
+  ed.dlg.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+    const items = focusables(ed.dlg);
+    if (!items.length) { e.preventDefault(); return; }
+    const first = items[0], last = items[items.length - 1];
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === ed.dlg)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  // A text box is as tall as its text, which depends on how wide the column is.
+  ed.watch = new ResizeObserver(() => { if (ed && ed.form) ed.form.controls.forEach((c) => { if (c.input.getClientRects().length) autosize(c.input); }); });
+  ed.watch.observe(ed.midBody);
+  ed.root = el("div", { class: "nedback" }, ed.dlg);
+  // The second click of the double-click that may have opened it does not close it.
+  const opened = performance.now();
+  ed.root.addEventListener("pointerdown", (e) => { if (e.target === ed.root && performance.now() - opened > 500) closeEditor(); });
+  document.body.append(ed.root);
+  document.body.classList.add("ned-open");
+  $("app").setAttribute("inert", "");
+  setTab("params", false);
+  ed.dlg.focus({ preventScroll: true });
+}
+
+function hideEditor(keepFocus) {
+  if (!ed) return;
+  const id = ed.step;
+  ed.watch.disconnect();
+  ed.root.remove();
+  document.body.classList.remove("ned-open");
+  $("app").removeAttribute("inert");
+  ed = null;
+  dragRef = null;
+  if (!keepFocus) {
+    const card = document.querySelector('#canvas .card[data-node="' + CSS.escape(id) + '"]');
+    if (card) card.focus({ preventScroll: true });
+  }
+}
+
+// paintEditor is called by render(): it opens, updates or closes the editor to match the address.
+function paintEditor() {
+  const w = view && view.w;
+  const id = editing(w);
+  const step = id ? nodeOf(w, id) : null;
+  if (!step || !canOpen(w, step.id)) {
+    hideEditor();
+    // An address that names a step that cannot be edited here goes back to the drawing.
+    if (selected.edit && state.workflows.length) go({ edit: null });
+    return;
+  }
+  if (!ed || ed.workflow !== w.name || ed.step !== step.id) showEditor(w, step);
+  syncEditor(w, step);
+}
+
+function setTab(name, focus) {
+  ed.tab = name;
+  for (const [n, panel] of Object.entries(ed.panels)) panel.hidden = n !== name;
+  for (const [n, b] of Object.entries(ed.tabBtns)) {
+    b.setAttribute("aria-selected", n === name ? "true" : "false");
+    b.tabIndex = n === name ? 0 : -1;
+  }
+  if (ed.form) ed.form.controls.forEach((c) => autosize(c.input));
+  if (focus) ed.tabBtns[name].focus();
+}
+
+function formKeyOf(w, step) {
+  return [w.name, step.id, step.edit.map((f) => [pathKey(f.path), f.kind, f.label, f.group || "", f.hint || "", (f.options || []).join(","), WHOLE_REF.test(f.value) ? "r" : ""].join("~")).join("|")].join("##");
+}
+
+function syncEditor(w, step) {
+  const key = formKeyOf(w, step);
+  if (key !== ed.formKey) rebuildForm(w, step, key);
+  else { ed.form.fields = step.edit; syncForm(w, ed.form); }
+  paintHead();
+  paintSchema();
+  // What it reads and what it gave only change when the run or the file does.
+  const ran = runShown();
+  const sig = JSON.stringify([ran ? [ran.run, ran.status, ran.ms, (ran.steps || []).length] : null, step, w.rev]);
+  if (sig !== ed.sig) { ed.sig = sig; paintInput(); paintOutput(); }
+  paintFoot();
+}
+
+// syncEditorValues brings the editor's controls up to date with the drafts after something else changed them.
+function syncEditorValues() {
+  if (!ed || !ed.form) return;
+  const w = workflowByName(ed.workflow);
+  if (w) syncForm(w, ed.form);
+  paintHead();
+  paintSchema();
+}
+
+function rebuildForm(w, step, key) {
+  let back = null;
+  if (ed.form && ed.midBody.contains(document.activeElement)) {
+    const i = ed.form.controls.findIndex((c) => c.input === document.activeElement);
+    if (i >= 0) { try { back = [i, document.activeElement.selectionStart, document.activeElement.selectionEnd]; } catch (err) { back = [i, null, null]; } }
+  }
+  ed.formKey = key;
+  ed.target = null;
+  ed.form = buildEditorForm(w, step, key);
+  ed.panels.params.replaceChildren(...ed.form.params);
+  ed.panels.settings.replaceChildren(...ed.form.settings);
+  ed.schemaSig = "";
+  syncForm(w, ed.form);
+  paintSchema();
+  if (back && ed.form.controls[back[0]]) {
+    const box = ed.form.controls[back[0]].input;
+    box.focus({ preventScroll: true });
+    if (back[1] != null) { try { box.setSelectionRange(back[1], back[2]); } catch (err) { /* not a text box */ } }
+  }
+}
+
+// ---- the middle: the fields by meaning ----
+
+const curValue = (c) => { const d = draftOf(c); return d ? d.value : c.base; };
+
+function relabel(c, text) {
+  const label = c.row.querySelector("label");
+  if (label) label.textContent = text;
+}
+
+// setField puts a text in a field as if it was typed.
+function setField(c, text) {
+  setValue(c.input, text);
+  c.input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+// A field that takes keys: the key dropped or clicked goes in at the caret, or
+// takes the place of an empty value, or of the one key already there.
+function putRef(c, ref) {
+  const text = c.kind === "expression" ? ref.path : "${" + ref.path + "}";
+  const box = c.input;
+  if (box.hidden || box.value.trim() === "") setField(c, text);
+  else {
+    const live = document.activeElement === box;
+    const from = live ? box.selectionStart : c.caret ? c.caret[0] : box.value.length;
+    const to = live ? box.selectionEnd : c.caret ? c.caret[1] : from;
+    box.setRangeText(text, from, to, "end");
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  c.row.classList.add("flash");
+  setTimeout(() => c.row.classList.remove("flash"), 900);
+  announce("Put " + text + " in " + c.field.label);
+}
+
+function wireDrop(c) {
+  const row = c.row;
+  const accepts = () => !!dragRef && !!ed && dragRef.source !== ed.step;
+  row.addEventListener("dragover", (e) => {
+    if (!accepts()) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    row.classList.add("drop");
+  });
+  row.addEventListener("dragleave", (e) => { if (!row.contains(e.relatedTarget)) row.classList.remove("drop"); });
+  row.addEventListener("drop", (e) => {
+    row.classList.remove("drop");
+    if (!accepts()) return;
+    e.preventDefault();
+    putRef(c, dragRef);
+    dragRef = null;
+  });
+  c.input.addEventListener("blur", () => { try { c.caret = [c.input.selectionStart, c.input.selectionEnd]; } catch (err) { c.caret = null; } });
+}
+
+// dataField gives a field that holds a key the Fixed / From data choice: a
+// whole ${...} shows as a coloured pill, and Fixed shows the text itself.
+function dataField(c) {
+  c.data = true;
+  const holder = el("div", { class: "ned-val" });
+  c.pillbox = el("div", { class: "ned-slot", tabindex: "0", role: "group", "aria-label": c.field.label + ", from data" });
+  c.input.replaceWith(holder);
+  holder.append(c.input, c.pillbox);
+  const pick = (mode) => {
+    c.forced = mode;
+    paintData(c);
+    if (mode === "fixed") c.input.focus(); else c.pillbox.focus();
+  };
+  c.fixedBtn = el("button", { type: "button" }, "Fixed");
+  c.dataBtn = el("button", { type: "button" }, "From data");
+  c.fixedBtn.addEventListener("click", () => pick("fixed"));
+  c.dataBtn.addEventListener("click", () => pick("data"));
+  c.toggle = el("div", { class: "seg ned-kindseg", role: "group", "aria-label": c.field.label + " is" }, c.fixedBtn, c.dataBtn);
+  c.row.querySelector(".lab").insertBefore(c.toggle, c.revert);
+  c.after = paintData;
+}
+
+function paintData(c) {
+  const v = curValue(c), m = WHOLE_REF.exec(v);
+  const mode = c.forced || (m ? "data" : "fixed");
+  c.row.classList.toggle("is-data", mode === "data");
+  c.input.hidden = mode === "data";
+  c.pillbox.hidden = mode !== "data";
+  if (mode === "fixed") autosize(c.input);
+  c.fixedBtn.setAttribute("aria-pressed", mode === "fixed" ? "true" : "false");
+  c.dataBtn.setAttribute("aria-pressed", mode === "data" ? "true" : "false");
+  if (mode !== "data") return;
+  const w = workflowByName(c.workflow);
+  if (m) {
+    const path = m[1], kind = w ? sourceKind(w, path.split(".")[0]) : "env";
+    const clear = el("button", { type: "button", class: "ned-unpill", "aria-label": "Remove " + path }, icon("close", 11));
+    clear.addEventListener("click", () => { setField(c, ""); c.pillbox.focus(); });
+    c.pillbox.replaceChildren(el("span", { class: "ref static kind-" + kind }, el("span", { class: "ned-brace", "aria-hidden": "true" }, "{ }"), path, clear));
+    c.pillbox.setAttribute("aria-label", c.field.label + ", from data: " + path);
+  } else {
+    c.pillbox.replaceChildren(el("span", { class: "ned-empty" }, "Drop a key here, or click one on the left"),
+      v.trim() ? el("span", { class: "ned-still" }, "Still the fixed text ", el("span", { class: "mono" }, clip(v, 40)), " until you do.") : null);
+    c.pillbox.setAttribute("aria-label", c.field.label + ", from data, no key yet");
+  }
+}
+
+function questionKind(q) {
+  return q.answers.startsWith("score") ? "A score" : q.options && q.options.length ? "One of a list" : "Yes or no";
+}
+
+function questionCard(q, ask, meanings) {
+  const scored = q.answers.startsWith("score");
+  const rows = meanings.map((m) => {
+    const c = m.c;
+    c.row = el("div", { class: "ned-arow k-text" },
+      el("label", { for: c.id, class: "mono ned-aname" }, m.name),
+      c.input, c.revert, c.conflict);
+    return c.row;
+  });
+  return el("div", { class: "ned-q" },
+    el("div", { class: "ned-qhead" }, el("span", { class: "mono ned-qname" }, q.name), el("span", { class: "ned-qtype" }, questionKind(q))),
+    ask ? ask.row : el("p", { class: "ned-plain" }, q.ask),
+    rows.length ? el("div", { class: "ned-answers" },
+      el("div", { class: "ned-ahead" }, el("span", {}, "Answer"), el("span", {}, scored ? "Means, lowest to highest" : "Means")),
+      rows) : null);
+}
+
+// buildEditorForm makes one control per editable field of the step, in the
+// order of step.edit (syncForm pairs them by position), and lays them out.
+function buildEditorForm(w, step, key) {
+  if (step.kind === "trigger") return buildTriggerForm(w, step, key);
+  if (step.kind === "response") return buildResponseForm(w, step, key);
+  const f = { key, workflow: w.name, node: step.id, fields: step.edit, controls: [], root: ed.midBody };
+  const cs = step.edit.map((field) => {
+    const c = makeControl(f, field);
+    c.refable = field.kind === "text" || field.kind === "expression";
+    f.controls.push(c);
+    return c;
+  });
+  const role = {}, qs = {}, rest = [];
+  for (const c of cs) {
+    const p = c.field.path, last = p[p.length - 1];
+    if (p.length === 3 && last === "when") role.when = c;
+    else if ((step.kind === "decide" || step.kind === "ai") && p.length === 4 && p[2] === step.kind && ["model", "input", "prompt", "output"].includes(last)) role[last] = c;
+    else if (step.kind === "decide" && p[3] === "questions" && p.length >= 6) {
+      const q = qs[p[4]] || (qs[p[4]] = { ask: null, meanings: [] });
+      if (last === "ask") q.ask = c;
+      else if (last === "yes_if" || last === "no_if") q.meanings.push({ c, name: last === "yes_if" ? "yes" : "no" });
+      else q.meanings.push({ c, name: c.field.label });
+    } else rest.push(c);
+  }
+  // Which fields hold keys: they get the Fixed / From data choice.
+  const meaning = new Set(Object.values(qs).flatMap((q) => q.meanings.map((m) => m.c)));
+  for (const c of cs) {
+    if (!c.refable || c === role.when || meaning.has(c)) continue;
+    const isInput = !c.field.group ? c.field.label === "Input" : c.field.group === "Input";
+    if (isInput || WHOLE_REF.test(c.field.value)) dataField(c);
+  }
+
+  const params = [];
+  if (role.model) { relabel(role.model, "Model"); params.push(role.model.row); }
+  if (role.input) { relabel(role.input, step.kind === "decide" ? "What it reads" : "Input"); params.push(role.input.row); }
+  if (role.prompt) params.push(role.prompt.row);
+  // The fields the model answers with are edited here, as a table. Which file holds them is a setting.
+  if (role.output) {
+    f.schemaBox = el("div", { class: "ned-schema" });
+    params.push(f.schemaBox);
+  }
+  if (step.kind === "decide" && step.questions && step.questions.length) {
+    params.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Questions"), el("span", { class: "ned-count" }, String(step.questions.length))));
+    for (const q of step.questions) {
+      const part = qs[q.name] || { ask: null, meanings: [] };
+      if (part.ask) relabel(part.ask, "Ask");
+      params.push(questionCard(q, part.ask, part.meanings));
+    }
+  }
+  // Whatever else the step lets the page change keeps the order of the file, grouped as the details column does.
+  let group = null, groupName = null;
+  for (const c of rest) {
+    if (c.field.group) {
+      if (groupName !== c.field.group) {
+        groupName = c.field.group;
+        group = el("fieldset", { class: "group" }, el("legend", {}, c.field.group));
+        params.push(group);
+      }
+      group.append(c.row);
+    } else { groupName = null; params.push(c.row); }
+  }
+  if (!params.length) params.push(el("p", { class: "ned-plain" }, "This step has nothing the page can change. What it does is set in its component."));
+
+  const settings = [];
+  if (role.output) {
+    relabel(role.output, "Output schema file");
+    role.output.row.classList.add("ned-schemafile");
+    settings.push(role.output.row, el("p", { class: "ned-words" }, "The JSON Schema file the model's answer must fit. Its fields are edited under Parameters."));
+  }
+  if (role.when) {
+    relabel(role.when, "Run only when");
+    const words = el("p", { class: "ned-words", "aria-live": "polite" });
+    const paintWords = (c) => {
+      const v = curValue(c).trim();
+      put(words, v ? ["In words: ", el("strong", {}, readable(v))] : "Without a condition the step runs every time, once the steps before it have finished.");
+    };
+    role.when.after = paintWords;
+    settings.push(role.when.row, words);
+  } else settings.push(el("p", { class: "ned-plain" }, "This step has no settings the page can change."));
+  settings.push(el("p", { class: "ned-plain" }, "Step " + (w.steps.indexOf(step) + 1) + " of " + w.steps.length + " in file order."));
+  // Every field that takes text takes a key dropped on it, once the rows are laid out.
+  for (const c of cs) if (c.refable) wireDrop(c);
+  f.params = params;
+  f.settings = settings;
+  return f;
+}
+
+function paintHead() {
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  if (step.end) {
+    ed.title.textContent = endTitle(w, step);
+    ed.line.replaceChildren(...(step.kind === "response" ? ["What the caller of ", mono(w.trigger || w.name), " gets back, once the steps have run"]
+      : isWebhook(w) ? ["Starts ", mono(w.name), " when a request arrives at ", mono(w.trigger)]
+      : w.trigger ? ["Starts ", mono(w.name), " on the schedule ", mono(w.trigger.replace(/^cron /, ""))]
+      : ["Starts ", mono(w.name), " when it is run by hand"]));
+    return;
+  }
+  const c = ed.form && ed.form.controls.find((x) => x.field.path.length === 3 && x.field.path[2] === "when");
+  const cond = c ? curValue(c).trim() : (step.when || "").trim();
+  // What a component does is changed in the component: the way there.
+  const comp = step.target ? entryOf(step.target) : null;
+  const open = comp ? [" · ", el("button", { type: "button", class: "linkbtn", onclick: () => go({ workflow: comp.name, run: null, node: null }) }, "Open " + compTitle(comp))] : null;
+  if (cond) {
+    const more = el("button", { type: "button", class: "linkbtn" }, "set in Settings");
+    more.addEventListener("click", () => setTab("settings", true));
+    ed.line.replaceChildren(...["Runs only when ", el("span", { class: "mono ned-cond", title: cond }, readable(cond)), " · ", more, open].flat().filter(Boolean));
+  } else ed.line.replaceChildren(...[aboutStep(step), open].flat().filter(Boolean));
+  const t = stepTests[testKey()];
+  const running = !!t && t.state === "running";
+  ed.testBtn.setAttribute("aria-disabled", running ? "true" : "false");
+  ed.testBtn.replaceChildren(icon("run", 13), running ? "Testing…" : "Test step");
+}
+
+// ---- the middle: what an AI step answers with ----
+//
+// The fields of the answer are kept in a schema file of their own. They are
+// read from the server when the editor opens a step and edited as drafts, like
+// every other field: a draft is { fields } for the table or { text } for the
+// file's text, and Save writes it after the workflow's own lines.
+
+const schemaKey = (name, step) => name + "|" + step;
+const baseFields = (c) => (c.fields ? fieldsOut(c.fields.map(rowOfField)) : null);
+const schemaDraftOf = (name, step) => (drafts[name] && drafts[name].schemas[step]) || null;
+function schemaSame(draft, base) {
+  return draft.text !== undefined ? draft.text === base.text : !!base.fields && JSON.stringify(draft.fields) === JSON.stringify(baseFields(base));
+}
+
+function loadSchema(w, step, force) {
+  const key = schemaKey(w.name, step);
+  const prev = schemaCache[key];
+  if (prev && prev.inflight && !force) return Promise.resolve();
+  schemaCache[key] = { ...(prev || { state: "loading" }), inflight: true, wfRev: w.rev };
+  return request("GET", "/api/schema?workflow=" + encodeURIComponent(w.name) + "&step=" + encodeURIComponent(step))
+    .then((r) => {
+      schemaCache[key] = r.ok
+        ? { state: "ready", file: r.body.file, text: r.body.text, rev: r.body.rev, fields: r.body.fields || null, wfRev: w.rev }
+        : { state: "error", error: r.body.error || "the server answered " + r.status, wfRev: w.rev };
+    })
+    .catch(() => { schemaCache[key] = { state: "error", error: "the server cannot be reached", wfRev: w.rev }; })
+    .then(() => {
+      const now = workflowByName(w.name);
+      if (!now) return;
+      pruneDrafts(now);
+      if (ed && ed.workflow === w.name) paintSchema();
+      draftChanged(w.name, true);
+    });
+}
+
+function setSchemaDraft(name, step, draft) {
+  const d = draftsOf(name), st = uiOf(name);
+  if (draft) d.schemas[step] = draft; else delete d.schemas[step];
+  if (st.notice && (st.notice.kind === "saved" || st.notice.kind === "external") && !(st.notice.dropped && st.notice.dropped.length)) st.notice = null;
+}
+
+// paintSchema draws the answer's fields of the step being edited. The table is
+// only built again when what it shows is no longer what the draft says, so a
+// poll does not take the focus out of a box being typed in.
+function paintSchema() {
+  if (!ed || !ed.form || !ed.form.schemaBox) return;
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const box = ed.form.schemaBox, key = schemaKey(w.name, step.id);
+  let c = schemaCache[key];
+  if (!c || (c.wfRev !== w.rev && !c.inflight && c.state !== "error")) { loadSchema(w, step.id); c = schemaCache[key]; }
+  const draft = schemaDraftOf(w.name, step.id);
+  const ready = c.state === "ready";
+  const asText = ready && (!c.fields || ed.schemaText || (draft && draft.text !== undefined));
+  const sig = [c.state, asText ? "text" : "fields", ready ? c.rev : c.error || "", ready ? c.file : ""].join("|");
+  const shown = draft ? (asText ? draft.text : JSON.stringify(draft.fields)) : ready ? (asText ? c.text : JSON.stringify(baseFields(c))) : "";
+  if (sig === ed.schemaSig) {
+    if (asText) { if (ed.schemaText$ && ed.schemaText$.value !== shown) setValue(ed.schemaText$, shown); box.classList.toggle("edited", !!draft); return paintSchemaHead(c, draft, asText); }
+    if (shown === ed.schemaShown) { box.classList.toggle("edited", !!draft); return paintSchemaHead(c, draft, asText); }
+  }
+  ed.schemaSig = sig;
+  ed.schemaShown = shown;
+  ed.schemaText$ = null;
+  ed.schemaHead = el("div", { class: "ned-schemahead" });
+  const body = el("div", { class: "ned-schemabody" });
+  box.classList.toggle("edited", !!draft);
+  box.replaceChildren(ed.schemaHead, body);
+  if (c.state === "loading") body.append(el("p", { class: "ned-plain", role: "status" }, "Reading the answer's fields…"));
+  else if (c.state === "error") {
+    const again = el("button", { type: "button", class: "linkbtn" }, "Try again");
+    again.addEventListener("click", () => { schemaCache[key] = { state: "loading", wfRev: w.rev }; loadSchema(w, step.id, true); paintSchema(); });
+    body.append(el("p", { class: "ned-bad" }, "The answer's fields could not be read"), el("p", { class: "ned-plain" }, c.error + " ", again));
+  } else if (asText) {
+    const id = "nst" + ++formId;
+    const area = el("textarea", { id, class: "in mono prompt ned-schematext", rows: 14, spellcheck: "false", "aria-label": "The schema, as JSON text" });
+    area.value = shown;
+    const bad = el("p", { class: "conflict", hidden: true, role: "status" });
+    const check = () => {
+      let msg = "";
+      try { const v = JSON.parse(area.value); if (!v || typeof v !== "object" || Array.isArray(v)) msg = "A schema is a JSON object."; } catch (err) { msg = "Not valid JSON yet: " + err.message; }
+      bad.hidden = !msg;
+      bad.textContent = msg;
+    };
+    area.addEventListener("input", () => {
+      const base = schemaCache[key];
+      setSchemaDraft(w.name, step.id, base && area.value !== base.text ? { text: area.value } : null);
+      ed.schemaShown = area.value;
+      check();
+      draftChanged(w.name);
+    });
+    ed.schemaText$ = area;
+    body.append(area, bad, el("p", { class: "ned-plain" }, c.fields ? "This is the file as text. Whatever it says is saved as written." : "This schema says more than a list of fields can, so it is edited as text. Whatever it says is saved as written."));
+  } else {
+    const list = (draft ? draft.fields : baseFields(c)).map((f) => ({ ...f, options: (f.options || []).join(", "), description: f.description || "" }));
+    ed.schemaList = list;
+    const table = buildFieldTable(list, () => {
+      const base = schemaCache[key], out = fieldsOut(list);
+      setSchemaDraft(w.name, step.id, base && base.fields && JSON.stringify(out) === JSON.stringify(baseFields(base)) ? null : { fields: out });
+      ed.schemaShown = JSON.stringify(out);
+      draftChanged(w.name);
+    }, ++formId);
+    body.append(table.root);
+  }
+  paintSchemaHead(c, draft, asText);
+}
+
+// The line above the fields: what they are, which file they are in, and how to change the way they are edited.
+function paintSchemaHead(c, draft, asText) {
+  const { w, step } = curOf();
+  if (!w || !step || !ed.schemaHead) return;
+  const head = ed.schemaHead, ready = c.state === "ready";
+  const parts = [el("span", { class: "ned-h" }, "The answer has these fields")];
+  if (ready) parts.push(el("span", { class: "ned-fieldchip mono", title: "The schema file" }, c.file));
+  parts.push(el("span", { class: "grow" }));
+  if (draft) {
+    const back = el("button", { type: "button", class: "linkbtn", title: "Put back what the file says" }, "Revert");
+    back.addEventListener("click", () => { setSchemaDraft(w.name, step.id, null); paintSchema(); draftChanged(w.name, true); });
+    parts.push(back);
+  }
+  if (ready && c.fields) {
+    const to = el("button", { type: "button", class: "linkbtn" }, asText ? "Edit as fields" : "Edit as text");
+    // The table and the text are two views of the same file; a change made in one is not carried to the other.
+    if (draft && (asText ? draft.text !== undefined : draft.fields !== undefined)) { to.disabled = true; to.title = "Save or revert what you changed first"; }
+    to.addEventListener("click", () => { ed.schemaText = !asText; paintSchema(); });
+    parts.push(to);
+  }
+  head.replaceChildren(...parts);
+}
+
+// ---- the left: what the step can read ----
+
+function walkPath(value, path) {
+  let v = value;
+  for (const part of path.split(".")) {
+    if (v == null || typeof v !== "object" || !(part in v)) return undefined;
+    v = v[part];
+  }
+  return v;
+}
+
+function previewOf(v) {
+  if (v === undefined) return null;
+  if (typeof v === "string") return v;
+  if (v !== null && typeof v === "object") return Array.isArray(v) ? plural(v.length, "item") : JSON.stringify(v);
+  return String(v);
+}
+
+function typeTag(v) {
+  if (typeof v === "string") return "Aa";
+  if (typeof v === "number") return "#";
+  if (typeof v === "boolean") return "t/f";
+  if (Array.isArray(v)) return "[ ]";
+  if (v && typeof v === "object") return "{ }";
+  return "·";
+}
+
+function flattenBody(prefix, value, depth, out) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  for (const k of Object.keys(value)) {
+    if (out.length >= 60) return;
+    const v = value[k], path = prefix + "." + k;
+    if (v && typeof v === "object" && !Array.isArray(v) && depth < 2 && Object.keys(v).length) flattenBody(path, v, depth + 1, out);
+    else out.push({ path, short: path.slice("trigger.body.".length), value: v });
+  }
+}
+
+// inputSources lists what a step can read, by where it comes from: the request,
+// each earlier step (with what it gives, as the run had it) and the environment.
+// The ones the step reads come first.
+function inputSources(w, step, ran) {
+  // The response reads what every step put out.
+  const idx = w.steps.includes(step) ? w.steps.indexOf(step) : w.steps.length, reads = new Set(step.reads || []);
+  const out = [];
+  const trig = { id: "trigger", kind: "trigger", rows: [], read: reads.has("trigger"), note: null };
+  if (ran && ran.trigger && typeof ran.trigger === "object") {
+    for (const [k, v] of Object.entries(ran.trigger)) {
+      if (k === "body") {
+        trig.rows.push({ path: "trigger.body", short: "body", value: v });
+        flattenBody("trigger.body", v, 0, trig.rows);
+      } else trig.rows.push({ path: "trigger." + k, short: k, value: v });
+    }
+  } else if (isWebhook(w) || !w.trigger) {
+    trig.rows.push({ path: "trigger.body", short: "body", value: undefined });
+    const sample = w.sample && typeof w.sample === "object" && !Array.isArray(w.sample) ? Object.keys(w.sample) : [];
+    for (const k of sample) trig.rows.push({ path: "trigger.body." + k, short: k, value: undefined });
+  } else trig.rows.push({ path: "trigger.time", short: "time", value: undefined });
+  out.push(trig);
+  w.steps.slice(0, idx).forEach((s) => {
+    const rec = ran ? ran.steps.find((x) => x.id === s.id) : null;
+    const names = s.outputs && s.outputs.length ? s.outputs : (s.questions || []).map((q) => q.name + ".value");
+    const src = { id: s.id, kind: s.kind, rows: [], read: reads.has(s.id), note: null };
+    if (ran && !rec) src.note = "not in this run";
+    else if (rec && rec.status === "skipped") src.note = "skipped in this run";
+    else if (rec && rec.status === "failed") src.note = "failed in this run";
+    for (const n of names) src.rows.push({ path: s.id + "." + n, short: n, value: rec && rec.output !== undefined ? walkPath(rec.output, n) : undefined });
+    out.push(src);
+  });
+  const env = new Set();
+  for (const [, fields] of editSets(w)) for (const f of fields) for (const m of String(f.value).matchAll(/\$\{\s*env\.([A-Za-z_]\w*)/g)) env.add(m[1]);
+  if (env.size) out.push({ id: "env", kind: "env", rows: [...env].sort().map((n) => ({ path: "env." + n, short: n, value: undefined })), read: false, note: null, env: true });
+  return out;
+}
+
+// refPill is a key: coloured by the step it comes from, and dragged into a field.
+function refPill(path, source, kind, text, tip) {
+  const p = el("span", { class: "ref kind-" + kind, role: "button", tabindex: "0", draggable: "true", "data-path": path, title: tip || "Drag it onto a field, or press Enter to put ${" + path + "} in the field you were editing" }, text || path);
+  p.addEventListener("dragstart", (e) => {
+    dragRef = { path, source };
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData("text/plain", "${" + path + "}");
+    p.classList.add("dragging");
+  });
+  p.addEventListener("dragend", () => { dragRef = null; p.classList.remove("dragging"); });
+  return p;
+}
+
+// put replaces what a node holds with children, which may be nested lists.
+function put(node, ...children) {
+  node.replaceChildren();
+  return append(node, children);
+}
+
+function setNote(col, text) { col.note.textContent = text; }
+const INPUT_NOTE = "Drag a key onto a field in Parameters, or click one to put it in the field you last used. Its colour says which step it comes from.";
+
+function useRef(path, source) {
+  const c = ed.target && ed.target.row.isConnected && !ed.target.row.closest("[hidden]") ? ed.target : null;
+  if (!c) { setNote(ed.inCol, "Click a field in Parameters first, then click a key to put it there."); return; }
+  if (source === ed.step) { setNote(ed.inCol, "A step cannot read its own output."); return; }
+  putRef(c, { path, source });
+  setNote(ed.inCol, "Put " + (c.kind === "expression" ? path : "${" + path + "}") + " in " + c.field.label + ".");
+}
+
+function paintInput() {
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const ran = runShown();
+  if (step.kind === "trigger") return paintTriggerInput(w, ran);
+  put(ed.inCol.meta, ran ? ["run ", el("span", { class: "mono" }, ran.run)] : "no run yet");
+  ed.inCol.seg.replaceChildren(seg("Show input as", [["schema", "Schema"], ["json", "JSON"]], ed.inMode, (v) => { ed.inMode = v; paintInput(); }));
+  const sources = inputSources(w, step, ran);
+  const body = [];
+  if (ed.inMode === "json") {
+    const all = {};
+    for (const s of sources) {
+      if (s.env) continue;
+      if (s.id === "trigger") { if (ran && ran.trigger !== undefined) all.trigger = ran.trigger; continue; }
+      const rec = ran ? ran.steps.find((x) => x.id === s.id) : null;
+      if (rec && rec.output !== undefined) all[s.id] = rec.output;
+    }
+    body.push(Object.keys(all).length ? jsonView(all) : el("p", { class: "ned-plain" }, "No data yet: the workflow has not run."));
+    ed.inCol.body.replaceChildren(...body);
+    setNote(ed.inCol, "This is the data as the run had it. Switch to Schema to drag keys.");
+    return;
+  }
+  let divided = false;
+  for (const s of sources) {
+    if (!s.read && !divided && s.id !== "trigger" && !s.env) { divided = true; body.push(el("div", { class: "ned-divide" }, "Not read by this step yet")); }
+    if (s.env && !divided) body.push(el("div", { class: "ned-divide" }, "From the environment"));
+    body.push(el("div", { class: "ned-src kind-" + s.kind + (s.read || s.id === "trigger" ? "" : " unread") },
+      el("div", { class: "ned-srchead" },
+        s.env ? el("span", { class: "ned-stile" }, "$") : el("span", { class: "ned-stile kind-" + s.kind }, icon(s.kind, 12)),
+        el("span", { class: "mono ned-sid" }, s.id),
+        el("span", { class: "ned-word" }, s.env ? "names used here" : s.note ? s.note : SOURCE_WORD[s.kind] || ""),
+        s.read ? el("span", { class: "ned-reads" }, "read here") : null),
+      s.rows.length ? s.rows.map((r) => {
+        const shown = previewOf(r.value);
+        return el("div", { class: "ned-row" + (r.path.split(".").length > 3 && s.id === "trigger" ? " deep" : "") },
+          el("span", { class: "ned-type", "aria-hidden": "true" }, shown === null ? "·" : typeTag(r.value)),
+          (() => { const p = refPill(r.path, s.id, s.kind, r.short); p.addEventListener("click", () => useRef(r.path, s.id)); p.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); useRef(r.path, s.id); } }); return p; })(),
+          el("span", { class: "ned-val-text" + (shown === null ? " none" : ""), title: shown === null ? null : shown }, shown === null ? (ran ? "—" : "") : shown));
+      }) : el("p", { class: "ned-plain" }, "No fields are known for it.")));
+    if (s.env) divided = true;
+  }
+  if (!ran) body.push(el("p", { class: "ned-plain" }, "No run yet, so only the names are shown. Run the workflow and the values appear here."));
+  ed.inCol.body.replaceChildren(...body);
+  setNote(ed.inCol, INPUT_NOTE);
+}
+
+// ---- the right: what it put out ----
+
+function answerView(q, a) {
+  const yesNo = !(q.options && q.options.length);
+  let probs = a.probabilities && typeof a.probabilities === "object" ? a.probabilities : null;
+  if (!probs && typeof a.probability === "number" && yesNo) probs = { yes: a.probability, no: 1 - a.probability };
+  const picked = typeof a.value === "boolean" ? (a.value ? "yes" : "no") : String(a.value);
+  const names = probs ? Object.keys(probs).sort((x, y) => probs[y] - probs[x]) : [];
+  const close = names.length >= 2 && probs[names[0]] - probs[names[1]] < 0.15;
+  const more = !!ed.more[q.name];
+  const shown = names.length > 5 && !more ? names.slice(0, 4) : names;
+  const toggle = names.length > 5 ? el("button", { type: "button", class: "linkbtn" }, more ? "Show fewer" : "Show " + (names.length - 4) + " more: " + names.slice(4).join(", ")) : null;
+  if (toggle) toggle.addEventListener("click", () => { ed.more[q.name] = !more; paintOutput(); });
+  return el("div", { class: "ned-ans-out" },
+    el("div", { class: "ned-qrow" },
+      el("span", { class: "mono ned-qn" }, q.name),
+      el("span", { class: "grow" }),
+      el("span", { class: "ref static kind-decide" }, picked),
+      names.length ? el("span", { class: "ned-sure " + (close ? "close" : "clear") }, el("span", { class: "ned-sdot", "aria-hidden": "true" }), close ? "close call" : "clear") : null,
+      typeof a.score === "number" ? el("span", { class: "ned-faint" }, "score " + a.score.toFixed(2)) : null),
+    shown.map((n) => el("div", { class: "ned-bar" + (n === picked ? " top" : "") },
+      el("span", { class: "mono ned-bn" }, n),
+      el("span", { class: "ned-track" }, el("span", { class: "ned-fill", css: { width: Math.max(1, Math.round(probs[n] * 100)) + "%" } })),
+      el("span", { class: "mono ned-bp" }, Math.round(probs[n] * 100) + "%"))),
+    toggle);
+}
+
+function outputBody(step, rec, tested) {
+  const parts = [];
+  if (tested && tested.wouldRun === false) parts.push(el("p", { class: "ned-warn" }, "Its condition is false for this data, so a run would have skipped it; it was tried anyway."));
+  if (rec.status === "skipped") parts.push(el("p", { class: "ned-plain" }, "Skipped in this run: its condition was false for that data."));
+  if (rec.error || rec.status === "failed") parts.push(el("p", { class: "ned-bad" }, tested ? "Test step failed" : "The step failed in this run"), el("pre", { class: "error" }, rec.error || "No reason was recorded."));
+  const out = rec.output;
+  if (ed.outMode === "json") {
+    parts.push(out !== undefined ? jsonView(out) : el("p", { class: "ned-plain" }, "It has no output."));
+  } else if (step.kind === "decide" && out && typeof out === "object" && (step.questions || []).length) {
+    for (const q of step.questions) if (out[q.name] && typeof out[q.name] === "object") parts.push(answerView(q, out[q.name]));
+  } else if (step.kind === "ai" && out && typeof out === "object" && !Array.isArray(out)) {
+    for (const k of Object.keys(out)) {
+      const v = out[k];
+      parts.push(el("div", { class: "ned-field" },
+        el("div", { class: "ned-qrow" }, el("span", { class: "ned-type", "aria-hidden": "true" }, typeTag(v)), el("span", { class: "mono ned-qn" }, k)),
+        typeof v === "string" ? el("p", { class: "ned-text" }, v) : jsonView(v)));
+    }
+  } else if (step.kind === "http") {
+    if (out && typeof out === "object" && out.status !== undefined) parts.push(el("div", { class: "ned-qrow" }, el("span", { class: "ned-type", "aria-hidden": "true" }, "#"), el("span", { class: "mono ned-qn" }, "status"), el("span", { class: "ref static kind-http" }, String(out.status))));
+    if (out && typeof out === "object" && Object.keys(out).some((k) => k !== "status")) {
+      const { status, ...others } = out;
+      parts.push(jsonView(others));
+    }
+  } else if (out !== undefined) parts.push(jsonView(out));
+  if (rec.detail) parts.push(el("p", { class: "ned-detail mono" }, rec.detail));
+  return parts;
+}
+
+function paintOutput() {
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const ran = runShown();
+  if (step.kind === "trigger") return paintTriggerOutput(w, ran);
+  if (step.kind === "response") return paintResponseOutput(w, ran);
+  const t = stepTests[testKey()] || null;
+  const source = t && ed.outSource !== "run" ? "test" : "run";
+  const ctl = [];
+  if (t) ctl.push(seg("Show", [["run", "Last run"], ["test", "Test step"]], source, (v) => { ed.outSource = v; paintOutput(); }));
+  ctl.push(seg("Show output as", [["fields", step.kind === "decide" ? "Answers" : "Fields"], ["json", "JSON"]], ed.outMode, (v) => { ed.outMode = v; paintOutput(); }));
+  ed.outCol.seg.replaceChildren(...ctl);
+
+  const body = [];
+  if (source === "test") {
+    ed.outCol.meta.replaceChildren(t.state === "running" ? "Test step · running…" : "Test step · " + ago(t.at) + (t.state === "done" && t.result.step ? " · " + duration(t.result.step.ms || 0) : ""));
+    if (t.state === "running") body.push(el("p", { class: "ned-plain", role: "status" }, "Trying the step with the data of run ", el("span", { class: "mono" }, t.run), ". A model may be called."));
+    else if (t.state === "error") body.push(el("p", { class: "ned-bad" }, "Test step did not run"), el("pre", { class: "error" }, t.error));
+    else {
+      body.push(el("p", { class: "ned-plain" }, "With the data of run ", el("span", { class: "mono" }, t.run), ": the request and the earlier steps' outputs came from it."));
+      if (t.unsaved) body.push(el("p", { class: "ned-warn" }, "Tried as saved: your " + plural(t.unsaved, "unsaved change") + " " + (t.unsaved === 1 ? "was" : "were") + " not used."));
+      if (t.rev !== w.rev) body.push(el("p", { class: "ned-warn" }, "The workflow was saved after this test. Test again to try the new version."));
+      body.push(...outputBody(step, t.result.step || {}, t.result));
+    }
+  } else {
+    const rec = ran ? ran.steps.find((x) => x.id === step.id) : null;
+    if (!ran) {
+      ed.outCol.meta.replaceChildren("no run yet");
+      body.push(el("p", { class: "ned-plain" }, "Nothing has run yet, so there is no output to show. Run the workflow, or send it a request with the curl command under Trigger, then come back."));
+    } else if (!rec) {
+      ed.outCol.meta.replaceChildren("run ", el("span", { class: "mono" }, ran.run));
+      body.push(el("p", { class: "ned-plain" }, "This run has no record of the step: " + (ran.status === "failed" ? "an earlier step failed first." : ran.status === "running" ? "it has not got this far." : "it was recorded before the step was added.")));
+    } else {
+      ed.outCol.meta.replaceChildren((view.run ? "this run" : "last run") + (rec.status === "ok" || rec.ms ? " · " + duration(rec.ms || 0) : "") + (rec.status === "failed" ? " · failed" : ""));
+      body.push(...outputBody(step, rec, null));
+    }
+  }
+  const outs = step.outputs || [];
+  body.push(el("div", { class: "ned-later" },
+    el("span", { class: "ned-h" }, "Later steps can use"),
+    outs.length ? el("div", { class: "ned-pills" }, outs.map((n) => {
+      const p = refPill(step.id + "." + n, step.id, step.kind, n, "Click to copy ${" + step.id + "." + n + "}");
+      const copy = () => {
+        const text = "${" + step.id + "." + n + "}";
+        if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => setNote(ed.outCol, "Copied " + text + ". Paste it into a field of a later step."), () => setNote(ed.outCol, "Press Ctrl+C on " + text));
+        else setNote(ed.outCol, text + " is what a later step writes to use it.");
+      };
+      p.addEventListener("click", copy);
+      p.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); copy(); } });
+      return p;
+    })) : el("p", { class: "ned-plain" }, "It gives later steps nothing to read."),
+    ));
+  ed.outCol.body.replaceChildren(...body);
+  if (!ed.outCol.note.textContent) setNote(ed.outCol, "A key keeps this step's colour wherever it is used. Click one to copy it, then paste it into a later step.");
+}
+
+async function testStep() {
+  if (!ed) return;
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const key = testKey(), prev = stepTests[key];
+  if (prev && prev.state === "running") return;
+  const ran = runShown();
+  if (!ran) {
+    // The endpoint is not called: there is nothing to take data from.
+    stepTests[key] = { state: "error", run: "", at: Date.now(), rev: w.rev, unsaved: 0, error: "There is no run to take data from. Run the workflow first, or send it a request with the curl command under Trigger, then test the step." };
+    ed.outSource = "test";
+    paintHead();
+    paintOutput();
+    return;
+  }
+  const mine = ed;
+  stepTests[key] = { state: "running", run: ran.run, at: Date.now(), rev: w.rev, unsaved: draftCountFor(w.name, step.id) };
+  ed.outSource = "test";
+  setNote(ed.outCol, "");
+  paintHead();
+  paintOutput();
+  let r = null;
+  try { r = await request("POST", "/api/steps/test", { workflow: w.name, step: step.id, run: ran.run }); } catch (err) { r = null; }
+  const t = stepTests[key];
+  t.at = Date.now();
+  if (!r) { t.state = "error"; t.error = "The server cannot be reached."; }
+  else if (!r.ok) { t.state = "error"; t.error = r.body.error || "The server answered " + r.status + "."; }
+  else if (!r.body.step) { t.state = "error"; t.error = "The server's answer had no step in it."; }
+  else { t.state = "done"; t.result = r.body; if (r.body.from) t.run = r.body.from; }
+  if (ed === mine) {
+    paintHead();
+    paintOutput();
+    announce(t.state === "done" ? "Test step finished: " + (r.body.step.status || "") : "Test step did not run: " + t.error);
+  }
+}
+
+// ---- the footer: the page's save bar, here ----
+
+const wordsFor = (e, step) => {
+  if (e.group && e.group !== "Input") return step.kind === "decide" ? "the " + e.group + " question" : e.label.toLowerCase() + " of " + e.group;
+  if (e.group === "Body") return "the body's " + e.label;
+  if (e.group) return "the " + e.label + " input";
+  return { "Run only when": "the condition", Model: "the model", Input: "the input", "Output schema": "the schema file's name" }[e.label] || "the " + e.label.toLowerCase();
+};
+
+function buildFoot(w, step) {
+  const b = {};
+  b.remove = canAdd(w) && !step.end ? removeButton(w, step) : null;
+  b.slot = el("div", { class: "ned-noticeslot" });
+  b.diff = el("pre", { class: "diff ned-diff", tabindex: "0", "aria-label": "What saving would change", hidden: true });
+  b.dot = el("span", { class: "ned-dot", "aria-hidden": "true" });
+  b.count = el("span", { class: "ned-count2" });
+  b.what = el("span", { class: "ned-what" });
+  b.writes = el("span", { class: "ned-writes" });
+  b.link = el("button", { type: "button", class: "linkbtn ned-difflink", "aria-expanded": "false" }, "See the diff");
+  b.link.addEventListener("click", () => { ed.diff = !ed.diff; paintFoot(); });
+  b.discard = el("button", { type: "button", class: "btn ned-btn" }, "Discard");
+  b.save = el("button", { type: "button", class: "btn primary ned-btn" }, "Save", el("kbd", {}, isMac ? "⌘S" : "Ctrl+S"));
+  b.close = el("button", { type: "button", class: "btn ned-btn" }, "Close");
+  b.discard.addEventListener("click", () => discardCurrent());
+  b.discard.addEventListener("blur", () => { if (ed) disarm(ed.workflow); });
+  b.save.addEventListener("click", () => saveCurrent());
+  b.close.addEventListener("click", () => closeEditor());
+  b.row = el("div", { class: "ned-footrow" }, b.remove, b.dot, b.count, b.what, b.writes, b.link, el("span", { class: "grow" }), b.close, b.discard, b.save);
+  b.root = el("footer", { class: "ned-foot" }, b.slot, b.diff, b.row);
+  return b;
+}
+
+function diffOf(w, step) {
+  const out = [];
+  const index = fieldIndex(w), d = draftsOf(w.name);
+  for (const [k, e] of Object.entries(d.fields)) {
+    const was = index.get(k);
+    out.push(["hunk", "@@ " + nodeName(e.node) + " · " + (e.group ? e.group + " · " : "") + e.label + " @@"]);
+    out.push(["del", "- " + (was ? was.field.value : "")], ["add", "+ " + e.value]);
+  }
+  for (const [stepId, text] of Object.entries(d.prompts)) {
+    const p = promptCache[w.name + "|" + stepId];
+    const lines = (s) => plural(s.split("\n").length, "line");
+    out.push(["hunk", "@@ " + stepId + " · prompt @@"]);
+    if (p && p.state === "ready") out.push(["del", "- " + lines(p.text) + " in " + p.file]);
+    out.push(["add", "+ " + lines(text) + (p && p.file ? " in " + p.file : "")]);
+  }
+  for (const [stepId, draft] of Object.entries(d.schemas)) {
+    const c = schemaCache[w.name + "|" + stepId];
+    const show = (f) => f.name + " · " + f.type + (f.options ? " (" + f.options.join(", ") + ")" : "") + " · " + (f.required ? "required" : "optional") + (f.description ? " · " + f.description : "");
+    out.push(["hunk", "@@ " + stepId + " · the answer's fields" + (c && c.file ? " in " + c.file : "") + " @@"]);
+    if (draft.text !== undefined) { out.push(["add", "+ the schema's text, " + plural(draft.text.split("\n").length, "line")]); continue; }
+    const was = c && c.state === "ready" ? baseFields(c) || [] : [];
+    const has = (list, f) => list.some((x) => JSON.stringify(x) === JSON.stringify(f));
+    for (const f of was) if (!has(draft.fields, f)) out.push(["del", "- " + show(f)]);
+    for (const f of draft.fields) if (!has(was, f)) out.push(["add", "+ " + show(f)]);
+  }
+  return out;
+}
+
+function paintFoot() {
+  if (!ed || !ed.foot) return;
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const b = ed.foot, st = uiOf(w.name), d = draftsOf(w.name);
+  const n = dirtyCount(w.name), nf = Object.keys(d.fields).length, np = Object.keys(d.prompts).length, ns = Object.keys(d.schemas).length;
+  b.root.classList.toggle("dirty", n > 0);
+  if (b.shownNotice !== st.notice) {
+    b.shownNotice = st.notice;
+    b.slot.replaceChildren(...(st.notice ? [noticeView(st.notice, w)] : []));
+  }
+  if (n === 0 && !st.saving) {
+    b.dot.hidden = true;
+    b.count.textContent = "Nothing changed";
+    b.what.textContent = "";
+    b.writes.textContent = "";
+    b.link.hidden = true;
+    ed.diff = false;
+  } else {
+    const here = [...new Set([
+      ...Object.values(d.fields).filter((e) => e.node === step.id).map((e) => wordsFor(e, step)),
+      ...(d.prompts[step.id] !== undefined ? ["the prompt"] : []),
+      ...(d.schemas[step.id] !== undefined ? ["the answer's fields"] : [])])];
+    const elsewhere = n - draftCountFor(w.name, step.id);
+    b.dot.hidden = false;
+    b.count.textContent = st.saving ? "Saving…" : plural(n, "change");
+    b.what.textContent = [here.slice(0, 3).join(", ") + (here.length > 3 ? " and " + (here.length - 3) + " more" : ""), elsewhere ? plural(elsewhere, "change") + " in other steps" : ""].filter(Boolean).join(" and ");
+    const file = (w.path || "workflow.yaml").split("/").pop();
+    put(b.writes, "Saving writes ", [nf ? plural(nf, "line") + " of " : null, nf ? el("span", { class: "mono" }, file) : null, nf && (np || ns) ? " and " : null,
+      np ? plural(np, "prompt file") : null, np && ns ? " and " : null, ns ? plural(ns, "schema file") : null], " and puts it live.");
+    b.link.hidden = false;
+  }
+  b.link.setAttribute("aria-expanded", ed.diff ? "true" : "false");
+  b.link.textContent = ed.diff ? "Hide the diff" : "See the diff";
+  b.diff.hidden = !(ed.diff && n > 0);
+  if (!b.diff.hidden) b.diff.replaceChildren(...diffOf(w, step).map(([kind, line]) => el("span", { class: "dl " + kind }, line + "\n")));
+  b.close.hidden = n > 0;
+  b.discard.hidden = n === 0;
+  b.save.hidden = n === 0;
+  b.save.setAttribute("aria-disabled", st.saving || n === 0 ? "true" : "false");
+  b.discard.setAttribute("aria-disabled", st.saving || n === 0 ? "true" : "false");
+  b.discard.classList.toggle("armed", st.armed);
+  b.discard.textContent = st.armed ? "Discard " + plural(n, "change") + "?" : "Discard";
+}
+
 window.addEventListener("hashchange", () => {
   readAddress();
   if (!selected.run) detail = null;
   refresh();
 });
 window.addEventListener("keydown", (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && event.target.closest && event.target.closest(".editform")) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && event.target.closest && event.target.closest(".editform, .nodeed")) {
     event.preventDefault();
     saveCurrent();
     return;
   }
   const typing = event.target.closest && event.target.closest("input, textarea, select, [contenteditable]");
-  if ((event.key === "a" || event.key === "A") && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && view && canAdd(view.w) && !selected.add && !selected.test && !selected.changes) {
+  if ((event.key === "a" || event.key === "A") && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && view && canAdd(view.w) && !selected.add && !selected.test && !selected.changes && !ed) {
     event.preventDefault();
     openAdd();
     return;
   }
   if (event.key !== "Escape") return;
+  // The node editor is on top of everything else: Escape closes it, and what was typed stays as a draft.
+  if (ed) { event.preventDefault(); closeEditor(); return; }
   // In a form field Escape only leaves the field.
   if (event.target.closest && event.target.closest(".editform")) { event.target.blur(); return; }
   if (selected.make) go({ make: false });
@@ -3922,6 +6136,7 @@ new ResizeObserver(() => {
   if (form) form.controls.forEach((c) => autosize(c.input));
 }).observe($("inspector"));
 
+buildRail();
 readAddress();
 refresh();
 setInterval(refresh, REFRESH_MS);

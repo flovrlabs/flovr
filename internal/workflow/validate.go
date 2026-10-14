@@ -33,6 +33,13 @@ type checker struct {
 	shapes     map[string]*shape     // what is known of the values expressions read, by name
 	loading    []string              // the component files being loaded, the one that uses the next before it
 	files      Overlay               // content to use in place of what component files hold
+	remote     string                // for a component fetched from git, the folder of its repository
+}
+
+// outside reports whether rel, a path written in a component fetched from
+// git, names a file outside its repository, which it may not read.
+func (c *checker) outside(rel string) bool {
+	return c.remote != "" && !inside(c.remote, resolve(c.path, rel))
 }
 
 func (c *checker) addf(line int, format string, args ...any) {
@@ -59,7 +66,7 @@ func (c *checker) run() {
 	// What a request body must match says what steps can read from it.
 	c.shapes = map[string]*shape{}
 	if t := w.Trigger; t != nil && t.Input != "" {
-		if _, doc, err := loadSchema(c.path, t.Input); err == nil {
+		if _, doc, err := loadSchema(c.path, t.Input, c.files); err == nil {
 			c.shapes["trigger"] = &shape{open: true, fields: map[string]*shape{"body": schemaShape(doc, false)}}
 		}
 	}
@@ -138,7 +145,7 @@ func (c *checker) steps(steps []Step, given string) []string {
 			if comp := steps[i].component; comp != nil {
 				c.shapes[s.ID] = comp.shape()
 			} else {
-				c.shapes[s.ID] = outputShape(c.path, s.AI, s.Decide, s.HTTP)
+				c.shapes[s.ID] = outputShape(c.path, c.files, s.AI, s.Decide, s.HTTP)
 			}
 		}
 	}
@@ -204,7 +211,7 @@ func (c *checker) trigger() {
 		if t.Webhook == "" {
 			c.addf(at, "trigger: input describes the body of a webhook request, so it needs webhook")
 		}
-		if _, _, err := loadSchema(c.path, t.Input); errors.Is(err, fs.ErrNotExist) {
+		if _, _, err := loadSchema(c.path, t.Input, c.files); errors.Is(err, fs.ErrNotExist) {
 			c.addf(at, "trigger: schema file not found: %s", t.Input)
 		} else if err != nil {
 			c.addf(at, "trigger: %s is not a valid JSON Schema: %v", t.Input, err)
@@ -224,6 +231,8 @@ func (c *checker) ai(base []any, label string, s *AIStep, env *expr.Env) {
 
 	if s.Prompt == "" {
 		c.addf(at("prompt"), "%s: ai.prompt is required", label)
+	} else if c.outside(s.Prompt) {
+		c.addf(at("prompt"), "%s: %s is outside the repository it comes from", label, s.Prompt)
 	} else if info, err := os.Stat(resolve(c.path, s.Prompt)); err != nil || info.IsDir() {
 		c.addf(at("prompt"), "%s: prompt file not found: %s", label, s.Prompt)
 	}
@@ -236,7 +245,9 @@ func (c *checker) ai(base []any, label string, s *AIStep, env *expr.Env) {
 
 	if s.Output == "" {
 		c.addf(at("output"), "%s: ai.output is required", label)
-	} else if _, _, err := loadSchema(c.path, s.Output); errors.Is(err, fs.ErrNotExist) {
+	} else if c.outside(s.Output) {
+		c.addf(at("output"), "%s: %s is outside the repository it comes from", label, s.Output)
+	} else if _, _, err := loadSchema(c.path, s.Output, c.files); errors.Is(err, fs.ErrNotExist) {
 		c.addf(at("output"), "%s: schema file not found: %s", label, s.Output)
 	} else if err != nil {
 		c.addf(at("output"), "%s: %s is not a valid JSON Schema: %v", label, s.Output, err)

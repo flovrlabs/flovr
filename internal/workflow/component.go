@@ -48,7 +48,10 @@ type Component struct {
 
 	// Path is the component file. Paths inside the file are relative to its
 	// directory.
-	Path    string              `yaml:"-"`
+	Path string `yaml:"-"`
+	// Remote is how a step names the component when it is taken from git,
+	// as in github.com/acme/services/notify@v1.2, and empty otherwise.
+	Remote  string              `yaml:"-"`
 	root    *yaml.Node          // parsed document, kept for line numbers
 	outputs map[string][]string // what can be read from each of its steps, by id
 	gives   []string            // what can be read from what it gives back
@@ -124,7 +127,7 @@ func (c *Component) shape() *shape {
 	if len(c.Steps) > 0 {
 		return writtenShape(c.Output)
 	}
-	return outputShape(c.Path, c.AI, c.Decide, c.HTTP)
+	return outputShape(c.Path, nil, c.AI, c.Decide, c.HTTP)
 }
 
 // Resolve turns a path written in the component file into one usable from
@@ -134,7 +137,7 @@ func (c *Component) Resolve(rel string) string { return resolve(c.Path, rel) }
 // Schema loads the JSON Schema at rel, both compiled for validation and as
 // the plain document.
 func (c *Component) Schema(rel string) (*jsonschema.Schema, map[string]any, error) {
-	return loadSchema(c.Path, rel)
+	return loadSchema(c.Path, rel, nil)
 }
 
 // EnvVars lists the environment variables read as env.NAME by the
@@ -328,7 +331,7 @@ func loadComponent(path string, loading []string, files Overlay) (*Component, er
 		comp.root = doc.Content[0]
 	}
 
-	c := &checker{path: path, root: comp.root, loading: append(slices.Clone(loading), path), files: files}
+	c := &checker{path: path, root: comp.root, loading: append(slices.Clone(loading), path), files: files, remote: checkoutOf(path)}
 	c.component(comp)
 	if len(c.items) > 0 {
 		sort.SliceStable(c.items, func(i, j int) bool { return c.items[i].Line < c.items[j].Line })
@@ -368,6 +371,15 @@ func (c *checker) component(comp *Component) {
 	if err != nil {
 		c.addf(1, "%s: %v", label, err)
 		return
+	}
+	// A component from git gets nothing it is not given: env holds the
+	// server's secrets.
+	if c.remote != "" {
+		for _, src := range comp.expressions() {
+			for _, name := range expr.Fields(src, "env") {
+				c.addf(1, "%s: it comes from git, so it cannot read env.%s; a step that uses it gives it what it needs as input", label, name)
+			}
+		}
 	}
 	// Reading a field of an input that is a single value is a mistake. An
 	// input that is not listed at all is reported further down.
@@ -438,7 +450,9 @@ func (c *checker) component(comp *Component) {
 			label = fmt.Sprintf("test %d", i+1)
 		}
 		at := c.line("tests", i, "input")
-		if t.Input == nil {
+		if rel, isPath := t.Input.(string); isPath && c.outside(rel) {
+			c.addf(at, "%s: %s is outside the repository it comes from", label, rel)
+		} else if t.Input == nil {
 			c.addf(at, "%s: input is required", label)
 		} else if values, err := comp.Values(t); errors.Is(err, fs.ErrNotExist) {
 			c.addf(at, "%s: input file not found: %v", label, t.Input)
@@ -523,11 +537,25 @@ func writtenType(v any) (kind string, known bool) {
 	return typeOf(v), true
 }
 
-// load returns the component at the path a step names with use.
+// load returns the component a step names with use: at a path, or in git.
 func (c *checker) load(use string) (*Component, error) {
-	path := resolve(c.path, use)
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		path = filepath.Join(path, ComponentFile)
+	var path string
+	switch {
+	case IsRemote(use) && c.remote != "":
+		return nil, fmt.Errorf("%s is from git, and a component from git cannot use another one from git", use)
+	case IsRemote(use):
+		var err error
+		if path, err = remoteFile(c.path, use); err != nil {
+			return nil, err
+		}
+	default:
+		path = resolve(c.path, use)
+		if c.remote != "" && !inside(c.remote, path) {
+			return nil, fmt.Errorf("%s is outside the repository this component comes from", use)
+		}
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			path = filepath.Join(path, ComponentFile)
+		}
 	}
 	if comp, ok := c.components[path]; ok {
 		return comp, nil
@@ -549,6 +577,9 @@ func (c *checker) load(use string) (*Component, error) {
 		return nil, fmt.Errorf("the component %s has a problem: %s:%d: %s%s", use, problems.Path, first.Line, first.Msg, more)
 	case err != nil:
 		return nil, fmt.Errorf("component %s: %v", use, err)
+	}
+	if IsRemote(use) {
+		comp.Remote = use
 	}
 	if c.components == nil {
 		c.components = map[string]*Component{}

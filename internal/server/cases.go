@@ -198,6 +198,13 @@ func newFixture(dir, name string, event any) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return newFile(dir, "fixtures", name, ".json", append(data, '\n'))
+}
+
+// newFile writes data as a new file in the folder sub of dir, named after
+// name with the extension ext, and returns its path from dir. It never
+// replaces a file: a name already taken gets a number.
+func newFile(dir, sub, name, ext string, data []byte) (string, error) {
 	slug := strings.Trim(notSlug.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	if len(slug) > 60 {
 		slug = strings.Trim(slug[:60], "-")
@@ -205,13 +212,13 @@ func newFixture(dir, name string, event any) (string, error) {
 	if slug == "" {
 		slug = "test"
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "fixtures"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 		return "", err
 	}
 	for n := 1; n < 1000; n++ {
-		rel := filepath.Join("fixtures", slug+".json")
+		rel := filepath.Join(sub, slug+ext)
 		if n > 1 {
-			rel = filepath.Join("fixtures", slug+"-"+strconv.Itoa(n)+".json")
+			rel = filepath.Join(sub, slug+"-"+strconv.Itoa(n)+ext)
 		}
 		f, err := os.OpenFile(filepath.Join(dir, rel), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if errors.Is(err, fs.ErrExist) {
@@ -220,7 +227,7 @@ func newFixture(dir, name string, event any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		_, err = f.Write(append(data, '\n'))
+		_, err = f.Write(data)
 		if closeErr := f.Close(); err == nil {
 			err = closeErr
 		}
@@ -230,7 +237,7 @@ func newFixture(dir, name string, event any) (string, error) {
 		}
 		return rel, nil
 	}
-	return "", fmt.Errorf("too many fixtures are named %s", slug)
+	return "", fmt.Errorf("too many files in %s are named %s", sub, slug)
 }
 
 // draft proposes a test from a run of the workflow: the event that started
