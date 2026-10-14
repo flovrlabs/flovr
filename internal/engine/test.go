@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"aia/internal/ai"
-	"aia/internal/expr"
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/expr"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // TestResult is the outcome of one of a workflow's tests.
@@ -21,6 +21,19 @@ type TestResult struct {
 	Failures []string // why the test failed; empty if it passed
 	Steps    []StepResult
 	Duration time.Duration
+
+	// Checks holds every expectation of the test, met or not, in the order
+	// of their keys. It is empty if the run failed before they were looked at.
+	Checks []Check
+	// Response is what the workflow answered, if it has respond.
+	Response *Response
+}
+
+// Check is one thing a test expects and, if the run did not meet it, how.
+type Check struct {
+	Key     string `json:"key"`
+	Want    any    `json:"want"`
+	Failure string `json:"failure,omitempty"`
 }
 
 // Test runs the workflow with t's fixture as the trigger and compares the
@@ -52,11 +65,16 @@ func (e *Engine) Test(ctx context.Context, w *workflow.Workflow, t workflow.Test
 		Model:    e.Model,
 		Env:      env,
 		StubHTTP: true,
-		OnStep:   func(r StepResult) { res.Steps = append(res.Steps, r) },
+		OnStep: func(r StepResult) {
+			res.Steps = append(res.Steps, r)
+			if e.OnStep != nil {
+				e.OnStep(r)
+			}
+		},
 	}
 
 	start := time.Now()
-	vars, err := sandbox.run(ctx, w, trigger)
+	vars, resp, err := sandbox.run(ctx, w, trigger)
 	res.Duration = time.Since(start)
 
 	var unavailable *ai.UnavailableError
@@ -67,35 +85,110 @@ func (e *Engine) Test(ctx context.Context, w *workflow.Workflow, t workflow.Test
 		res.Failures = []string{err.Error()}
 		return res, nil
 	}
-	res.Failures, err = unmet(t.Expect, res.Steps, vars)
+	if resp != nil {
+		// Expectations see the answer as a caller would, decoded from JSON.
+		var seen any
+		if data, err := json.Marshal(resp); err == nil {
+			json.Unmarshal(data, &seen)
+		}
+		vars["response"] = seen
+	}
+	given := []string{"trigger"}
+	if resp != nil {
+		given = append(given, "response")
+	}
+	res.Response = resp
+	res.Checks, err = check(t.Expect, res.Steps, vars, given...)
+	res.Failures = failures(res.Checks)
 	return res, err
 }
 
-// unmet lists the expectations that the finished run does not meet.
-func unmet(expect map[string]any, steps []StepResult, vars map[string]any) ([]string, error) {
+// failures lists how the checks that were not met failed.
+func failures(checks []Check) []string {
+	var out []string
+	for _, c := range checks {
+		if c.Failure != "" {
+			out = append(out, c.Failure)
+		}
+	}
+	return out
+}
+
+// TestComponent runs the component on its own with t's input and compares
+// the result with what t expects, under the same conditions as Test.
+func (e *Engine) TestComponent(ctx context.Context, c *workflow.Component, t workflow.ComponentTest) (TestResult, error) {
+	res := TestResult{Name: t.Name}
+	if res.Name == "" {
+		res.Name = "test of " + c.Name
+	}
+	input, err := c.Values(t)
+	if err != nil {
+		return res, err
+	}
+
+	env := map[string]string{}
+	maps.Copy(env, e.Env)
+	for _, name := range c.EnvVars() {
+		if _, ok := env[name]; !ok {
+			env[name] = "env." + name
+		}
+	}
+	sandbox := &Engine{Model: e.Model, Env: env, StubHTTP: true}
+
+	start := time.Now()
+	step := StepResult{ID: c.Name, Kind: c.Kind(), Status: OK}
+	var vars map[string]any
+	step.Output, step.Detail, step.Steps, vars, step.Err = sandbox.call(ctx, c, input)
+	step.Duration = time.Since(start)
+	res.Duration = step.Duration
+
+	var unavailable *ai.UnavailableError
+	if errors.As(step.Err, &unavailable) {
+		return res, step.Err
+	}
+	if step.Err != nil {
+		step.Status = Failed
+		res.Steps = []StepResult{step}
+		res.Failures = []string{step.Err.Error()}
+		return res, nil
+	}
+	res.Steps = []StepResult{step}
+
+	// Expectations see the input, the output and, of a component made of
+	// steps, each step.
+	vars["output"] = step.Output
+	res.Checks, err = check(t.Expect, step.Steps, vars, "input", "output")
+	res.Failures = failures(res.Checks)
+	return res, err
+}
+
+// check holds the finished run against each expectation. given names what
+// expressions can read besides the steps.
+func check(expect map[string]any, steps []StepResult, vars map[string]any, given ...string) ([]Check, error) {
 	status := map[string]Status{}
-	var ids []string
+	names := slices.Clone(given)
 	for _, s := range steps {
 		status[s.ID] = s.Status
-		ids = append(ids, s.ID)
+		names = append(names, s.ID)
 	}
-	env, err := expr.NewEnv(ids)
+	env, err := expr.Vars(names...)
 	if err != nil {
 		return nil, err
 	}
 
-	var failures []string
+	var checks []Check
 	for _, key := range slices.Sorted(maps.Keys(expect)) {
-		want := expect[key]
+		c := Check{Key: key, Want: expect[key]}
 
 		if st, isStep := status[key]; isStep {
 			got := workflow.Called
 			if st == Skipped {
 				got = workflow.Skipped
 			}
-			if got != want {
-				failures = append(failures, fmt.Sprintf("%s: expected %v, but it was %s", key, want, got))
+			if got != c.Want {
+				c.Failure = fmt.Sprintf("%s: expected %v, but it was %s", key, c.Want, got)
 			}
+			checks = append(checks, c)
 			continue
 		}
 
@@ -104,12 +197,13 @@ func unmet(expect map[string]any, steps []StepResult, vars map[string]any) ([]st
 			if id, _, _ := strings.Cut(key, "."); status[id] == Skipped {
 				err = fmt.Errorf("step %q was skipped", id)
 			}
-			failures = append(failures, fmt.Sprintf("%s: %v", key, err))
-		} else if g, w := jsonText(got), jsonText(want); g != w {
-			failures = append(failures, fmt.Sprintf("%s: expected %s, got %s", key, w, g))
+			c.Failure = fmt.Sprintf("%s: %v", key, err)
+		} else if g, w := jsonText(got), jsonText(c.Want); g != w {
+			c.Failure = fmt.Sprintf("%s: expected %s, got %s", key, w, g)
 		}
+		checks = append(checks, c)
 	}
-	return failures, nil
+	return checks, nil
 }
 
 // jsonText renders v as JSON, which gives values that came from YAML and

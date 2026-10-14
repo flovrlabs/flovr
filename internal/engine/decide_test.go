@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"aia/internal/ai"
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 const example = "../../examples/triage-ticket"
@@ -59,7 +59,7 @@ func runDecideExample(t *testing.T, decided map[string]any) ([]StepResult, *fake
 		Env:    map[string]string{"PAGER_URL": srv.URL + "/pager", "BILLING_URL": srv.URL + "/billing"},
 		OnStep: func(r StepResult) { results = append(results, r) },
 	}
-	if err := eng.Run(context.Background(), w, trigger); err != nil {
+	if _, err := eng.Run(context.Background(), w, trigger); err != nil {
 		t.Fatal(err)
 	}
 	return results, model, p, trigger

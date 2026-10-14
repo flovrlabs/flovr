@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,8 +18,8 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"go.yaml.in/yaml/v3"
 
-	"aia/internal/ai"
-	"aia/internal/expr"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/expr"
 )
 
 // What a test can expect of a whole step, as in `escalate: skipped`.
@@ -34,18 +35,24 @@ type Workflow struct {
 	Name    string   `yaml:"name"`
 	Trigger *Trigger `yaml:"trigger"`
 	Steps   []Step   `yaml:"steps"`
+	Respond *Respond `yaml:"respond"`
 	Tests   []Test   `yaml:"tests"`
 
 	// Path is the workflow file. Paths inside the file are relative to its
 	// directory.
-	Path string     `yaml:"-"`
-	root *yaml.Node // parsed document, kept for line numbers
+	Path    string              `yaml:"-"`
+	root    *yaml.Node          // parsed document, kept for line numbers
+	outputs map[string][]string // what can be read from each step, by its id
 }
 
 type Trigger struct {
 	Webhook string `yaml:"webhook"`
 	Cron    string `yaml:"cron"`
 	Manual  bool   `yaml:"manual"`
+
+	// Input is the path of a JSON Schema that the body of a webhook request
+	// must match. A request whose body does not is refused and runs nothing.
+	Input string `yaml:"input"`
 }
 
 type Step struct {
@@ -54,9 +61,17 @@ type Step struct {
 	AI     *AIStep     `yaml:"ai"`
 	Decide *DecideStep `yaml:"decide"`
 	HTTP   *HTTPStep   `yaml:"http"`
+
+	// Use is the path of a component that the step runs, and With the input
+	// it gives the component.
+	Use  string         `yaml:"use"`
+	With map[string]any `yaml:"with"`
+
+	component *Component // what Use names, once the workflow is loaded
 }
 
-// Kind names the step's type, or is empty if the step has none.
+// Kind names the step's type, or is empty if the step has none. A step that
+// uses a component is of the component's type.
 func (s Step) Kind() string {
 	switch {
 	case s.AI != nil:
@@ -65,9 +80,14 @@ func (s Step) Kind() string {
 		return "decide"
 	case s.HTTP != nil:
 		return "http"
+	case s.component != nil:
+		return s.component.Kind()
 	}
 	return ""
 }
+
+// Component is the component the step uses, or nil if it uses none.
+func (s Step) Component() *Component { return s.component }
 
 // DecideStep asks a decision model typed questions about its input. The model
 // answers with probabilities instead of writing text.
@@ -214,7 +234,21 @@ func Load(path string) (*Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
+	return Parse(path, data)
+}
 
+// Parse is Load for content that is already at hand: data is checked as the
+// workflow file at path, which need not hold it yet. The files that data
+// refers to are looked up from path's directory.
+func Parse(path string, data []byte) (*Workflow, error) { return ParseWith(path, data, nil) }
+
+// Overlay holds content for component files, by path, to be used in place of
+// what the files hold. It lets a change to a component be checked, together
+// with everything that uses the component, before it is written.
+type Overlay map[string][]byte
+
+// ParseWith is Parse with the component files in files read from there.
+func ParseWith(path string, data []byte, files Overlay) (*Workflow, error) {
 	w := &Workflow{Path: path}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -226,28 +260,43 @@ func Load(path string) (*Workflow, error) {
 		w.root = doc.Content[0]
 	}
 
-	c := &checker{w: w}
+	c := &checker{path: path, root: w.root, w: w, files: files}
 	c.run()
 	if len(c.items) > 0 {
 		sort.SliceStable(c.items, func(i, j int) bool { return c.items[i].Line < c.items[j].Line })
 		return nil, &Problems{Path: path, Items: c.items}
+	}
+	w.outputs = map[string][]string{}
+	for _, s := range w.Steps {
+		w.outputs[s.ID] = c.shapes[s.ID].paths()
 	}
 	return w, nil
 }
 
 // Resolve turns a path written in the workflow file into one usable from the
 // current directory.
-func (w *Workflow) Resolve(rel string) string {
-	if filepath.IsAbs(rel) {
-		return rel
-	}
-	return filepath.Join(filepath.Dir(w.Path), rel)
-}
+func (w *Workflow) Resolve(rel string) string { return resolve(w.Path, rel) }
 
 // Schema loads the JSON Schema at rel, both compiled for validation and as the
 // plain document.
 func (w *Workflow) Schema(rel string) (*jsonschema.Schema, map[string]any, error) {
-	path := w.Resolve(rel)
+	return loadSchema(w.Path, rel)
+}
+
+// Fixture reads the JSON file at rel, as used for a trigger event.
+func (w *Workflow) Fixture(rel string) (any, error) { return loadJSON(w.Path, rel) }
+
+// resolve turns rel, a path written in file, into one usable from the current
+// directory.
+func resolve(file, rel string) string {
+	if filepath.IsAbs(rel) {
+		return rel
+	}
+	return filepath.Join(filepath.Dir(file), rel)
+}
+
+func loadSchema(file, rel string) (*jsonschema.Schema, map[string]any, error) {
+	path := resolve(file, rel)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
@@ -260,16 +309,18 @@ func (w *Workflow) Schema(rel string) (*jsonschema.Schema, map[string]any, error
 	if err != nil {
 		return nil, nil, err
 	}
-	compiled, err := jsonschema.NewCompiler().Compile(abs)
+	// The compiler takes a location, in which a # or a space in a folder's
+	// name would mean something else unless it is written as a URL.
+	location := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	compiled, err := jsonschema.NewCompiler().Compile(location.String())
 	if err != nil {
 		return nil, nil, err
 	}
 	return compiled, doc, nil
 }
 
-// Fixture reads the JSON file at rel, as used for a trigger event.
-func (w *Workflow) Fixture(rel string) (any, error) {
-	data, err := os.ReadFile(w.Resolve(rel))
+func loadJSON(file, rel string) (any, error) {
+	data, err := os.ReadFile(resolve(file, rel))
 	if err != nil {
 		return nil, err
 	}
@@ -280,36 +331,72 @@ func (w *Workflow) Fixture(rel string) (any, error) {
 	return v, nil
 }
 
-// EnvVars lists the environment variables the workflow's expressions read as
-// env.NAME.
+// EnvVars lists the environment variables read as env.NAME by the workflow's
+// expressions and by those of the components it uses.
 func (w *Workflow) EnvVars() []string {
 	var names []string
 	for _, s := range w.Steps {
 		for _, src := range s.expressions() {
 			names = append(names, expr.EnvVars(src)...)
 		}
+		if s.component != nil {
+			names = append(names, s.component.EnvVars()...)
+		}
+	}
+	for _, src := range w.Respond.expressions() {
+		names = append(names, expr.EnvVars(src)...)
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
 }
 
+// Files lists the files, besides the workflow file, that the workflow was
+// built from: those of the components it uses.
+func (w *Workflow) Files() []string {
+	var paths []string
+	for _, s := range w.Steps {
+		if s.component != nil {
+			paths = append(paths, s.component.Files()...)
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths)
+}
+
+// Outputs lists what can be read from the step with the given id once it has
+// run, as the fields to put behind its id, such as "category.value". It is
+// empty where nothing is known of what the step puts out.
+func (w *Workflow) Outputs(id string) []string { return w.outputs[id] }
+
 // Reads lists what step i's expressions refer to among the trigger and the
 // steps before it, in the order those are defined.
 func (w *Workflow) Reads(i int) []string {
+	return reads(w.Steps[i].expressions(), "trigger", w.Steps[:i])
+}
+
+// RespondReads lists what the answer to the caller refers to among the
+// trigger and the steps, in the order those are defined.
+func (w *Workflow) RespondReads() []string {
+	return reads(w.Respond.expressions(), "trigger", w.Steps)
+}
+
+// reads lists which of given, the name of what steps are handed, and the
+// steps the expressions refer to. It is never nil.
+func reads(exprs []string, given string, steps []Step) []string {
 	var mentioned []string
-	for _, src := range w.Steps[i].expressions() {
+	for _, src := range exprs {
 		mentioned = append(mentioned, expr.Names(src)...)
 	}
-	var reads []string
-	if slices.Contains(mentioned, "trigger") {
-		reads = append(reads, "trigger")
+	out := []string{}
+	if slices.Contains(mentioned, given) {
+		out = append(out, given)
 	}
-	for _, earlier := range w.Steps[:i] {
-		if slices.Contains(mentioned, earlier.ID) {
-			reads = append(reads, earlier.ID)
+	for _, step := range steps {
+		if slices.Contains(mentioned, step.ID) {
+			out = append(out, step.ID)
 		}
 	}
-	return reads
+	return out
 }
 
 // expressions returns every expression the step contains: its condition and
@@ -319,28 +406,73 @@ func (s Step) expressions() []string {
 	if s.When != "" {
 		exprs = append(exprs, s.When)
 	}
+	exprs = append(exprs, placeholders(s.AI, s.Decide, s.HTTP)...)
+	return append(exprs, expr.Placeholders(s.With)...)
+}
+
+// placeholders returns the inside of each ${...} in whichever of the three
+// kinds of work is given.
+func placeholders(ai *AIStep, decide *DecideStep, http *HTTPStep) []string {
 	var templated []any
 	switch {
-	case s.AI != nil:
-		templated = []any{s.AI.Input}
-	case s.Decide != nil:
-		templated = []any{s.Decide.Input}
-	case s.HTTP != nil:
-		templated = []any{s.HTTP.URL, s.HTTP.Body}
-		for _, value := range s.HTTP.Headers {
+	case ai != nil:
+		templated = []any{ai.Input}
+	case decide != nil:
+		templated = []any{decide.Input}
+	case http != nil:
+		templated = []any{http.URL, http.Body}
+		for _, value := range http.Headers {
 			templated = append(templated, value)
 		}
 	}
+	var exprs []string
 	for _, v := range templated {
 		exprs = append(exprs, expr.Placeholders(v)...)
 	}
 	return exprs
 }
 
-// line returns the source line of the value at path (map keys and list
-// indexes), falling back to the nearest enclosing value that exists.
-func (w *Workflow) line(path ...any) int {
-	n, line := w.root, 1
+// Writable reports whether the text at path, given as map keys and list
+// indexes, can be changed in the file without rewriting anything around it.
+// That takes a key of a mapping written in indented form, not inline as {...},
+// whose value is plain text or which the mapping does not have yet.
+func (w *Workflow) Writable(path ...any) bool { return writable(w.root, path...) }
+
+func writable(n *yaml.Node, path ...any) bool {
+	for i, p := range path {
+		if n == nil {
+			return false
+		}
+		var next *yaml.Node
+		switch p := p.(type) {
+		case string:
+			if n.Kind != yaml.MappingNode {
+				return false
+			}
+			for j := 0; j+1 < len(n.Content); j += 2 {
+				if n.Content[j].Value == p {
+					next = n.Content[j+1]
+					break
+				}
+			}
+			if i == len(path)-1 {
+				return n.Style&yaml.FlowStyle == 0 && (next == nil || next.Kind == yaml.ScalarNode)
+			}
+		case int:
+			if n.Kind == yaml.SequenceNode && p >= 0 && p < len(n.Content) {
+				next = n.Content[p]
+			}
+		}
+		n = next
+	}
+	return false
+}
+
+// lineOf returns the source line of the value at path (map keys and list
+// indexes) below root, falling back to the nearest enclosing value that
+// exists.
+func lineOf(root *yaml.Node, path ...any) int {
+	n, line := root, 1
 	for _, p := range path {
 		if n == nil {
 			break

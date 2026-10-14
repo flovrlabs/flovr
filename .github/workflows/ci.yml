@@ -21,7 +21,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # The newest patch release, which has the standard library's fixes.
+          go-version: "1.26.x"
+          check-latest: true
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l .)
@@ -32,6 +34,8 @@ jobs:
           fi
       - run: go vet ./...
       - run: go test ./...
+      - name: Look for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   workflows:
     name: Example workflows
@@ -44,14 +48,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
-      - name: Build aia
-        run: go build -o "$RUNNER_TEMP/aia" ./cmd/aia
+          # The newest patch release, which has the standard library's fixes.
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Build flowmaker
+        run: go build -o "$RUNNER_TEMP/flowmaker" ./cmd/flowmaker
       - name: Validate workflows
         run: |
           failed=0
           for dir in examples/*/; do
-            "$RUNNER_TEMP/aia" validate "$dir" || failed=1
+            "$RUNNER_TEMP/flowmaker" validate "$dir" || failed=1
           done
           exit $failed
       # ai and decide steps call their models for real; http steps are not sent.
@@ -60,7 +66,11 @@ jobs:
         run: |
           failed=0
           for dir in examples/*/; do
-            "$RUNNER_TEMP/aia" test "$dir" || failed=1
+            "$RUNNER_TEMP/flowmaker" test "$dir" || failed=1
+          done
+          # Components have tests of their own.
+          for file in $(find examples -name component.yaml); do
+            "$RUNNER_TEMP/flowmaker" test "$file" || failed=1
           done
           exit $failed
       - name: Report skipped tests

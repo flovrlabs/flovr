@@ -57,8 +57,18 @@ func TestEvalErrors(t *testing.T) {
 		{"${ }", "empty ${}"},
 		{"${later.summary}", "undeclared reference to 'later'"},
 		{"${classify.missing}", "no such key: missing"},
+		// The environment is read by naming a variable, and in no other way.
+		{"${env}", "as env.NAME"},
+		{`${env["URL"]}`, "as env.NAME"},
+		{"${env[trigger.body.name]}", "as env.NAME"},
+		{`${"URL" in env}`, "as env.NAME"},
+		{"${env.all(k, true)}", "as env.NAME"},
+		{`${env.URL + env["URL"]}`, "as env.NAME"},
 	}
 	for _, tt := range tests {
+		if err := env.Check(tt.in); err == nil && strings.Contains(tt.in, "env") {
+			t.Errorf("Check(%q) found nothing wrong", tt.in)
+		}
 		_, err := env.Eval(tt.in, vars)
 		if err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("Eval(%q) error = %v, want one containing %q", tt.in, err, tt.want)
@@ -145,5 +155,29 @@ func TestCondition(t *testing.T) {
 	}
 	if _, err := env.EvalCondition(`classify.priority`, vars); err == nil {
 		t.Error("EvalCondition accepted a non-bool result")
+	}
+}
+
+func TestReads(t *testing.T) {
+	tests := map[string][]string{
+		`classify.priority.value == "high"`:               {"classify.priority.value", "classify.priority"},
+		`a.x > 1 && !(b.y.z in ["p", "q"])`:               {"a.x", "b.y.z", "b.y"},
+		`has(summarize.summary) ? summarize.summary : ""`: {"summarize.summary", "summarize.summary"},
+		`trigger.body.items.exists(i, i.price > env.MAX)`: {"trigger.body.items", "trigger.body", "i.price", "env.MAX"},
+		`a.list[0].name + a.map["key"].name`:              {"a.list", "a.map"},
+		`a == b`:                                          nil,
+		`size(a.items) > 0`:                               {"a.items"},
+		`not an expression (`:                             nil,
+	}
+	for src, want := range tests {
+		var got []string
+		for _, path := range Reads(src) {
+			got = append(got, strings.Join(path, "."))
+		}
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("Reads(%q) = %v, want %v", src, got, want)
+		}
 	}
 }

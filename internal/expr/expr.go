@@ -21,12 +21,17 @@ type Env struct{ cel *cel.Env }
 // NewEnv returns an environment in which expressions can refer to trigger,
 // env, and the outputs of the given steps.
 func NewEnv(steps []string) (*Env, error) {
+	return Vars(append([]string{"trigger"}, steps...)...)
+}
+
+// Vars returns an environment in which expressions can refer to env and to
+// values with the given names.
+func Vars(names ...string) (*Env, error) {
 	opts := []cel.EnvOption{
-		cel.Variable("trigger", cel.DynType),
 		cel.Variable("env", cel.MapType(cel.StringType, cel.StringType)),
 	}
-	for _, id := range steps {
-		opts = append(opts, cel.Variable(id, cel.DynType))
+	for _, name := range names {
+		opts = append(opts, cel.Variable(name, cel.DynType))
 	}
 	e, err := cel.NewEnv(opts...)
 	if err != nil {
@@ -166,6 +171,18 @@ func (e *Env) compile(src string) (cel.Program, *cel.Type, error) {
 	if iss.Err() != nil {
 		return nil, nil, errors.New(strings.TrimSuffix(iss.Errors()[0].Message, " (in container '')"))
 	}
+	// The environment holds the server's keys. Naming a variable is the
+	// only way to read one, so a workflow reads only those its author wrote
+	// down, and nothing from a request can choose another.
+	all := 0
+	for _, name := range Names(src) {
+		if name == "env" {
+			all++
+		}
+	}
+	if all > len(EnvVars(src)) {
+		return nil, nil, errors.New("env can only be read one variable at a time, as env.NAME")
+	}
 	prg, err := e.cel.Program(ast)
 	if err != nil {
 		return nil, nil, err
@@ -183,14 +200,17 @@ var parser = sync.OnceValue(func() *cel.Env {
 
 // EnvVars returns the NAME of every env.NAME that the bare expression src
 // reads.
-func EnvVars(src string) []string {
+func EnvVars(src string) []string { return Fields(src, "env") }
+
+// Fields returns the NAME of every of.NAME that the bare expression src reads.
+func Fields(src, of string) []string {
 	var names []string
 	visit(src, func(e celast.Expr) {
 		if e.Kind() != celast.SelectKind {
 			return
 		}
 		sel := e.AsSelect()
-		if op := sel.Operand(); op.Kind() == celast.IdentKind && op.AsIdent() == "env" {
+		if op := sel.Operand(); op.Kind() == celast.IdentKind && op.AsIdent() == of {
 			names = append(names, sel.FieldName())
 		}
 	})
@@ -260,6 +280,13 @@ func stringify(v any) string {
 	return string(b)
 }
 
+// Single reports whether src is one ${...} placeholder and nothing else. Its
+// value then keeps the type of what the placeholder yields.
+func Single(src string) bool {
+	parts, err := split(src)
+	return err == nil && len(parts) == 1 && parts[0].expr
+}
+
 type part struct {
 	text string
 	expr bool
@@ -327,4 +354,23 @@ func closing(src string, from int) int {
 		}
 	}
 	return -1
+}
+
+// Reads returns, for each place the bare expression src reads fields of a
+// named value, that name followed by the fields: ["classify", "priority",
+// "value"] for classify.priority.value. A chain of fields is also listed
+// by each of its beginnings.
+func Reads(src string) [][]string {
+	var paths [][]string
+	visit(src, func(e celast.Expr) {
+		var fields []string
+		for e.Kind() == celast.SelectKind {
+			fields = append([]string{e.AsSelect().FieldName()}, fields...)
+			e = e.AsSelect().Operand()
+		}
+		if len(fields) > 0 && e.Kind() == celast.IdentKind {
+			paths = append(paths, append([]string{e.AsIdent()}, fields...))
+		}
+	})
+	return paths
 }

@@ -1,0 +1,60 @@
+name: Release
+
+# A tag such as v0.1.0 builds flowmaker for Linux, macOS and Windows and
+# publishes the archives as a GitHub release. A pull request that changes how
+# releases are built makes the same archives without publishing them.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .goreleaser.yaml
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: Build the release without publishing it
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
+
+  release:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Only this job, which runs for tags alone, may write to the repository.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - run: go test ./...
+      - name: Look for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

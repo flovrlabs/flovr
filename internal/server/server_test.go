@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"aia/internal/ai"
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // fakeModel decides that every ticket has the given priority.
@@ -344,42 +344,136 @@ func TestOnlyLocalNamesAreAnsweredWithoutAToken(t *testing.T) {
 		}
 	}
 
-	// With a token, the token is the protection and any host name is served.
+	// With a token, the token and the page key are the protection and any
+	// host name is served.
 	withToken := serveExample(t, "low", "secret-token")
+	withToken.srv.opts.PageKey = "page-key"
 	req := request(http.MethodGet, "/api/state", "")
-	req.Host = "aia.example.com"
-	req.SetBasicAuth("anyone", "secret-token")
+	req.Host = "flowmaker.example.com"
+	req.Header.Set("Authorization", "Bearer page-key")
 	if rec := do(withToken.srv, req); rec.Code != http.StatusOK {
 		t.Errorf("with a token and a public host name: status = %d", rec.Code)
 	}
 }
 
-func TestPageNeedsTheToken(t *testing.T) {
+func TestPageNeedsItsKey(t *testing.T) {
 	f := serveExample(t, "low", "secret-token")
-	for _, path := range []string{"/", "/ui/app.js", "/api/state", "/api/runs/r-0"} {
-		rec := get(f.srv, path)
-		if rec.Code != http.StatusUnauthorized || !strings.HasPrefix(rec.Header().Get("WWW-Authenticate"), "Basic ") {
-			t.Errorf("GET %s without the token: status = %d, WWW-Authenticate = %q", path, rec.Code, rec.Header().Get("WWW-Authenticate"))
+	f.srv.opts.PageKey = "page-key"
+	for _, path := range []string{"/", "/ui/app.js", "/api/state", "/api/runs/r-0", "/?key=guess"} {
+		if rec := get(f.srv, path); rec.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s without the key: status = %d", path, rec.Code)
 		}
 	}
-
-	wrong := request(http.MethodGet, "/", "")
-	wrong.SetBasicAuth("admin", "guess")
-	basic := request(http.MethodGet, "/", "")
-	basic.SetBasicAuth("anyone", "secret-token")
-	bearer := request(http.MethodGet, "/api/state", "")
-	bearer.Header.Set("Authorization", "Bearer secret-token")
-	if got := []int{do(f.srv, wrong).Code, do(f.srv, basic).Code, do(f.srv, bearer).Code}; got[0] != 401 || got[1] != 200 || got[2] != 200 {
-		t.Errorf("wrong password, right password, bearer token: statuses = %v, want [401 200 200]", got)
+	if body := get(f.srv, "/").Body.String(); !strings.Contains(body, "?key=") {
+		t.Errorf("the page without its key says %q", body)
 	}
 
-	// Basic authentication is for the page only: a browser sends it along with
-	// requests another site makes, so it must not start a run.
+	// The key in the address becomes a cookie, and the address loses it.
+	rec := get(f.srv, "/api/state?key=page-key&x=1")
+	cookies := rec.Result().Cookies()
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/api/state?x=1" || len(cookies) != 1 {
+		t.Fatalf("status = %d, Location = %q, cookies %v", rec.Code, rec.Header().Get("Location"), cookies)
+	}
+	if c := cookies[0]; c.Name != keyCookie || c.Value != "page-key" || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" {
+		t.Errorf("cookie = %+v", c)
+	}
+	withCookie := request(http.MethodGet, "/api/state", "")
+	withCookie.AddCookie(cookies[0])
+	withBearer := request(http.MethodGet, "/api/state", "")
+	withBearer.Header.Set("Authorization", "bearer page-key")
+	withToken := request(http.MethodGet, "/api/state", "")
+	withToken.Header.Set("Authorization", "Bearer secret-token")
+	if got := []int{do(f.srv, withCookie).Code, do(f.srv, withBearer).Code, do(f.srv, withToken).Code}; got[0] != 200 || got[1] != 200 || got[2] != 401 {
+		t.Errorf("cookie, page key as bearer, webhook token: statuses = %v, want [200 200 401]", got)
+	}
+
+	// The key opens the page, not the webhooks; the token, the webhooks only.
 	hook := request(http.MethodPost, "/tickets?wait=true", ticket)
-	hook.SetBasicAuth("anyone", "secret-token")
+	hook.AddCookie(cookies[0])
 	if rec := do(f.srv, hook); rec.Code != http.StatusUnauthorized {
-		t.Errorf("webhook with basic authentication: status = %d, want 401", rec.Code)
+		t.Errorf("webhook with the page's cookie: status = %d, want 401", rec.Code)
 	}
+}
+
+func TestWebhookCallerIsToldOnlyHowTheRunWent(t *testing.T) {
+	f := serveExample(t, "high", "secret-token")
+	rec := post(f.srv, "/tickets?wait=true", "secret-token", ticket)
+	var answer map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &answer)
+	if rec.Code != http.StatusOK || len(answer) != 2 || answer["status"] != "ok" || !strings.HasPrefix(fmt.Sprint(answer["run"]), "r-") {
+		t.Errorf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	// Without a token the server is this machine's alone, and the whole run
+	// comes back.
+	local := serveExample(t, "high", "")
+	var run Run
+	json.Unmarshal(post(local.srv, "/tickets?wait=true", "", ticket).Body.Bytes(), &run)
+	if run.Status != "ok" || len(run.Steps) != 4 || run.Trigger == nil {
+		t.Errorf("run = %+v", run)
+	}
+}
+
+func TestTokenMustComeAsABearerToken(t *testing.T) {
+	f := serveExample(t, "low", "secret-token")
+	for header, want := range map[string]int{
+		"secret-token":         http.StatusUnauthorized,
+		"Basic secret-token":   http.StatusUnauthorized,
+		"Bearer secret-token":  http.StatusOK,
+		"bearer secret-token":  http.StatusOK,
+		"Bearer  secret-token": http.StatusOK,
+		"Bearer secret-tokenX": http.StatusUnauthorized,
+	} {
+		req := request(http.MethodPost, "/tickets?wait=true", ticket)
+		req.Header.Set("Authorization", header)
+		if got := do(f.srv, req).Code; got != want {
+			t.Errorf("Authorization: %q: status = %d, want %d", header, got, want)
+		}
+	}
+	// Refusals are logged, but not one line each under a flood.
+	var refusals []string
+	for _, line := range *f.logs {
+		if strings.HasPrefix(line, "refused ") {
+			refusals = append(refusals, line)
+		}
+	}
+	if len(refusals) != 1 || !strings.Contains(refusals[0], "POST /tickets") {
+		t.Errorf("log lines about refusals: %q", refusals)
+	}
+}
+
+func TestRunsBeyondTheLimitAreTurnedAway(t *testing.T) {
+	w, err := workflow.Load("../../examples/triage-ticket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrived, release := make(chan struct{}, 4), make(chan struct{})
+	sink := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		arrived <- struct{}{}
+		<-release
+	}))
+	t.Cleanup(sink.Close)
+	srv, err := New([]*workflow.Workflow{w}, Options{
+		Model: fakeModel{"high"}, HTTP: sink.Client(), MaxRuns: 1,
+		Env: map[string]string{"PAGER_URL": sink.URL + "/pager", "BILLING_URL": sink.URL + "/billing"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(srv, "/tickets", "", ticket); rec.Code != http.StatusAccepted {
+		t.Fatalf("first run: status = %d", rec.Code)
+	}
+	<-arrived // the first run is busy at an http step
+	rec := post(srv, "/tickets?wait=true", "", ticket)
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+		t.Errorf("second run: status = %d, Retry-After %q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	close(release)
+	srv.Wait()
+	// The slot is free again once the run is done.
+	if rec := post(srv, "/tickets", "", ticket); rec.Code != http.StatusAccepted {
+		t.Errorf("after the first run: status = %d", rec.Code)
+	}
+	srv.Wait()
 }
 
 func TestPageFiles(t *testing.T) {
@@ -418,7 +512,8 @@ func TestStateDescribesWorkflowsAndRuns(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Commit != "abc1234" || state.Protected || len(state.Workflows) != 1 || len(state.Runs) != 1 {
+	// The workflow is followed by the one component it uses.
+	if state.Commit != "abc1234" || state.Protected || len(state.Workflows) != 2 || !state.Workflows[1].Component || len(state.Runs) != 1 {
 		t.Fatalf("state = %+v", state)
 	}
 
@@ -443,17 +538,19 @@ func TestStateDescribesWorkflowsAndRuns(t *testing.T) {
 					{Name: "medium", Meaning: "The customer is blocked on one task but has a workaround or can wait a day."},
 					{Name: "high", Meaning: "The customer cannot use the product, or data or money is at risk right now."},
 				}},
-			}},
+			}, Outputs: []string{"category.value", "priority.value"}},
 		{ID: "summarize", Kind: "ai", Subtitle: "deepseek-v4.1-flash", When: `classify.priority.value == "high"`, Reads: []string{"trigger", "classify"}, Fields: [][2]string{
 			{"model", "openrouter/deepseek/deepseek-v4.1-flash"},
 			{"prompt", "prompts/summarize.md"},
 			{"output", "schemas/summary.json"},
-		}},
-		{ID: "alert_billing", Kind: "http", Subtitle: "POST ${env.BILLING_URL}", When: `classify.priority.value == "high" && classify.category.value in ["refund", "billing"]`,
+		}, Outputs: []string{"summary"}},
+		// It uses a component, and is described by what the component does.
+		{ID: "alert_billing", Kind: "http", Subtitle: "notify", When: `classify.priority.value == "high" && classify.category.value in ["refund", "billing"]`,
 			Reads: []string{"classify", "summarize"}, Fields: [][2]string{
-				{"request", "POST ${env.BILLING_URL}"},
-				{"sends", "category, summary"},
-			}},
+				{"component", "components/notify"},
+				{"request", "POST ${input.url}"},
+			}, Component: "notify", Uses: "components/notify", Target: "../../examples/triage-ticket/components/notify",
+			Outputs: []string{"body", "status"}},
 	}
 	for i, step := range want {
 		if got, _ := json.Marshal(w.Steps[i]); string(got) != mustJSON(step) {
@@ -548,5 +645,58 @@ func TestHistoryKeepsTheMostRecentRuns(t *testing.T) {
 	}
 	if _, ok := h.get("r-0"); ok {
 		t.Error("the oldest run was not dropped")
+	}
+}
+
+func TestHistoryOfOddSizesDoesNotStopTheServer(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	path := filepath.Join(dir, "runs.jsonl")
+	h, err := openHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A folder the server makes for its history keeps git out of it.
+	if got := readFile(t, filepath.Join(dir, ".gitignore")); got != "*\n" {
+		t.Errorf(".gitignore = %q", got)
+	}
+
+	defer func(record, line int) { maxRecord, maxLine = record, line }(maxRecord, maxLine)
+	maxRecord, maxLine = 2000, 4000
+	big := strings.Repeat("<", 3000)
+	h.put(Run{ID: "r-big", Status: "ok", Trigger: map[string]any{"body": big}, Steps: []Step{{ID: "a", Output: big}}})
+	h.put(Run{ID: "r-small", Status: "ok", Trigger: map[string]any{"body": "<b>"}})
+	h.close()
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), big) || !strings.Contains(string(data), `"<b>"`) {
+		t.Errorf("history file:\n%.300s", data)
+	}
+
+	// A line longer than can be read back is passed over.
+	os.WriteFile(path, append(data, []byte(`{"run": "r-long", "workflow": "`+strings.Repeat("x", maxLine)+`"}`+"\n")...), 0o600)
+	again, err := openHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.close()
+	var ids []string
+	for _, r := range again.recent() {
+		ids = append(ids, r.ID)
+	}
+	if got := strings.Join(ids, " "); got != "r-small r-big" {
+		t.Errorf("runs read back: %s", got)
+	}
+	if big, _ := again.get("r-big"); big.Trigger != nil || big.Steps[0].Output != nil {
+		t.Errorf("the big run was kept whole: %+v", big)
+	}
+
+	// A folder that was there before is left as it was.
+	existing := t.TempDir()
+	h, err = openHistory(filepath.Join(existing, "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.close()
+	if _, err := os.Stat(filepath.Join(existing, ".gitignore")); err == nil {
+		t.Error("a .gitignore was written into a folder that was already there")
 	}
 }

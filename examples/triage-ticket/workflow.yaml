@@ -36,25 +36,24 @@ steps:
       input: ${trigger.body}
       output: schemas/summary.json
 
+  # Both teams are told the same way, which components/notify defines once.
   # Money problems go to the billing team: an engineer cannot refund a charge.
   - id: alert_billing
     when: classify.priority.value == "high" && classify.category.value in ["refund", "billing"]
-    http:
-      method: POST
+    use: components/notify
+    with:
       url: ${env.BILLING_URL}
-      body:
-        summary: ${summarize.summary}
-        category: ${classify.category.value}
+      summary: ${summarize.summary}
+      category: ${classify.category.value}
 
   # Every other urgent ticket pages the on-call engineer.
   - id: page_oncall
     when: classify.priority.value == "high" && !(classify.category.value in ["refund", "billing"])
-    http:
-      method: POST
+    use: components/notify
+    with:
       url: ${env.PAGER_URL}
-      body:
-        summary: ${summarize.summary}
-        category: ${classify.category.value}
+      summary: ${summarize.summary}
+      category: ${classify.category.value}
 
 # In tests, http steps are stubbed: nothing is sent, the call is only recorded.
 tests:

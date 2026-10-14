@@ -3,20 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aia</title>
+<title>flowmaker</title>
 <link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
 <div class="app">
   <header class="top">
-    <div class="brand"><span class="logo" aria-hidden="true"></span><span class="wordmark">aia</span></div>
-    <nav id="crumb" class="crumb" aria-label="Current workflow"></nav>
+    <div class="brand"><span class="logo" aria-hidden="true"></span><span class="wordmark">flowmaker</span></div>
+    <nav id="crumb" class="crumb" aria-label="Current workflow or component"></nav>
     <span id="latest" class="latest"></span>
     <span id="commit" class="commit" title="Version of the workflow files this server is running"></span>
+    <span id="changes" class="changes-slot"></span>
     <span id="live" class="live" role="status"></span>
   </header>
-  <aside id="side" class="side" aria-label="Workflows and runs"></aside>
-  <main id="canvas" class="canvas" aria-label="Workflow"></main>
+  <aside id="side" class="side" aria-label="Workflows, components and runs"></aside>
+  <main id="canvas" class="canvas" aria-label="Drawing of the selected workflow or component"></main>
   <aside id="inspector" class="inspector" aria-label="Details"></aside>
 </div>
 <script src="/ui/app.js"></script>

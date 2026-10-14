@@ -1,0 +1,42 @@
+# A component made of steps: it drafts a reply with a model, then hands the
+# draft to the service that sends mail. A step that uses it sees only what
+# output gives back. The workflow does not use it yet: it is here to be added
+# as a step, from the page or by hand.
+name: reply
+description: Drafts a reply to the customer and sends it through a mail service.
+
+input:
+  ticket: object
+  url: string
+
+steps:
+  - id: draft
+    ai:
+      model: openrouter/deepseek/deepseek-v4.1-flash
+      prompt: prompt.md
+      input: ${input.ticket}
+      output: schema.json
+
+  - id: send
+    http:
+      method: POST
+      url: ${input.url}
+      body:
+        subject: ${draft.subject}
+        text: ${draft.text}
+
+output:
+  subject: ${draft.subject}
+
+# The draft is written by the model for real; the request is not sent.
+tests:
+  - name: drafts a reply and sends it
+    input:
+      url: https://example.org/mail
+      ticket:
+        customer: dana@example.com
+        subject: Charged twice for my May invoice
+        message: I was charged twice for the May invoice. Please refund one of the two payments.
+    expect:
+      send: called
+      output.subject != "": true

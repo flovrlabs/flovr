@@ -1,0 +1,26 @@
+# Tells a team about an urgent ticket. Every team is told the same way, so
+# the workflow uses this once per team instead of repeating the request.
+name: notify
+description: Tells a team about an urgent ticket by sending it a summary.
+
+input:
+  url: string
+  summary: string
+  category: string
+
+http:
+  method: POST
+  url: ${input.url}
+  body:
+    summary: ${input.summary}
+    category: ${input.category}
+
+# http steps are not sent in tests, so this checks only that the input fits.
+tests:
+  - name: takes a summary and a category
+    input:
+      url: https://example.org/hooks/team
+      summary: Checkout fails for every customer since 09:00.
+      category: outage
+    expect:
+      output.status: 200
