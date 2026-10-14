@@ -700,3 +700,11 @@ func TestHistoryOfOddSizesDoesNotStopTheServer(t *testing.T) {
 		t.Error("a .gitignore was written into a folder that was already there")
 	}
 }
+
+func TestStateOfAServerThatHasRunNothing(t *testing.T) {
+	f := serveExample(t, "low", "")
+	body := get(f.srv, "/api/state").Body.String()
+	if !strings.Contains(body, `"runs":[]`) {
+		t.Errorf("state = %.200s, want an empty list of runs", body)
+	}
+}
