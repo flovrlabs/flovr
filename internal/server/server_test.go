@@ -708,3 +708,16 @@ func TestStateOfAServerThatHasRunNothing(t *testing.T) {
 		t.Errorf("state = %.200s, want an empty list of runs", body)
 	}
 }
+
+func TestBrowsersAskingForAnIconAreNotRefused(t *testing.T) {
+	f := serveExample(t, "low", "")
+	f.srv.opts.PageKey = "page-key"
+	if rec := get(f.srv, "/favicon.ico"); rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d", rec.Code)
+	}
+	for _, line := range *f.logs {
+		if strings.HasPrefix(line, "refused") {
+			t.Errorf("logged %q", line)
+		}
+	}
+}

@@ -353,8 +353,14 @@ func (s *Server) commit() string {
 }
 
 func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/healthz" {
+	switch r.URL.Path {
+	case "/healthz":
 		rw.WriteHeader(http.StatusOK)
+		return
+	case "/favicon.ico":
+		// Browsers ask for it on their own, without the page's key, and the
+		// page has none.
+		rw.WriteHeader(http.StatusNoContent)
 		return
 	}
 	// Without a token, nothing but the address protects the server. Checking
