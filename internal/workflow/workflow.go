@@ -242,9 +242,9 @@ func Load(path string) (*Workflow, error) {
 // refers to are looked up from path's directory.
 func Parse(path string, data []byte) (*Workflow, error) { return ParseWith(path, data, nil) }
 
-// Overlay holds content for component files, by path, to be used in place of
-// what the files hold. It lets a change to a component be checked, together
-// with everything that uses the component, before it is written.
+// Overlay holds content for component files and schema files, by path, to be
+// used in place of what the files hold. It lets a change to such a file be
+// checked, together with everything that uses it, before it is written.
 type Overlay map[string][]byte
 
 // ParseWith is Parse with the component files in files read from there.
@@ -280,7 +280,7 @@ func (w *Workflow) Resolve(rel string) string { return resolve(w.Path, rel) }
 // Schema loads the JSON Schema at rel, both compiled for validation and as the
 // plain document.
 func (w *Workflow) Schema(rel string) (*jsonschema.Schema, map[string]any, error) {
-	return loadSchema(w.Path, rel)
+	return loadSchema(w.Path, rel, nil)
 }
 
 // Fixture reads the JSON file at rel, as used for a trigger event.
@@ -295,11 +295,14 @@ func resolve(file, rel string) string {
 	return filepath.Join(filepath.Dir(file), rel)
 }
 
-func loadSchema(file, rel string) (*jsonschema.Schema, map[string]any, error) {
+func loadSchema(file, rel string, files Overlay) (*jsonschema.Schema, map[string]any, error) {
 	path := resolve(file, rel)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
+	data, given := files[path]
+	if !given {
+		var err error
+		if data, err = os.ReadFile(path); err != nil {
+			return nil, nil, err
+		}
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -312,7 +315,17 @@ func loadSchema(file, rel string) (*jsonschema.Schema, map[string]any, error) {
 	// The compiler takes a location, in which a # or a space in a folder's
 	// name would mean something else unless it is written as a URL.
 	location := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
-	compiled, err := jsonschema.NewCompiler().Compile(location.String())
+	compiler := jsonschema.NewCompiler()
+	if given {
+		parsed, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := compiler.AddResource(location.String(), parsed); err != nil {
+			return nil, nil, err
+		}
+	}
+	compiled, err := compiler.Compile(location.String())
 	if err != nil {
 		return nil, nil, err
 	}

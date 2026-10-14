@@ -612,3 +612,45 @@ func TestRemovingTheLastKeyOfAFileTakesTheBlankLineBeforeIt(t *testing.T) {
 		t.Errorf("got %q, %v", out, err)
 	}
 }
+
+func TestMappingWritesLists(t *testing.T) {
+	text, err := Mapping([]Pair{
+		{"questions", []Pair{
+			{"priority", []Pair{
+				{"ask", "How urgent is it?"},
+				{"score", Items{
+					[]Pair{{"low", "No time pressure."}},
+					[]Pair{{"high", "Money is at risk: now."}},
+				}},
+			}},
+		}},
+		{"tags", Items{"a", "b: c", 3, true}},
+		{"none", Items{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `questions:
+  priority:
+    ask: How urgent is it?
+    score:
+      - low: No time pressure.
+      - high: 'Money is at risk: now.'
+tags:
+  - a
+  - 'b: c'
+  - 3
+  - true
+none: []
+`
+	if text != want {
+		t.Errorf("got:\n%s\nwant:\n%s", text, want)
+	}
+	var got map[string]any
+	if err := yaml.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got["tags"].([]any)) != 4 {
+		t.Errorf("read back as %#v", got)
+	}
+}
