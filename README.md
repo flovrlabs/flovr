@@ -1,27 +1,27 @@
-# aia
+# Flowmaker
 
-aia runs workflows that are written as YAML files and kept in git. A workflow is a list of steps: ask a model for structured output, ask a decision model typed questions, send an HTTP request, or use a component that someone wrote once for all workflows. The same file holds the workflow's tests, which call the models for real.
+Flowmaker runs workflows that are written as YAML files and kept in git. A workflow is a list of steps: ask a model for structured output, ask a decision model typed questions, send an HTTP request, or use a component that someone wrote once for all workflows. The same file holds the workflow's tests, which call the models for real.
 
 One binary does everything:
 
 | Command | What it does |
 |---|---|
-| `aia validate` | Checks a workflow without running it |
-| `aia test` | Runs the tests in the workflow file |
-| `aia run` | Runs the workflow once, for real |
-| `aia serve` | Stays running, runs workflows when a request or a schedule starts them, and serves a page that shows them |
+| `flowmaker validate` | Checks a workflow without running it |
+| `flowmaker test` | Runs the tests in the workflow file |
+| `flowmaker run` | Runs the workflow once, for real |
+| `flowmaker serve` | Stays running, runs workflows when a request or a schedule starts them, and serves a page that shows them |
 
-With `aia serve --edit` the page can also change the workflow files. Every change it makes is a small diff in the same YAML file.
+With `flowmaker serve --edit` the page can also change the workflow files. Every change it makes is a small diff in the same YAML file.
 
 ## Try it
 
 You need Go 1.26 and, for the examples, an [OpenRouter](https://openrouter.ai) key.
 
 ```bash
-go build -o aia ./cmd/aia
+go build -o flowmaker ./cmd/flowmaker
 ```
 
-Put the key in a file named `.env` in the folder you run aia from. The file is ignored by git.
+Put the key in a file named `.env` in the folder you run flowmaker from. The file is ignored by git.
 
 ```
 OPENROUTER_API_KEY=...
@@ -30,17 +30,17 @@ OPENROUTER_API_KEY=...
 Check an example, then run its tests. The tests call the models, which costs a little; they send none of the workflow's HTTP requests.
 
 ```bash
-./aia validate examples/triage-ticket
+./flowmaker validate examples/triage-ticket
 ```
 
 ```bash
-./aia test examples/triage-ticket
+./flowmaker test examples/triage-ticket
 ```
 
 Serve both examples and open http://127.0.0.1:8080. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
 
 ```bash
-PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing ./aia serve examples --edit
+PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing ./flowmaker serve examples --edit
 ```
 
 ## A workflow
@@ -93,7 +93,7 @@ Paths in the file, such as `schemas/comment.json`, are relative to the workflow'
 |---|---|---|
 | `webhook: /path` | a POST request with a JSON body arrives at that path | `trigger.body` |
 | `cron: "0 3 * * *"` | the schedule fires (five fields: minute, hour, day, month, weekday) | `trigger.time` |
-| `manual: true` | you run it with `aia run` | what the fixture holds |
+| `manual: true` | you run it with `flowmaker run` | what the fixture holds |
 
 A webhook trigger can name a JSON Schema as `input`. A request whose body does not match it is answered with status 400 and a list of what is wrong, and nothing runs.
 
@@ -220,12 +220,12 @@ output:
 A component can carry tests of its own. Each gives it `input`, written out or as the path of a JSON file, and expects things of `output`. For a component made of steps, a test can also expect a step to be `called` or `skipped`.
 
 ```bash
-./aia test examples/triage-ticket/components/reply
+./flowmaker test examples/triage-ticket/components/reply
 ```
 
 ## What validate catches
 
-`aia validate` reads the workflow, the components it uses and the files they name, and reports each problem with its line. Among them:
+`flowmaker validate` reads the workflow, the components it uses and the files they name, and reports each problem with its line. Among them:
 
 - a field that does not exist, a step without work, an id used twice
 - a prompt, schema or fixture file that is missing, or a schema that is not valid
@@ -235,11 +235,11 @@ A component can carry tests of its own. Each gives it `input`, written out or as
 - a component that would end up using itself
 - a test fixture that the trigger's `input` schema would refuse
 
-`aia serve` checks the same things before it starts, and also that every environment variable the workflows read is set.
+`flowmaker serve` checks the same things before it starts, and also that every environment variable the workflows read is set.
 
 ## The page
 
-`aia serve` serves a page at its address. It shows each workflow as a drawing, with one shape per kind of step, and the recent runs. Selecting a run colours the drawing by what each step did; selecting a step shows what it put out, or why it failed.
+`flowmaker serve` serves a page at its address. It shows each workflow as a drawing, with one shape per kind of step, and the recent runs. Selecting a run colours the drawing by what each step did; selecting a step shows what it put out, or why it failed.
 
 With `--edit` the page becomes a place to work on the workflows:
 
@@ -258,13 +258,13 @@ Nothing is written unless the result is a workflow the server can go on serving;
 ## Serving for real
 
 ```bash
-AIA_TOKEN=... ./aia serve workflows --addr 0.0.0.0:8080
+FLOWMAKER_TOKEN=... ./flowmaker serve workflows --addr 0.0.0.0:8080
 ```
 
-- Without `AIA_TOKEN` the server listens only on this machine. With it, every webhook request must carry `Authorization: Bearer <token>`, and the browser asks for the token as a password.
+- Without `FLOWMAKER_TOKEN` the server listens only on this machine. With it, every webhook request must carry `Authorization: Bearer <token>`, and the browser asks for the token as a password.
 - A webhook request must be sent with `Content-Type: application/json`. Its body can be up to 1 MB.
 - A run that takes longer than five minutes is stopped.
-- Finished runs are appended to `.aia/runs.jsonl`, readable by its owner only, and read back on start. They hold request bodies and step outputs, so keep the file out of git. `--history` puts it elsewhere.
+- Finished runs are appended to `.flowmaker/runs.jsonl`, readable by its owner only, and read back on start. They hold request bodies and step outputs, so keep the file out of git. `--history` puts it elsewhere.
 - Every run records the git commit of the workflow files it ran.
 - `/healthz` answers 200 while the server is up.
 
@@ -273,11 +273,11 @@ AIA_TOKEN=... ./aia serve workflows --addr 0.0.0.0:8080
 [.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. The same two commands work for your own workflows:
 
 ```bash
-aia validate path/to/workflow
+flowmaker validate path/to/workflow
 ```
 
 ```bash
-aia test path/to/workflow
+flowmaker test path/to/workflow
 ```
 
 Both exit with a status other than 0 when something is wrong, and print what.

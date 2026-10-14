@@ -15,7 +15,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"go.yaml.in/yaml/v3"
 
-	"aia/internal/expr"
+	"github.com/simonyosb/flowmaker/internal/expr"
 )
 
 // ComponentFile is the file LoadComponent looks for when given a directory.

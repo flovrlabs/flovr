@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // describer describes the values of one file, a workflow's or a component's,

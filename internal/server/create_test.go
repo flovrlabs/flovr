@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // editFolder serves a copy of the examples folder for editing, as a folder

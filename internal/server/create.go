@@ -10,8 +10,8 @@ import (
 	"slices"
 	"strings"
 
-	"aia/internal/workflow"
-	"aia/internal/yamledit"
+	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/yamledit"
 )
 
 // createRequest makes a new workflow.
@@ -55,7 +55,7 @@ func (s *Server) create(req createRequest) (int, any) {
 	switch {
 	case len(roots) == 0:
 		return refuse("The server was started with workflow files and no folder, so it has nowhere to make a new workflow. " +
-			"Start it with a folder, as in: aia serve workflows --edit")
+			"Start it with a folder, as in: flowmaker serve workflows --edit")
 	case req.Root == "" && len(roots) == 1:
 		at = 0
 	case at < 0:

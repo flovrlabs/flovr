@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"aia/internal/ai"
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // serveToTest serves the triage-ticket example for editing, with the given

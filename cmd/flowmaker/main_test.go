@@ -9,30 +9,30 @@ import (
 func TestLoadDotEnv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	content := `# keys for local runs
-AIA_TEST_PLAIN=abc=def
+FLOWMAKER_TEST_PLAIN=abc=def
 
-export AIA_TEST_EXPORTED = "quoted value"
-AIA_TEST_SINGLE='single'
-AIA_TEST_ALREADY_SET=from file
-AIA_TEST_EMPTY=
+export FLOWMAKER_TEST_EXPORTED = "quoted value"
+FLOWMAKER_TEST_SINGLE='single'
+FLOWMAKER_TEST_ALREADY_SET=from file
+FLOWMAKER_TEST_EMPTY=
 `
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"AIA_TEST_PLAIN", "AIA_TEST_EXPORTED", "AIA_TEST_SINGLE", "AIA_TEST_EMPTY"} {
+	for _, name := range []string{"FLOWMAKER_TEST_PLAIN", "FLOWMAKER_TEST_EXPORTED", "FLOWMAKER_TEST_SINGLE", "FLOWMAKER_TEST_EMPTY"} {
 		t.Setenv(name, "")
 	}
-	t.Setenv("AIA_TEST_ALREADY_SET", "from environment")
+	t.Setenv("FLOWMAKER_TEST_ALREADY_SET", "from environment")
 
 	if err := loadDotEnv(path); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{
-		"AIA_TEST_PLAIN":       "abc=def",
-		"AIA_TEST_EXPORTED":    "quoted value",
-		"AIA_TEST_SINGLE":      "single",
-		"AIA_TEST_ALREADY_SET": "from environment",
-		"AIA_TEST_EMPTY":       "",
+		"FLOWMAKER_TEST_PLAIN":       "abc=def",
+		"FLOWMAKER_TEST_EXPORTED":    "quoted value",
+		"FLOWMAKER_TEST_SINGLE":      "single",
+		"FLOWMAKER_TEST_ALREADY_SET": "from environment",
+		"FLOWMAKER_TEST_EMPTY":       "",
 	} {
 		if got := os.Getenv(name); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)

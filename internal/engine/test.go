@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"aia/internal/ai"
-	"aia/internal/expr"
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/expr"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // TestResult is the outcome of one of a workflow's tests.

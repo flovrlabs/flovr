@@ -13,8 +13,8 @@ import (
 	"github.com/robfig/cron/v3"
 	"go.yaml.in/yaml/v3"
 
-	"aia/internal/ai"
-	"aia/internal/expr"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/expr"
 )
 
 var idRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

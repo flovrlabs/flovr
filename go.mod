@@ -1,4 +1,4 @@
-module aia
+module github.com/simonyosb/flowmaker
 
 go 1.26.0
 

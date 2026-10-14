@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // flowProject is a workflow whose step uses a component made of steps, one

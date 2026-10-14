@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // editExample serves a copy of the triage-ticket example that the page may

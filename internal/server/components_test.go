@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // named returns the description of what the page knows by name.

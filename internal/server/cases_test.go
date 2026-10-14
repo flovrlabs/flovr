@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // editUrgent serves a copy of the triage-ticket example for editing, with a

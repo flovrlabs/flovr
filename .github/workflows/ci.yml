@@ -45,13 +45,13 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Build aia
-        run: go build -o "$RUNNER_TEMP/aia" ./cmd/aia
+      - name: Build flowmaker
+        run: go build -o "$RUNNER_TEMP/flowmaker" ./cmd/flowmaker
       - name: Validate workflows
         run: |
           failed=0
           for dir in examples/*/; do
-            "$RUNNER_TEMP/aia" validate "$dir" || failed=1
+            "$RUNNER_TEMP/flowmaker" validate "$dir" || failed=1
           done
           exit $failed
       # ai and decide steps call their models for real; http steps are not sent.
@@ -60,11 +60,11 @@ jobs:
         run: |
           failed=0
           for dir in examples/*/; do
-            "$RUNNER_TEMP/aia" test "$dir" || failed=1
+            "$RUNNER_TEMP/flowmaker" test "$dir" || failed=1
           done
           # Components have tests of their own.
           for file in $(find examples -name component.yaml); do
-            "$RUNNER_TEMP/aia" test "$file" || failed=1
+            "$RUNNER_TEMP/flowmaker" test "$file" || failed=1
           done
           exit $failed
       - name: Report skipped tests

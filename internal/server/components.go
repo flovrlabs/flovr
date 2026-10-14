@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"aia/internal/engine"
-	"aia/internal/workflow"
-	"aia/internal/yamledit"
+	"github.com/simonyosb/flowmaker/internal/engine"
+	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/yamledit"
 )
 
 // components returns every component the page shows, by the name the page

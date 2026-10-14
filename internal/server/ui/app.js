@@ -303,7 +303,7 @@ function renderTop(w) {
 
   const last = w && !isComp(w) ? latestRun(w.name) : null;
   const anyFailed = state.runs.some((r) => r.status === "failed" && latestRun(r.workflow) === r);
-  document.title = anyFailed ? "aia (a run failed)" : "aia";
+  document.title = anyFailed ? "flowmaker (a run failed)" : "flowmaker";
   if (!w) {
     $("crumb").replaceChildren();
     $("latest").replaceChildren();
@@ -389,7 +389,7 @@ function renderSide(w) {
 
   // A component is never started by a trigger: all it has are test runs.
   const none = comp
-    ? (state.editable ? "None yet. Run its tests and each one appears here." : "None. Tests of a component run with aia test.")
+    ? (state.editable ? "None yet. Run its tests and each one appears here." : "None. Tests of a component run with flowmaker test.")
     : w.trigger ? "None yet. A run appears here each time the trigger fires." : "The server does not run this workflow: it has no webhook or cron trigger.";
 
   // The runs and tests are a workflow's: a workflow still being made has none.
@@ -852,7 +852,7 @@ function example(w) {
     "curl -X POST '" + location.origin + path + (w.respond ? "" : "?wait=true") + "' \\",
     "  -H 'Content-Type: application/json' \\",
   ];
-  if (state.protected) lines.push("  -H \"Authorization: Bearer $AIA_TOKEN\" \\");
+  if (state.protected) lines.push("  -H \"Authorization: Bearer $FLOWMAKER_TOKEN\" \\");
   // The body of the workflow's first test is one it is known to take.
   const body = w.sample !== undefined ? JSON.stringify(w.sample) : "{\"subject\": \"Hello\", \"message\": \"...\"}";
   lines.push("  -d '" + body.replace(/'/g, "'\\''") + "'");
@@ -948,7 +948,7 @@ function workflowDetails(w) {
       w.input ? ["Takes", el("span", { class: "mono" }, w.input)] : null,
       w.respond ? ["Answers", [el("span", { class: "mono" }, w.respond.status), " ", showResponse()]] : null,
       ["Steps", w.steps.length],
-      ["Tests", w.tests + (w.tests && !state.editable ? ", run with aia test" : "")],
+      ["Tests", w.tests + (w.tests && !state.editable ? ", run with flowmaker test" : "")],
       state.commit ? ["Version", el("span", { class: "mono" }, state.commit)] : null,
     ])),
     section("Steps", outline(w), el("p", { class: "muted small" }, "A step with an IF condition is skipped when the condition is false."),
@@ -1003,7 +1003,7 @@ function componentDetails(w) {
     section("Definition", pairs([
       ["File", mono(w.path)],
       ["Made of", w.gives ? plural(w.steps.length, "step") + " of its own" : "One piece of work: " + (KIND_NAMES[kind] || kind).toLowerCase()],
-      ["Tests", w.tests + (w.tests && !state.editable ? ", run with aia test" : "")],
+      ["Tests", w.tests + (w.tests && !state.editable ? ", run with flowmaker test" : "")],
       state.commit ? ["Version", mono(state.commit)] : null,
     ])),
     section("Takes", inputsView(w), el("p", { class: "muted small" }, "A step that uses this component fills each in. ", inn)),
@@ -1113,7 +1113,7 @@ function runDetails(w, run) {
 }
 
 function triggerDetails(w, run) {
-  let how = "This workflow has no trigger, so the server does not run it. Run it with aia run.";
+  let how = "This workflow has no trigger, so the server does not run it. Run it with flowmaker run.";
   if (isWebhook(w)) {
     how = "A POST request to " + w.trigger.slice(5) + " with a JSON body starts the workflow. Steps read the body as trigger.body.";
     if (w.input) how += " The body must match " + w.input + ": a request whose body does not is refused with status 400, and nothing runs.";

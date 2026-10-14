@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"aia/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/ai"
 )
 
 func TestLoadExample(t *testing.T) {

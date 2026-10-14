@@ -7,9 +7,9 @@ import (
 	"slices"
 	"time"
 
-	"aia/internal/ai"
-	"aia/internal/engine"
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/engine"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // testRequest starts tests of a workflow.

@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"aia/internal/ai"
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 // fakeModel decides that every ticket has the given priority.
@@ -347,7 +347,7 @@ func TestOnlyLocalNamesAreAnsweredWithoutAToken(t *testing.T) {
 	// With a token, the token is the protection and any host name is served.
 	withToken := serveExample(t, "low", "secret-token")
 	req := request(http.MethodGet, "/api/state", "")
-	req.Host = "aia.example.com"
+	req.Host = "flowmaker.example.com"
 	req.SetBasicAuth("anyone", "secret-token")
 	if rec := do(withToken.srv, req); rec.Code != http.StatusOK {
 		t.Errorf("with a token and a public host name: status = %d", rec.Code)

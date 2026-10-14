@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"aia/internal/workflow"
-	"aia/internal/yamledit"
+	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/yamledit"
 )
 
 // source is what the server knows of a workflow file the page may change.
@@ -649,7 +649,7 @@ func writeFile(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".aia-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".flowmaker-*")
 	if err != nil {
 		return err
 	}

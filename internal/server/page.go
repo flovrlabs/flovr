@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"aia/internal/ai"
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 //go:embed ui
@@ -28,7 +28,7 @@ func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.mayView(r) {
-		rw.Header().Set("WWW-Authenticate", `Basic realm="aia", charset="UTF-8"`)
+		rw.Header().Set("WWW-Authenticate", `Basic realm="flowmaker", charset="UTF-8"`)
 		reply(rw, http.StatusUnauthorized, map[string]string{"error": "sign in with any user name and the server's token as the password"})
 		return
 	}

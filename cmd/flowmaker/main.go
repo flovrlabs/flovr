@@ -1,4 +1,4 @@
-// Command aia validates and runs AI workflows defined as YAML files.
+// Command flowmaker validates and runs AI workflows defined as YAML files.
 package main
 
 import (
@@ -20,15 +20,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"aia/internal/ai"
-	"aia/internal/engine"
-	"aia/internal/server"
-	"aia/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/ai"
+	"github.com/simonyosb/flowmaker/internal/engine"
+	"github.com/simonyosb/flowmaker/internal/server"
+	"github.com/simonyosb/flowmaker/internal/workflow"
 )
 
 func main() {
 	root := &cobra.Command{
-		Use:   "aia",
+		Use:   "flowmaker",
 		Short: "Validate and run AI workflows defined as YAML files",
 		Long: "Validate and run AI workflows defined as YAML files.\n\n" +
 			"Model API keys come from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY or\n" +
@@ -121,7 +121,7 @@ func runCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if workflow.IsComponent(target(args)) {
 				return errors.New("run takes a workflow. A component runs as part of the workflows that use it; " +
-					"to try it on its own, give it tests and use: aia test " + target(args))
+					"to try it on its own, give it tests and use: flowmaker test " + target(args))
 			}
 			w, err := workflow.Load(target(args))
 			if err != nil {
@@ -260,7 +260,7 @@ func serveCmd() *cobra.Command {
 			"server then follows the files too, taking up what an editor or git changes in\n" +
 			"them. This is for working on workflows on your own machine, so it needs an\n" +
 			"address that only this machine can reach.\n\n" +
-			"If AIA_TOKEN is set, every webhook request must carry it as a bearer token, and\n" +
+			"If FLOWMAKER_TOKEN is set, every webhook request must carry it as a bearer token, and\n" +
 			"the browser asks for it as a password. The server only listens beyond this\n" +
 			"machine when that token is set.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -271,10 +271,10 @@ func serveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			token := os.Getenv("AIA_TOKEN")
+			token := os.Getenv("FLOWMAKER_TOKEN")
 			if token == "" && !loopback(addr) {
-				return fmt.Errorf("refusing to listen on %s without AIA_TOKEN: anyone who can reach it could run these workflows.\n"+
-					"Set AIA_TOKEN, or listen on 127.0.0.1", addr)
+				return fmt.Errorf("refusing to listen on %s without FLOWMAKER_TOKEN: anyone who can reach it could run these workflows.\n"+
+					"Set FLOWMAKER_TOKEN, or listen on 127.0.0.1", addr)
 			}
 			if edit && !loopback(addr) {
 				return fmt.Errorf("refusing to combine --edit with %s: the page could then change files on this machine from elsewhere.\n"+
@@ -311,12 +311,12 @@ func serveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("aia is serving on http://%s  (open it in a browser to see workflows and runs)\n", listener.Addr())
+			fmt.Printf("flowmaker is serving on http://%s  (open it in a browser to see workflows and runs)\n", listener.Addr())
 			for _, route := range srv.Routes() {
 				fmt.Println("  " + route)
 			}
 			if token == "" {
-				fmt.Println("  no AIA_TOKEN set: requests from this machine are accepted without one")
+				fmt.Println("  no FLOWMAKER_TOKEN set: requests from this machine are accepted without one")
 			}
 			if edit {
 				fmt.Println("  --edit: the page can change the workflow files, and changes to them are picked up")
@@ -344,7 +344,7 @@ func serveCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "address to listen on")
-	cmd.Flags().StringVar(&history, "history", filepath.Join(".aia", "runs.jsonl"),
+	cmd.Flags().StringVar(&history, "history", filepath.Join(".flowmaker", "runs.jsonl"),
 		"file that finished runs are saved to, with their trigger payloads and step outputs; empty keeps them in memory only")
 	cmd.Flags().BoolVar(&edit, "edit", false, "let the web page change the workflow files, and pick up changes made to them")
 	return cmd

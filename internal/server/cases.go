@@ -15,8 +15,8 @@ import (
 	"strconv"
 	"strings"
 
-	"aia/internal/workflow"
-	"aia/internal/yamledit"
+	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/simonyosb/flowmaker/internal/yamledit"
 )
 
 // casesRequest drafts a test from a run, adds a test to a workflow, or
