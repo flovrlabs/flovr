@@ -133,11 +133,27 @@ func TestChangesShowAWorkflowThatWasMade(t *testing.T) {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
 	}
 
-	// Git does not know the file yet, and would show only its folder.
+	// A file git does not know is listed, but its text is shown only if it
+	// is of a kind the page writes.
+	if err := os.WriteFile(filepath.Join(root, "refund-alerts", ".env"), []byte("SECRET=do-not-show\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "refund-alerts", "notes.json"), []byte(`{"big": "`+strings.Repeat("x", maxShown)+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Git does not know the files yet, and would show only their folder.
 	var view changesView
 	json.Unmarshal(get(srv, "/api/changes?workflow=refund-alerts").Body.Bytes(), &view)
-	if len(view.Files) != 1 || view.Files[0] != (changeView{Path: "refund-alerts/workflow.yaml", Change: "new"}) {
-		t.Errorf("files = %+v", view.Files)
+	var listed []string
+	for _, f := range view.Files {
+		listed = append(listed, f.Change+" "+f.Path)
+	}
+	if got := strings.Join(listed, ", "); got != "new refund-alerts/.env, new refund-alerts/notes.json, new refund-alerts/workflow.yaml" {
+		t.Errorf("files = %s", got)
+	}
+	if strings.Contains(view.Diff, "do-not-show") || strings.Contains(view.Diff, "notes.json") {
+		t.Errorf("the diff shows what it should only list:\n%s", view.Diff)
 	}
 	for _, want := range []string{"+++ b/refund-alerts/workflow.yaml\n", "\n+name: refund-alerts\n", "\n+    use: ../triage-ticket/components/notify\n"} {
 		if !strings.Contains(view.Diff, want) {

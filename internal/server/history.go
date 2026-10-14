@@ -2,7 +2,11 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +15,14 @@ import (
 
 // historySize is how many runs the server keeps in memory to show.
 const historySize = 500
+
+var (
+	// maxRecord is the longest a run's line in the file may be. A run that
+	// would make a longer one is written without its request and outputs.
+	maxRecord = 8 << 20
+	// maxLine is the longest line read back; a longer one is passed over.
+	maxLine = 64 << 20
+)
 
 // history holds the most recent runs, oldest first. Finished runs are also
 // appended to a file, one JSON object per line, if it has one.
@@ -27,8 +39,14 @@ func openHistory(path string) (*history, error) {
 	if path == "" {
 		return h, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
+	dir := filepath.Dir(path)
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+		// The folder is usually inside a project, and what it holds is not
+		// for git.
+		os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*\n"), 0o600)
 	}
 	// Run records hold trigger payloads and step outputs, so only the owner
 	// may read the file.
@@ -36,18 +54,23 @@ func openHistory(path string) (*history, error) {
 	if err != nil {
 		return nil, err
 	}
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(nil, 64<<20)
-	for scanner.Scan() {
+	reader := bufio.NewReader(f)
+	for {
+		data, err := reader.ReadBytes('\n')
 		var r Run
-		// A line that does not parse is a record cut short by a crash.
-		if json.Unmarshal(scanner.Bytes(), &r) == nil && r.ID != "" {
+		// A line that does not parse is a record cut short by a crash, and
+		// one too long to read is passed over rather than keeping the
+		// server from starting.
+		if len(data) <= maxLine && json.Unmarshal(data, &r) == nil && r.ID != "" {
 			h.runs = append(h.runs, r)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		f.Close()
-		return nil, err
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 	h.trim()
 	h.file = f
@@ -67,10 +90,24 @@ func (h *history) put(r Run) {
 		h.trim()
 	}
 	if h.file != nil && r.Status != running {
-		if line, err := json.Marshal(r); err == nil {
-			h.file.Write(append(line, '\n'))
+		text := line(r)
+		if len(text) > maxRecord {
+			r.Trigger, r.Response, r.Gave = nil, nil, nil
+			r.Steps = withoutOutputs(r.Steps)
+			text = line(r)
 		}
+		h.file.Write(text)
 	}
+}
+
+// line is a run as a line of the file.
+func line(r Run) []byte {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	// Escaping < > & would make a line up to six times longer for nothing.
+	enc.SetEscapeHTML(false)
+	enc.Encode(r)
+	return buf.Bytes()
 }
 
 func (h *history) trim() {

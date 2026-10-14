@@ -182,7 +182,11 @@ function go(change) {
 
 async function getJSON(path) {
   const response = await fetch(path, { headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(path + " answered " + response.status);
+  if (!response.ok) {
+    const err = new Error(path + " answered " + response.status);
+    err.status = response.status;
+    throw err;
+  }
   return response.json();
 }
 
@@ -204,7 +208,9 @@ async function refresh() {
     live.title = "Last updated " + when(Date.now());
     live.className = "live";
   } catch (err) {
-    live.replaceChildren(el("span", { class: "pulse" }), "Cannot reach the server");
+    // The server is there but does not know this browser: its key is gone.
+    const why = err.status === 401 ? "Needs the page's key: open the address flowmaker printed" : "Cannot reach the server";
+    live.replaceChildren(el("span", { class: "pulse" }), why);
     live.className = "live down";
   }
   render();

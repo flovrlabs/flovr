@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,9 +16,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -77,6 +80,17 @@ func versionCmd() *cobra.Command {
 	}
 }
 
+// A .env file may come with a folder from someone else, so it cannot send the
+// keys of this machine elsewhere: it sets where a provider is only along with
+// that provider's key, and never a proxy or which certificates to trust.
+var (
+	keyOf       = map[string]string{"OPENAI_BASE_URL": "OPENAI_API_KEY", "ANTHROPIC_BASE_URL": "ANTHROPIC_API_KEY"}
+	notFromFile = []string{
+		"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+		"SSL_CERT_FILE", "SSL_CERT_DIR",
+	}
+)
+
 // loadDotEnv sets the variables defined as NAME=value lines in the file at
 // path, if it exists, leaving alone any that already have a value.
 func loadDotEnv(path string) error {
@@ -87,6 +101,8 @@ func loadDotEnv(path string) error {
 	if err != nil {
 		return err
 	}
+	type entry struct{ name, value string }
+	var entries []entry
 	for n, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -101,11 +117,95 @@ func loadDotEnv(path string) error {
 		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
 			value = value[1 : len(value)-1]
 		}
-		if os.Getenv(name) == "" {
-			os.Setenv(name, value)
+		entries = append(entries, entry{name, value})
+	}
+	set := map[string]bool{}
+	for _, e := range entries {
+		if os.Getenv(e.name) == "" && !slices.Contains(notFromFile, e.name) && keyOf[e.name] == "" {
+			os.Setenv(e.name, e.value)
+			set[e.name] = true
+		}
+	}
+	for _, e := range entries {
+		switch {
+		case slices.Contains(notFromFile, e.name):
+			fmt.Fprintf(os.Stderr, "%s: %s is not taken from a .env file; set it in the environment\n", path, e.name)
+		case keyOf[e.name] != "" && os.Getenv(e.name) == "":
+			if !set[keyOf[e.name]] {
+				fmt.Fprintf(os.Stderr, "%s: %s is not taken from a .env file that does not also give %s\n", path, e.name, keyOf[e.name])
+				continue
+			}
+			os.Setenv(e.name, e.value)
 		}
 	}
 	return nil
+}
+
+// httpClient is the client http steps send their requests with. It follows a
+// redirect only to the same host, and never from https to http: a request
+// can carry a key in a header, which must not reach another server.
+func httpClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			first := via[0].URL
+			switch {
+			case len(via) >= 10:
+				return errors.New("stopped after 10 redirects")
+			case req.URL.Host != first.Host:
+				return fmt.Errorf("not following a redirect from %s to another host, %s", first.Host, req.URL.Host)
+			case first.Scheme == "https" && req.URL.Scheme != "https":
+				return fmt.Errorf("not following a redirect from https to %s", req.URL.Scheme)
+			}
+			return nil
+		},
+	}
+}
+
+// pageKey is the key the page and its API need: FLOWMAKER_PAGE_KEY if it is
+// set, else one kept for this user outside any project, so that a browser
+// that has it keeps working across restarts. told says whether the key
+// came from the environment, in which case it is not printed.
+func pageKey() (key string, told bool, err error) {
+	if key := os.Getenv("FLOWMAKER_PAGE_KEY"); key != "" {
+		if len(key) < minSecret {
+			return "", false, fmt.Errorf("FLOWMAKER_PAGE_KEY must be at least %d characters; make one with: openssl rand -hex 32", minSecret)
+		}
+		return key, true, nil
+	}
+	fresh := func() string { return rand.Text() + rand.Text() }
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		// Nowhere to keep it, so the key lasts as long as the server.
+		return fresh(), false, nil
+	}
+	path := filepath.Join(dir, "flowmaker", "page-key")
+	if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) >= minSecret {
+		return strings.TrimSpace(string(data)), false, nil
+	}
+	key = fresh()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return key, false, nil
+	}
+	if err := os.WriteFile(path, []byte(key+"\n"), 0o600); err != nil {
+		return key, false, nil
+	}
+	return key, false, nil
+}
+
+// minSecret is the shortest token or key the server accepts.
+const minSecret = 32
+
+// clean takes control characters out of a log line, so that text from
+// outside, such as a reason an http server gave, cannot rewrite the
+// terminal.
+func clean(line string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\t' {
+			return -1
+		}
+		return r
+	}, line)
 }
 
 func validateCmd() *cobra.Command {
@@ -167,7 +267,7 @@ func runCmd() *cobra.Command {
 			fmt.Println(w.Name)
 			eng := &engine.Engine{
 				Model:  ai.NewRouter(),
-				HTTP:   &http.Client{Timeout: 30 * time.Second},
+				HTTP:   httpClient(),
 				Env:    environ(),
 				OnStep: func(r engine.StepResult) { printStep("  ", r) },
 			}
@@ -265,8 +365,9 @@ func testCmd() *cobra.Command {
 }
 
 func serveCmd() *cobra.Command {
-	var addr, history string
+	var addr, history, tlsCert, tlsKey string
 	var edit bool
+	var maxRuns int
 	cmd := &cobra.Command{
 		Use:   "serve [path...]",
 		Short: "Stay running and run workflows when their triggers fire",
@@ -277,21 +378,25 @@ func serveCmd() *cobra.Command {
 			"unless it was started with --edit.\n\n" +
 			"A webhook request's JSON body, sent with Content-Type: application/json, becomes\n" +
 			"trigger.body. The server answers 202 at once and runs the workflow in the\n" +
-			"background; add ?wait=true to get the finished run back instead.\n\n" +
+			"background; add ?wait=true to wait until it has finished.\n\n" +
 			"A workflow that has respond is an endpoint: the request waits and is answered\n" +
 			"with the status and body that respond gives. If its trigger names a schema as\n" +
 			"input, a body that does not match it is refused with 400 and nothing runs.\n\n" +
-			"Opening the server's address in a browser shows the workflows and their recent\n" +
-			"runs.\n\n" +
+			"Opening the address it prints, which carries the page's key, in a browser shows\n" +
+			"the workflows and their recent runs. The key is kept for you outside the project,\n" +
+			"so a browser that has opened it once keeps working; FLOWMAKER_PAGE_KEY sets it.\n\n" +
 			"With --edit, that page can also change the workflows: it writes each change to\n" +
 			"the workflow file, touching only the lines that change, so git shows exactly\n" +
 			"what was edited. It can make a new workflow in a directory given as a path. The\n" +
 			"server then follows the files too, taking up what an editor or git changes in\n" +
 			"them. This is for working on workflows on your own machine, so it needs an\n" +
 			"address that only this machine can reach.\n\n" +
-			"If FLOWMAKER_TOKEN is set, every webhook request must carry it as a bearer token, and\n" +
-			"the browser asks for it as a password. The server only listens beyond this\n" +
-			"machine when that token is set.",
+			"If FLOWMAKER_TOKEN is set, every webhook request must carry it as a bearer token.\n" +
+			"The server only listens beyond this machine when that token is set. The token\n" +
+			"starts workflows and nothing else: it does not open the page, and ?wait=true then\n" +
+			"answers with how the run went but not what its steps put out. Give --tls-cert and\n" +
+			"--tls-key, or put the server behind a proxy that does, so the token is not sent in\n" +
+			"the clear.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				args = []string{"."}
@@ -305,6 +410,16 @@ func serveCmd() *cobra.Command {
 				return fmt.Errorf("refusing to listen on %s without FLOWMAKER_TOKEN: anyone who can reach it could run these workflows.\n"+
 					"Set FLOWMAKER_TOKEN, or listen on 127.0.0.1", addr)
 			}
+			if token != "" && len(token) < minSecret {
+				return fmt.Errorf("FLOWMAKER_TOKEN must be at least %d characters; make one with: openssl rand -hex 32", minSecret)
+			}
+			if (tlsCert == "") != (tlsKey == "") {
+				return errors.New("give both --tls-cert and --tls-key, or neither")
+			}
+			key, keyFromEnv, err := pageKey()
+			if err != nil {
+				return err
+			}
 			if edit && !loopback(addr) {
 				return fmt.Errorf("refusing to combine --edit with %s: the page could then change files on this machine from elsewhere.\n"+
 					"Listen on 127.0.0.1 to edit", addr)
@@ -313,12 +428,16 @@ func serveCmd() *cobra.Command {
 			logger := log.New(os.Stdout, "", log.Ltime)
 			opts := server.Options{
 				Model:   ai.NewRouter(),
-				HTTP:    &http.Client{Timeout: 30 * time.Second},
+				HTTP:    httpClient(),
 				Env:     environ(),
 				Token:   token,
+				PageKey: key,
+				MaxRuns: maxRuns,
 				Commit:  gitCommit(),
 				History: history,
-				Log:     logger.Printf,
+				Log: func(format string, args ...any) {
+					logger.Print(clean(fmt.Sprintf(format, args...)))
+				},
 			}
 			if edit {
 				// The files change while the server runs, and so does
@@ -340,12 +459,23 @@ func serveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("flowmaker is serving on http://%s  (open it in a browser to see workflows and runs)\n", listener.Addr())
+			scheme := "http"
+			if tlsCert != "" {
+				scheme = "https"
+			}
+			fmt.Printf("flowmaker is serving on %s://%s\n", scheme, listener.Addr())
+			if keyFromEnv {
+				fmt.Printf("  page: %s://%s/?key= followed by FLOWMAKER_PAGE_KEY\n", scheme, listener.Addr())
+			} else {
+				fmt.Printf("  page: %s://%s/?key=%s\n", scheme, listener.Addr(), key)
+			}
 			for _, route := range srv.Routes() {
 				fmt.Println("  " + route)
 			}
 			if token == "" {
-				fmt.Println("  no FLOWMAKER_TOKEN set: requests from this machine are accepted without one")
+				fmt.Println("  no FLOWMAKER_TOKEN set: webhook requests from this machine are accepted without one")
+			} else if tlsCert == "" {
+				fmt.Println("  no --tls-cert: the token travels in the clear unless a proxy in front adds TLS")
 			}
 			if edit {
 				fmt.Println("  --edit: the page can change the workflow files, and changes to them are picked up")
@@ -353,7 +483,12 @@ func serveCmd() *cobra.Command {
 
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			httpSrv := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second}
+			// Requests that wait for a run are answered within the run's
+			// five minutes, so only reading and idling are bounded.
+			httpSrv := &http.Server{
+				Handler: srv, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: time.Minute,
+				IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10,
+			}
 			stopSchedule := srv.Start()
 			go func() {
 				<-ctx.Done()
@@ -363,7 +498,11 @@ func serveCmd() *cobra.Command {
 				httpSrv.Shutdown(grace)
 			}()
 
-			err = httpSrv.Serve(listener)
+			if tlsCert != "" {
+				err = httpSrv.ServeTLS(listener, tlsCert, tlsKey)
+			} else {
+				err = httpSrv.Serve(listener)
+			}
 			if errors.Is(err, http.ErrServerClosed) {
 				err = nil
 			}
@@ -376,6 +515,9 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&history, "history", filepath.Join(".flowmaker", "runs.jsonl"),
 		"file that finished runs are saved to, with their trigger payloads and step outputs; empty keeps them in memory only")
 	cmd.Flags().BoolVar(&edit, "edit", false, "let the web page change the workflow files, and pick up changes made to them")
+	cmd.Flags().IntVar(&maxRuns, "max-runs", 16, "how many runs webhooks may have going at once; more are answered 429")
+	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "certificate file, to serve https")
+	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "key file of the certificate")
 	return cmd
 }
 
@@ -383,12 +525,16 @@ func serveCmd() *cobra.Command {
 // short commit hash, marked if there are uncommitted changes. It is empty
 // outside a git repository.
 func gitCommit() string {
-	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	// The repository's own settings cannot make git run other programs.
+	git := func(args ...string) *exec.Cmd {
+		return exec.Command("git", append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull}, args...)...)
+	}
+	out, err := git("rev-parse", "--short", "HEAD").Output()
 	if err != nil {
 		return ""
 	}
 	commit := strings.TrimSpace(string(out))
-	if changes, err := exec.Command("git", "status", "--porcelain").Output(); err == nil && len(changes) > 0 {
+	if changes, err := git("status", "--porcelain").Output(); err == nil && len(changes) > 0 {
 		commit += " + uncommitted changes"
 	}
 	return commit

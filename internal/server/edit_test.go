@@ -265,7 +265,7 @@ func TestChangesAreAcceptedOnlyFromTheServersOwnPage(t *testing.T) {
 	}
 }
 
-func TestEditNeedsTheToken(t *testing.T) {
+func TestEditNeedsThePageKey(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "triage-ticket")
 	if err := os.CopyFS(dir, os.DirFS("../../examples/triage-ticket")); err != nil {
 		t.Fatal(err)
@@ -275,19 +275,20 @@ func TestEditNeedsTheToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv, err := New([]*workflow.Workflow{w}, Options{
-		Env:   map[string]string{"PAGER_URL": "http://unused", "BILLING_URL": "http://unused"},
-		Edit:  true,
-		Token: "s3cret",
+		Env:     map[string]string{"PAGER_URL": "http://unused", "BILLING_URL": "http://unused"},
+		Edit:    true,
+		Token:   "webhook-token",
+		PageKey: "s3cret",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := `{"workflow": "triage-ticket", "rev": "x", "edits": []}`
-	if rec := post(srv, "/api/edit", "", body); rec.Code != http.StatusUnauthorized {
-		t.Errorf("without the token: status = %d", rec.Code)
-	}
-	if rec := post(srv, "/api/edit", "s3cret", body); rec.Code != http.StatusConflict {
-		t.Errorf("with the token: status = %d, want the request to get as far as the rev check", rec.Code)
+	for token, want := range map[string]int{"": http.StatusUnauthorized, "webhook-token": http.StatusUnauthorized, "s3cret": http.StatusConflict} {
+		// With the key, the request gets as far as the rev check.
+		if rec := post(srv, "/api/edit", token, body); rec.Code != want {
+			t.Errorf("with %q: status = %d, want %d", token, rec.Code, want)
+		}
 	}
 }
 

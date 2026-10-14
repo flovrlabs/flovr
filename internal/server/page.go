@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/subtle"
 	"embed"
+	"io"
 	"maps"
 	"net/http"
 	"path/filepath"
@@ -27,12 +28,35 @@ func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
 		reply(rw, http.StatusNotFound, map[string]string{"error": "no workflow has this webhook path"})
 		return
 	}
-	if !s.mayView(r) {
-		rw.Header().Set("WWW-Authenticate", `Basic realm="flowmaker", charset="UTF-8"`)
-		reply(rw, http.StatusUnauthorized, map[string]string{"error": "sign in with any user name and the server's token as the password"})
+	h := rw.Header()
+	// The page's address carries its key once; the browser keeps it as a
+	// cookie that no other site's page can make it send.
+	if given := r.URL.Query().Get("key"); given != "" && s.opts.PageKey != "" &&
+		subtle.ConstantTimeCompare([]byte(given), []byte(s.opts.PageKey)) == 1 {
+		http.SetCookie(rw, &http.Cookie{
+			Name: keyCookie, Value: s.opts.PageKey, Path: "/", MaxAge: 30 * 24 * 60 * 60,
+			HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil,
+		})
+		rest := *r.URL
+		query := rest.Query()
+		query.Del("key")
+		rest.RawQuery = query.Encode()
+		h.Set("Cache-Control", "no-store")
+		http.Redirect(rw, r, rest.RequestURI(), http.StatusSeeOther)
 		return
 	}
-	h := rw.Header()
+	if !s.mayView(r) {
+		s.refused(r)
+		if r.URL.Path == "/" {
+			h.Set("Content-Type", "text/plain; charset=utf-8")
+			h.Set("Cache-Control", "no-store")
+			rw.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(rw, "This page needs its key. Open the address flowmaker printed when it started: it ends with ?key=\n")
+			return
+		}
+		reply(rw, http.StatusUnauthorized, map[string]string{"error": "missing or wrong page key: open the address flowmaker printed when it started"})
+		return
+	}
 	// Run records show text from outside: tickets, model answers. The page
 	// loads nothing but its own files, so none of that text can run as code.
 	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -65,18 +89,23 @@ func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// mayView reports whether the request may see the page. A browser cannot be
-// told to send a bearer token, so the token is also accepted as the password
-// of HTTP basic authentication.
+// keyCookie is the cookie a browser keeps the page key in.
+const keyCookie = "flowmaker_key"
+
+// mayView reports whether the request may see the page and use its API: it
+// carries the page key, as the cookie or as a bearer token.
 func (s *Server) mayView(r *http.Request) bool {
-	if s.opts.Token == "" {
+	if s.opts.PageKey == "" {
 		return true
 	}
-	given := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if _, password, ok := r.BasicAuth(); ok {
-		given = password
+	given := ""
+	if c, err := r.Cookie(keyCookie); err == nil {
+		given = c.Value
 	}
-	return subtle.ConstantTimeCompare([]byte(given), []byte(s.opts.Token)) == 1
+	if token, ok := bearer(r); ok {
+		given = token
+	}
+	return subtle.ConstantTimeCompare([]byte(given), []byte(s.opts.PageKey)) == 1
 }
 
 func (s *Server) file(rw http.ResponseWriter, name, contentType string) {

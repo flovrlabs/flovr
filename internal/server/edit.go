@@ -170,7 +170,8 @@ const stale = "The file changed after the page read it, so nothing was saved. Th
 // change handles the requests that write files.
 func (s *Server) change(rw http.ResponseWriter, r *http.Request) {
 	if !s.mayView(r) {
-		reply(rw, http.StatusUnauthorized, fail("missing or wrong token"))
+		s.refused(r)
+		reply(rw, http.StatusUnauthorized, fail("missing or wrong page key"))
 		return
 	}
 	// A page on another site cannot send JSON here without asking first, and
@@ -839,7 +840,7 @@ func (s *Server) changes(rw http.ResponseWriter, r *http.Request) {
 		view.Files = append(view.Files, changeView{Path: path, Change: change})
 	}
 	// A repository without a commit has nothing to compare with.
-	diff, _ := git(ctx, dir, "diff", "--no-color", "--no-ext-diff", "HEAD", "--", ".")
+	diff, _ := git(ctx, dir, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "HEAD", "--", ".")
 	// A file git does not know is in no diff of its own, so it is shown as
 	// one that is all new. Its path is from the top of the repository.
 	if top, err := git(ctx, dir, "rev-parse", "--show-toplevel"); err == nil {
@@ -857,10 +858,23 @@ func (s *Server) changes(rw http.ResponseWriter, r *http.Request) {
 	reply(rw, http.StatusOK, view)
 }
 
+// shownWhole are the kinds of file whose whole text the Changes view shows
+// before git knows them: those the page writes. Others, which may be keys or
+// large, are listed by name only.
+var shownWhole = []string{".yaml", ".yml", ".json", ".md", ".txt"}
+
+const maxShown = 64 << 10
+
 // added is the diff git gives for the file at path in dir when there was
-// nothing before it.
+// nothing before it, if it is one the page shows whole.
 func added(ctx context.Context, dir, path string) string {
-	out, err := git(ctx, dir, "diff", "--no-color", "--no-ext-diff", "--no-index", "--", os.DevNull, path)
+	name := filepath.Base(path)
+	info, err := os.Lstat(filepath.Join(dir, path))
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxShown ||
+		strings.HasPrefix(name, ".env") || !slices.Contains(shownWhole, strings.ToLower(filepath.Ext(name))) {
+		return ""
+	}
+	out, err := git(ctx, dir, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-index", "--", os.DevNull, path)
 	// Comparing two files that differ ends with status 1.
 	var exit *exec.ExitError
 	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
@@ -869,9 +883,12 @@ func added(ctx context.Context, dir, path string) string {
 	return out
 }
 
-// git runs a git command that only reads, in dir.
+// git runs a git command that only reads, in dir. The repository's own
+// settings cannot make it run other programs: the page asks for changes
+// often, and a folder may come from someone else.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	safe := []string{"-C", dir, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "diff.external="}
+	cmd := exec.CommandContext(ctx, "git", append(safe, args...)...)
 	// Reading must not get in the way of a git command the person is running.
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	out, err := cmd.Output()

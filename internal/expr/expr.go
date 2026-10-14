@@ -171,6 +171,18 @@ func (e *Env) compile(src string) (cel.Program, *cel.Type, error) {
 	if iss.Err() != nil {
 		return nil, nil, errors.New(strings.TrimSuffix(iss.Errors()[0].Message, " (in container '')"))
 	}
+	// The environment holds the server's keys. Naming a variable is the
+	// only way to read one, so a workflow reads only those its author wrote
+	// down, and nothing from a request can choose another.
+	all := 0
+	for _, name := range Names(src) {
+		if name == "env" {
+			all++
+		}
+	}
+	if all > len(EnvVars(src)) {
+		return nil, nil, errors.New("env can only be read one variable at a time, as env.NAME")
+	}
 	prg, err := e.cel.Program(ast)
 	if err != nil {
 		return nil, nil, err

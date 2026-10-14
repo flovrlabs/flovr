@@ -31,7 +31,7 @@ The examples are in this repository, and they need an [OpenRouter](https://openr
 git clone https://github.com/simonyosb/flowmaker && cd flowmaker
 ```
 
-Put the key in a file named `.env` in the folder you run flowmaker from. The file is ignored by git.
+Put the key in a file named `.env` in the folder you run flowmaker from. The file is ignored by git. A `.env` file cannot say where keys are sent: it sets `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` only if it gives that provider's key too, and never a proxy.
 
 ```
 OPENROUTER_API_KEY=...
@@ -47,7 +47,7 @@ flowmaker validate examples/triage-ticket
 flowmaker test examples/triage-ticket
 ```
 
-Serve both examples and open http://127.0.0.1:8080. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
+Serve both examples and open the page address the server prints, which ends with `?key=`. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
 
 ```bash
 PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flowmaker serve examples --edit
@@ -132,7 +132,7 @@ when: classify.priority.value == "high" && classify.category.value in ["refund",
 
 Elsewhere, `${...}` inside a value is replaced by what the expression in it yields. A value that is one placeholder and nothing else keeps its type, so `${trigger.body}` passes the whole body on as an object. Write `$${` for a literal `${`.
 
-An expression can read `trigger`, `env.NAME` for an environment variable, and every step before it by its id. A step that was skipped is `null`, so reading a field of it fails; test for it first:
+An expression can read `trigger`, `env.NAME` for an environment variable, and every step before it by its id. A variable is read only by its name, as `env.NAME`: `env` as a whole, or `env[...]`, is refused, so nothing in a request can choose which variable a workflow reads. A step that was skipped is `null`, so reading a field of it fails; test for it first:
 
 ```yaml
 summary: '${summarize != null ? summarize.summary : ""}'
@@ -144,7 +144,7 @@ summary: '${summarize != null ? summarize.summary : ""}'
 
 A workflow with `respond` is an endpoint: the request waits until the steps have run and is answered with `status` (200 if left out), `headers` and `body`, each of which can take values from the steps. If the workflow fails, the caller gets status 500 with the id of the run and nothing else; the reason is in the run's record.
 
-Without `respond`, a webhook answers 202 at once and the workflow runs in the background. Add `?wait=true` to the request to get the finished run back instead.
+Without `respond`, a webhook answers 202 at once and the workflow runs in the background. Add `?wait=true` to the request to wait until it has finished: a server without a token then answers with the whole run, and one with a token with the run's id and whether it succeeded.
 
 ### Tests
 
@@ -249,7 +249,9 @@ flowmaker test examples/triage-ticket/components/reply
 
 ## The page
 
-`flowmaker serve` serves a page at its address. It shows each workflow as a drawing, with one shape per kind of step, and the recent runs. Selecting a run colours the drawing by what each step did; selecting a step shows what it put out, or why it failed.
+`flowmaker serve` serves a page and prints its address, which carries the page's key as `?key=...`. The browser keeps the key once the page has been opened with it, and nothing reaches the page or its API without it, not even another program on the same machine. The key is kept for you outside the project, so it stays the same across restarts; `FLOWMAKER_PAGE_KEY` sets it instead.
+
+The page shows each workflow as a drawing, with one shape per kind of step, and the recent runs. Selecting a run colours the drawing by what each step did; selecting a step shows what it put out, or why it failed.
 
 With `--edit` the page becomes a place to work on the workflows:
 
@@ -271,10 +273,13 @@ Nothing is written unless the result is a workflow the server can go on serving;
 FLOWMAKER_TOKEN=... flowmaker serve workflows --addr 0.0.0.0:8080
 ```
 
-- Without `FLOWMAKER_TOKEN` the server listens only on this machine. With it, every webhook request must carry `Authorization: Bearer <token>`, and the browser asks for the token as a password.
+- Without `FLOWMAKER_TOKEN` the server listens only on this machine. With it, every webhook request must carry `Authorization: Bearer <token>`. The token must be at least 32 characters; `openssl rand -hex 32` makes one.
+- The token is for whatever sends the webhooks, so it starts workflows and does nothing else. The page needs its own key, as above; set `FLOWMAKER_PAGE_KEY` on a server so you know it.
+- Serve over TLS with `--tls-cert` and `--tls-key`, or behind a proxy that adds it, so that the token and the key do not travel in the clear.
 - A webhook request must be sent with `Content-Type: application/json`. Its body can be up to 1 MB.
-- A run that takes longer than five minutes is stopped.
-- Finished runs are appended to `.flowmaker/runs.jsonl`, readable by its owner only, and read back on start. They hold request bodies and step outputs, so keep the file out of git. `--history` puts it elsewhere.
+- At most 16 runs started by webhooks go at once, and a request beyond that is answered 429; `--max-runs` changes the number. A run that takes longer than five minutes is stopped.
+- An `http` step follows a redirect only to the same host, and never from https to http, so a key in a header does not reach another server. It can reach any address the server can, so do not build its URL from what a request or a model says.
+- Finished runs are appended to `.flowmaker/runs.jsonl`, readable by its owner only, and read back on start. They hold request bodies and step outputs; the folder gets a `.gitignore` that keeps them out of git. `--history` puts the file elsewhere.
 - Every run records the git commit of the workflow files it ran.
 - `/healthz` answers 200 while the server is up.
 

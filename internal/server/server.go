@@ -39,11 +39,22 @@ type Options struct {
 	HTTP  *http.Client
 	Env   map[string]string // what expressions see as env
 
-	// Token, if set, must accompany every request: webhooks as
-	// "Authorization: Bearer <token>", the web page as the password of HTTP
-	// basic authentication. Without a token the server answers only requests
-	// addressed to this machine by a local name.
+	// Token, if set, must accompany every webhook request as
+	// "Authorization: Bearer <token>". Without a token the server answers
+	// only requests addressed to this machine by a local name. The token is
+	// for whatever sends webhooks, so it does not open the page.
 	Token string
+
+	// PageKey, if set, must accompany every request for the page and its
+	// API: once as ?key=<key> in the page's address, after which the browser
+	// keeps it as a cookie, or as "Authorization: Bearer <key>". It keeps
+	// other programs on the machine, and anyone who has only the token, from
+	// reading runs and changing files.
+	PageKey string
+
+	// MaxRuns is how many runs webhooks may have going at once. A request
+	// beyond that is answered 429. Zero means no limit.
+	MaxRuns int
 
 	// Commit identifies the version of the workflow files; it is recorded
 	// with every run. CommitNow, if set, is asked instead, for servers whose
@@ -157,6 +168,16 @@ type Server struct {
 		asked  time.Time
 	}
 
+	slots chan struct{} // one for each run webhooks have going, if MaxRuns is set
+
+	// refusals counts requests turned away for a wrong token or key since
+	// the last time the log said so.
+	refusals struct {
+		sync.Mutex
+		count  int
+		logged time.Time
+	}
+
 	// found is what the last look through Options.Roots turned up.
 	found struct {
 		sync.Mutex
@@ -181,6 +202,9 @@ func New(workflows []*workflow.Workflow, opts Options) (*Server, error) {
 		opts.Log = func(string, ...any) {}
 	}
 	s := &Server{opts: opts, sources: map[string]*source{}}
+	if opts.MaxRuns > 0 {
+		s.slots = make(chan struct{}, opts.MaxRuns)
+	}
 	if opts.Edit {
 		// The page changes a file only if it still holds what is being
 		// served, so both must come from one reading of the file.
@@ -349,8 +373,8 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 // webhook starts w with the request's JSON body as trigger.body. It answers
 // 202 at once and runs the workflow in the background, unless the request has
-// ?wait=true, in which case it answers with the finished run. A workflow that
-// has respond is an endpoint: the request waits and gets that answer.
+// ?wait=true, in which case it answers when the run has finished. A workflow
+// that has respond is an endpoint: the request waits and gets that answer.
 func (s *Server) webhook(rw http.ResponseWriter, r *http.Request, w *workflow.Workflow) {
 	if r.Method != http.MethodPost {
 		rw.Header().Set("Allow", http.MethodPost)
@@ -358,8 +382,8 @@ func (s *Server) webhook(rw http.ResponseWriter, r *http.Request, w *workflow.Wo
 		return
 	}
 	if s.opts.Token != "" {
-		given := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(given), []byte(s.opts.Token)) != 1 {
+		if given, _ := bearer(r); subtle.ConstantTimeCompare([]byte(given), []byte(s.opts.Token)) != 1 {
+			s.refused(r)
 			reply(rw, http.StatusUnauthorized, map[string]string{"error": "missing or wrong bearer token"})
 			return
 		}
@@ -399,16 +423,39 @@ func (s *Server) webhook(rw http.ResponseWriter, r *http.Request, w *workflow.Wo
 	source := "webhook " + r.URL.Path
 	id := newID()
 
+	if s.slots != nil {
+		select {
+		case s.slots <- struct{}{}:
+		default:
+			rw.Header().Set("Retry-After", "5")
+			reply(rw, http.StatusTooManyRequests, map[string]string{"error": "too many runs are going; try again shortly"})
+			return
+		}
+	}
+	free := func() {
+		if s.slots != nil {
+			<-s.slots
+		}
+	}
+
 	if w.Respond != nil {
+		defer free()
 		answer(rw, s.run(id, w, trigger, source))
 		return
 	}
 
 	if r.URL.Query().Get("wait") == "true" {
+		defer free()
 		run := s.run(id, w, trigger, source)
 		status := http.StatusOK
 		if run.Status != "ok" {
 			status = http.StatusInternalServerError
+		}
+		if s.opts.Token != "" {
+			// Whoever sends webhooks is told how the run went, not what its
+			// steps put out, which the page shows to those with its key.
+			reply(rw, status, map[string]string{"run": run.ID, "status": run.Status})
+			return
 		}
 		reply(rw, status, run)
 		return
@@ -416,9 +463,33 @@ func (s *Server) webhook(rw http.ResponseWriter, r *http.Request, w *workflow.Wo
 	s.running.Add(1)
 	go func() {
 		defer s.running.Done()
+		defer free()
 		s.run(id, w, trigger, source)
 	}()
 	reply(rw, http.StatusAccepted, map[string]string{"run": id})
+}
+
+// bearer returns the token of a request's "Authorization: Bearer" header.
+func bearer(r *http.Request) (string, bool) {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return "", false
+	}
+	return strings.TrimSpace(token), true
+}
+
+// refused notes a request turned away for a missing or wrong token or key.
+// Under a flood of them the log gets a line every ten seconds.
+func (s *Server) refused(r *http.Request) {
+	l := &s.refusals
+	l.Lock()
+	defer l.Unlock()
+	l.count++
+	if time.Since(l.logged) < 10*time.Second {
+		return
+	}
+	s.opts.Log("refused %d request(s) without the right token or key, the last: %s %s from %s", l.count, r.Method, r.URL.Path, r.RemoteAddr)
+	l.count, l.logged = 0, time.Now()
 }
 
 // answer replies to the caller of a workflow that has respond.
