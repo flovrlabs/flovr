@@ -2,6 +2,8 @@
 
 Flowmaker runs workflows that are written as YAML files and kept in git. A workflow is a list of steps: ask a model for structured output, ask a decision model typed questions, send an HTTP request, or use a component that someone wrote once for all workflows. The same file holds the workflow's tests, which call the models for real.
 
+Flowmaker is in beta: the format of the files may still change before 1.0. [ROADMAP.md](ROADMAP.md) says what is done, what is being built and what comes next.
+
 One binary does everything:
 
 | Command | What it does |
