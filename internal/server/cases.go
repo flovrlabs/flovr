@@ -168,17 +168,25 @@ func appendTests(data []byte, item string) []byte {
 	var buf bytes.Buffer
 	buf.Write(bytes.TrimRight(data, "\n"))
 	buf.WriteString("\n\ntests:\n")
+	buf.WriteString(listItem(item))
+	return buf.Bytes()
+}
+
+// listItem writes a mapping, as yamledit.Mapping gives it, as an item of a
+// list that is the value of a key in the first column.
+func listItem(item string) string {
+	var sb strings.Builder
 	for i, line := range strings.Split(strings.TrimRight(item, "\n"), "\n") {
 		switch {
 		case i == 0:
-			buf.WriteString("  - " + line + "\n")
+			sb.WriteString("  - " + line + "\n")
 		case line == "":
-			buf.WriteString("\n")
+			sb.WriteString("\n")
 		default:
-			buf.WriteString("    " + line + "\n")
+			sb.WriteString("    " + line + "\n")
 		}
 	}
-	return buf.Bytes()
+	return sb.String()
 }
 
 var notSlug = regexp.MustCompile(`[^a-z0-9]+`)

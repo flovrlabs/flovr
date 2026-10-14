@@ -259,10 +259,21 @@ func IsComponent(path string) bool {
 }
 
 // ComponentsIn loads the components in dir and below it, ordered by path. It
-// skips hidden directories and testdata, as Discover does, and components
-// that are not valid, which no step could use.
+// leaves out components that are not valid, which no step could use.
 func ComponentsIn(dir string) []*Component {
 	var found []*Component
+	for _, path := range ComponentFiles(dir) {
+		if c, err := LoadComponent(path); err == nil {
+			found = append(found, c)
+		}
+	}
+	return found
+}
+
+// ComponentFiles finds the component files in dir and below it, ordered by
+// path. It skips hidden directories and testdata, as Discover does.
+func ComponentFiles(dir string) []string {
+	var found []string
 	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -274,9 +285,7 @@ func ComponentsIn(dir string) []*Component {
 			return nil
 		}
 		if d.Name() == ComponentFile {
-			if c, err := LoadComponent(p); err == nil {
-				found = append(found, c)
-			}
+			found = append(found, p)
 		}
 		return nil
 	})

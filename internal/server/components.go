@@ -20,7 +20,8 @@ import (
 // components returns every component the page shows, by the name the page
 // knows it by, and the steps that use each. They are the components that the
 // served workflows use and, on a server run for editing, the others in the
-// workflows' folders, from which a step could be added.
+// folders it was started with and in the workflows' folders, from which a
+// step could be added.
 func (s *Server) components() (map[string]*workflow.Component, map[string][]useView) {
 	found := map[string]*workflow.Component{}
 	uses := map[string][]useView{}
@@ -49,8 +50,18 @@ func (s *Server) components() (map[string]*workflow.Component, map[string][]useV
 		}
 	}
 	if s.opts.Edit {
+		for _, path := range s.rootFiles() {
+			if c, err := workflow.LoadComponent(path); err == nil {
+				take(c)
+			}
+		}
 		for _, w := range workflows {
-			for _, c := range workflow.ComponentsIn(filepath.Dir(w.Path)) {
+			dir := filepath.Dir(w.Path)
+			// A folder below one already searched holds nothing new.
+			if slices.ContainsFunc(s.opts.Roots, func(root string) bool { return below(root, dir) }) {
+				continue
+			}
+			for _, c := range workflow.ComponentsIn(dir) {
 				take(c)
 			}
 		}
@@ -60,6 +71,28 @@ func (s *Server) components() (map[string]*workflow.Component, map[string][]useV
 		delete(found, w.Name)
 	}
 	return found, uses
+}
+
+// searchEvery is how long the server goes on what it found the last time it
+// looked through the folders it was started with.
+const searchEvery = 5 * time.Second
+
+// rootFiles returns the component files in the folders the server was
+// started with. Such a folder can hold a great deal besides workflows, and
+// the page asks every few seconds, so the folders are looked through again
+// only after a while. A file that has gone since is passed over when read.
+func (s *Server) rootFiles() []string {
+	f := &s.found
+	f.Lock()
+	defer f.Unlock()
+	if f.at.IsZero() || time.Since(f.at) > searchEvery {
+		f.files = nil
+		for _, root := range s.opts.Roots {
+			f.files = append(f.files, workflow.ComponentFiles(root)...)
+		}
+		f.at = time.Now()
+	}
+	return f.files
 }
 
 // componentView describes a component for the page, in the form of a

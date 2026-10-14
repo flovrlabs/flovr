@@ -199,6 +199,13 @@ func (s *Server) change(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status, answer = s.edit(req)
+	} else if r.URL.Path == "/api/workflows" {
+		var req createRequest
+		if err := json.Unmarshal(data, &req); err != nil {
+			reply(rw, http.StatusBadRequest, fail("the request body is not the JSON expected"))
+			return
+		}
+		status, answer = s.create(req)
 	} else if r.URL.Path == "/api/cases" {
 		var req casesRequest
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -467,25 +474,13 @@ func (s *Server) steps(req stepsRequest) (int, any) {
 			}
 		}
 		// The page adds steps only from the components it was shown.
-		components := catalogue(w)
+		known, _ := s.components()
+		components := catalogue(w, known)
 		c := slices.IndexFunc(components, func(c componentView) bool { return c.Use == add.Use })
 		if c < 0 {
-			return http.StatusUnprocessableEntity, fail("%s is not one of this workflow's components", add.Use)
+			return http.StatusUnprocessableEntity, fail("%s is not one of the components this workflow can use", add.Use)
 		}
-		pairs := []yamledit.Pair{{Key: "id", Value: strings.TrimSpace(add.ID)}}
-		if when := strings.TrimSpace(add.When); when != "" {
-			pairs = append(pairs, yamledit.Pair{Key: "when", Value: when})
-		}
-		pairs = append(pairs, yamledit.Pair{Key: "use", Value: add.Use})
-		var with []yamledit.Pair
-		for _, input := range components[c].Inputs {
-			if text, given := add.With[input.Name]; given {
-				with = append(with, yamledit.Pair{Key: input.Name, Value: written(strings.TrimSpace(text), input.Type)})
-			}
-		}
-		pairs = append(pairs, yamledit.Pair{Key: "with", Value: with})
-
-		text, err := yamledit.Mapping(pairs)
+		text, err := yamledit.Mapping(stepUsing(add.ID, add.When, add.Use, add.With, components[c].Inputs))
 		if err != nil {
 			return http.StatusUnprocessableEntity, fail("%v", err)
 		}
@@ -505,6 +500,24 @@ func (s *Server) steps(req stepsRequest) (int, any) {
 		return http.StatusUnprocessableEntity, fail("%v", err)
 	}
 	return s.save(i, out, fmt.Sprintf("step %s removed", req.Remove))
+}
+
+// stepUsing is a step that uses a component, as it is written in a file: its
+// id, the condition if it has one, the component as the file names it, and
+// what it gives the component, in the order the component lists its input.
+func stepUsing(id, when, use string, with map[string]string, inputs []inputView) []yamledit.Pair {
+	pairs := []yamledit.Pair{{Key: "id", Value: strings.TrimSpace(id)}}
+	if when = strings.TrimSpace(when); when != "" {
+		pairs = append(pairs, yamledit.Pair{Key: "when", Value: when})
+	}
+	pairs = append(pairs, yamledit.Pair{Key: "use", Value: use})
+	var given []yamledit.Pair
+	for _, input := range inputs {
+		if text, ok := with[input.Name]; ok {
+			given = append(given, yamledit.Pair{Key: input.Name, Value: written(strings.TrimSpace(text), input.Type)})
+		}
+	}
+	return append(pairs, yamledit.Pair{Key: "with", Value: given})
 }
 
 // written is how a value typed into the page is put in the file for an input
@@ -541,18 +554,20 @@ type inputView struct {
 	Type string `json:"type"`
 }
 
-// catalogue lists the components in the workflow's folder, which are those
-// its steps can use.
-func catalogue(w *workflow.Workflow) []componentView {
+// catalogue lists the components a step of w can be added from: those the
+// page knows, each named as a step of w would name it. The ones in the
+// workflow's own folder come first.
+func catalogue(w *workflow.Workflow, known map[string]*workflow.Component) []componentView {
 	dir := filepath.Dir(w.Path)
 	views := []componentView{}
-	for _, c := range workflow.ComponentsIn(dir) {
-		use, err := filepath.Rel(dir, filepath.Dir(c.Path))
+	for _, id := range sortedIDs(known) {
+		c := known[id]
+		use, err := relative(dir, filepath.Dir(c.Path))
 		if err != nil {
 			continue
 		}
 		view := componentView{
-			Name: c.Name, Description: c.Description, Use: filepath.ToSlash(use), Kind: c.Kind(),
+			Name: c.Name, Description: c.Description, Use: use, Kind: c.Kind(),
 			Inputs: []inputView{},
 		}
 		for _, p := range c.Input {
@@ -560,7 +575,38 @@ func catalogue(w *workflow.Workflow) []componentView {
 		}
 		views = append(views, view)
 	}
+	elsewhere := func(v componentView) bool { return strings.HasPrefix(v.Use, "../") }
+	slices.SortStableFunc(views, func(a, b componentView) int {
+		switch {
+		case elsewhere(a) == elsewhere(b):
+			return strings.Compare(a.Use, b.Use)
+		case elsewhere(a):
+			return 1
+		}
+		return -1
+	})
 	return views
+}
+
+// relative is the path of to as a file in the folder from names it, with
+// forward slashes.
+func relative(from, to string) (string, error) {
+	from, err := filepath.Abs(from)
+	if err != nil {
+		return "", err
+	}
+	if to, err = filepath.Abs(to); err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(from, to)
+	return filepath.ToSlash(rel), err
+}
+
+// below reports whether the folder at dir is root or inside it, going by
+// their names.
+func below(root, dir string) bool {
+	rel, err := relative(root, dir)
+	return err == nil && (rel == "." || filepath.IsLocal(rel))
 }
 
 // pathKey writes a path as text, to compare paths and to name them in the log.
@@ -765,12 +811,14 @@ func (s *Server) changes(rw http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	status, err := git(ctx, dir, "status", "--porcelain", "--", ".")
+	// Every file git does not know is listed, not just the folder it is in.
+	status, err := git(ctx, dir, "status", "--porcelain", "--untracked-files=all", "--", ".")
 	if err != nil {
 		reply(rw, http.StatusOK, view)
 		return
 	}
 	view.Git = true
+	var unknown []string
 	for _, line := range strings.Split(status, "\n") {
 		if len(line) < 4 {
 			continue
@@ -778,7 +826,10 @@ func (s *Server) changes(rw http.ResponseWriter, r *http.Request) {
 		code, path := line[:2], line[3:]
 		change := "modified"
 		switch {
-		case code == "??" || strings.Contains(code, "A"):
+		case code == "??":
+			change = "new"
+			unknown = append(unknown, path)
+		case strings.Contains(code, "A"):
 			change = "new"
 		case strings.Contains(code, "D"):
 			change = "deleted"
@@ -788,13 +839,34 @@ func (s *Server) changes(rw http.ResponseWriter, r *http.Request) {
 		view.Files = append(view.Files, changeView{Path: path, Change: change})
 	}
 	// A repository without a commit has nothing to compare with.
-	if diff, err := git(ctx, dir, "diff", "--no-color", "--no-ext-diff", "HEAD", "--", "."); err == nil {
-		if len(diff) > maxDiff {
-			diff = diff[:maxDiff] + "\n… the rest is not shown\n"
+	diff, _ := git(ctx, dir, "diff", "--no-color", "--no-ext-diff", "HEAD", "--", ".")
+	// A file git does not know is in no diff of its own, so it is shown as
+	// one that is all new. Its path is from the top of the repository.
+	if top, err := git(ctx, dir, "rev-parse", "--show-toplevel"); err == nil {
+		for _, path := range unknown {
+			if len(diff) > maxDiff || strings.HasPrefix(path, `"`) {
+				break
+			}
+			diff += added(ctx, strings.TrimSpace(top), path)
 		}
-		view.Diff = diff
 	}
+	if len(diff) > maxDiff {
+		diff = diff[:maxDiff] + "\n… the rest is not shown\n"
+	}
+	view.Diff = diff
 	reply(rw, http.StatusOK, view)
+}
+
+// added is the diff git gives for the file at path in dir when there was
+// nothing before it.
+func added(ctx context.Context, dir, path string) string {
+	out, err := git(ctx, dir, "diff", "--no-color", "--no-ext-diff", "--no-index", "--", os.DevNull, path)
+	// Comparing two files that differ ends with status 1.
+	var exit *exec.ExitError
+	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
+		return ""
+	}
+	return out
 }
 
 // git runs a git command that only reads, in dir.

@@ -581,6 +581,31 @@ with:
 	}
 }
 
+// A whole file is made of what Mapping writes, with nothing to compare it
+// to, so whatever a person types must come out as the one value it is.
+func TestMappingWritesAnyTextAsOneValue(t *testing.T) {
+	for _, v := range []string{
+		"/a\nfoo: bar", "x: y", "- item", "*/5 3 * * *", "# not a comment", " lead", "trail ", "a #b", "'q'", `"dq"`,
+		"{a: b}", "[1]", "true", "12", "null", "~", "", "line1\nline2\n", "tab\there", "${trigger.body.text}",
+		"a: b\n  c: d", "|", ">", "@x", "`x`", "%x", "!x", "&x", "*x", "?x", "x:", ":x", "yes", "0x1f", "1e3",
+	} {
+		text, err := Mapping([]Pair{{"k", []Pair{{"v", v}}}, {"after", "z"}})
+		if err != nil {
+			t.Errorf("%q: %v", v, err)
+			continue
+		}
+		var got map[string]any
+		if err := yaml.Unmarshal([]byte(text), &got); err != nil {
+			t.Errorf("%q is written as\n%swhich does not read: %v", v, text, err)
+			continue
+		}
+		inner, _ := got["k"].(map[string]any)
+		if len(got) != 2 || len(inner) != 1 || inner["v"] != v || got["after"] != "z" {
+			t.Errorf("%q is written as\n%sand read back as %#v", v, text, got)
+		}
+	}
+}
+
 func TestRemovingTheLastKeyOfAFileTakesTheBlankLineBeforeIt(t *testing.T) {
 	out, err := Apply([]byte("a: 1\n\n# about b\nb:\n  - x\n"), Edit{Path: []any{"b"}, Remove: true})
 	if err != nil || string(out) != "a: 1\n" {

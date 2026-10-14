@@ -256,9 +256,10 @@ func serveCmd() *cobra.Command {
 			"runs.\n\n" +
 			"With --edit, that page can also change the workflows: it writes each change to\n" +
 			"the workflow file, touching only the lines that change, so git shows exactly\n" +
-			"what was edited. The server then follows the files too, taking up what an\n" +
-			"editor or git changes in them. This is for working on workflows on your own\n" +
-			"machine, so it needs an address that only this machine can reach.\n\n" +
+			"what was edited. It can make a new workflow in a directory given as a path. The\n" +
+			"server then follows the files too, taking up what an editor or git changes in\n" +
+			"them. This is for working on workflows on your own machine, so it needs an\n" +
+			"address that only this machine can reach.\n\n" +
 			"If AIA_TOKEN is set, every webhook request must carry it as a bearer token, and\n" +
 			"the browser asks for it as a password. The server only listens beyond this\n" +
 			"machine when that token is set.",
@@ -294,6 +295,11 @@ func serveCmd() *cobra.Command {
 				// The files change while the server runs, and so does
 				// their version.
 				opts.Edit, opts.CommitNow = true, gitCommit
+				for _, path := range args {
+					if info, err := os.Stat(path); err == nil && info.IsDir() {
+						opts.Roots = append(opts.Roots, filepath.Clean(path))
+					}
+				}
 			}
 			srv, err := server.New(workflows, opts)
 			if err != nil {

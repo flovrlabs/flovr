@@ -56,6 +56,11 @@ type Options struct {
 	// files by other means, such as an editor or git.
 	Edit bool
 
+	// Roots are the folders the server was started with. The page, if it
+	// may change files, makes a new workflow in one of them, and can add a
+	// step from any component in them.
+	Roots []string
+
 	// History is a file that finished runs are appended to and that the
 	// server reads back when it starts. Empty keeps runs in memory only.
 	History string
@@ -150,6 +155,13 @@ type Server struct {
 		sync.Mutex
 		commit string
 		asked  time.Time
+	}
+
+	// found is what the last look through Options.Roots turned up.
+	found struct {
+		sync.Mutex
+		files []string // the component files
+		at    time.Time
 	}
 }
 

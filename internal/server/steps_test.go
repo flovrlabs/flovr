@@ -114,7 +114,7 @@ func TestStepChangesAreRefusedWithoutTouchingTheFile(t *testing.T) {
 		want   string
 	}{
 		{"a component the workflow does not have", `"add": {"id": "x", "use": "../somewhere/else", ` + with + `}`,
-			http.StatusUnprocessableEntity, "is not one of this workflow's components"},
+			http.StatusUnprocessableEntity, "is not one of the components this workflow can use"},
 		{"an id that is taken", `"add": {"id": "classify", "use": "components/notify", ` + with + `}`,
 			http.StatusUnprocessableEntity, "this id is already used by an earlier step"},
 		{"an id that is not one", `"add": {"id": "tell support", "use": "components/notify", ` + with + `}`,

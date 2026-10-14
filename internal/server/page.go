@@ -5,6 +5,7 @@ import (
 	"embed"
 	"maps"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -18,7 +19,7 @@ var ui embed.FS
 // page serves the web page and the JSON it shows and, if the server allows
 // editing, takes the changes the page makes.
 func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
-	if s.opts.Edit && r.Method == http.MethodPost && slices.Contains([]string{"/api/edit", "/api/steps", "/api/prompt", "/api/test", "/api/cases"}, r.URL.Path) {
+	if s.opts.Edit && r.Method == http.MethodPost && slices.Contains([]string{"/api/edit", "/api/steps", "/api/prompt", "/api/test", "/api/cases", "/api/workflows"}, r.URL.Path) {
 		s.change(rw, r)
 		return
 	}
@@ -90,9 +91,12 @@ func (s *Server) file(rw http.ResponseWriter, name, contentType string) {
 
 // stateView is everything the page shows except the detail of one run.
 type stateView struct {
-	Commit    string         `json:"commit"`
-	Protected bool           `json:"protected"` // whether requests need the token
-	Editable  bool           `json:"editable"`  // whether the page may change the files
+	Commit    string `json:"commit"`
+	Protected bool   `json:"protected"` // whether requests need the token
+	Editable  bool   `json:"editable"`  // whether the page may change the files
+	// Roots are the folders a new workflow can be made in, if the page may
+	// make one.
+	Roots     []string       `json:"roots,omitempty"`
 	Workflows []workflowView `json:"workflows"`
 	Runs      []Run          `json:"runs"` // newest first, without triggers and outputs
 }
@@ -268,11 +272,16 @@ func (s *Server) state() stateView {
 		r.Trigger, r.Response, r.Gave = nil, nil, nil
 		r.Steps = withoutOutputs(r.Steps)
 	}
+	components, uses := s.components()
+	if s.opts.Edit {
+		for _, root := range s.opts.Roots {
+			view.Roots = append(view.Roots, filepath.ToSlash(root))
+		}
+	}
 	for _, w := range s.live.Load().workflows {
-		view.Workflows = append(view.Workflows, s.view(w))
+		view.Workflows = append(view.Workflows, s.viewAmong(w, components))
 	}
 	// Components follow, each in the form of a workflow.
-	components, uses := s.components()
 	for _, id := range sortedIDs(components) {
 		view.Workflows = append(view.Workflows, s.componentView(components[id], uses[id]))
 	}
@@ -282,6 +291,15 @@ func (s *Server) state() stateView {
 // view describes w for the page. If the server allows editing, the caller
 // holds s.mu.
 func (s *Server) view(w *workflow.Workflow) workflowView {
+	if s.sources[w.Path] == nil {
+		return s.viewAmong(w, nil)
+	}
+	components, _ := s.components()
+	return s.viewAmong(w, components)
+}
+
+// viewAmong is view for a caller that has the components the page knows.
+func (s *Server) viewAmong(w *workflow.Workflow, components map[string]*workflow.Component) workflowView {
 	view := describe(w)
 	src := s.sources[w.Path]
 	if src == nil {
@@ -290,7 +308,7 @@ func (s *Server) view(w *workflow.Workflow) workflowView {
 		return view
 	}
 	view.Rev, view.Problem = src.rev, src.problem
-	view.Components, view.Cases = catalogue(w), cases(w)
+	view.Components, view.Cases = catalogue(w, components), cases(w)
 	return view
 }
 
