@@ -150,6 +150,11 @@ function buildRail() {
   $("rail").append(railButtons.workflows, railButtons.services, el("span", { class: "grow" }), themeButton);
   paintTheme();
 }
+// runsSaved says what running a test does.
+function runsSaved() {
+  return state.replay ? "Runs the saved file with the recorded answers, and sends no requests." : "Runs the saved file. Calls the models for real and sends no requests.";
+}
+
 // paintRail marks the list that what is on show belongs to.
 function paintRail(kind) {
   for (const [name, b] of Object.entries(railButtons)) b.setAttribute("aria-pressed", name === kind ? "true" : "false");
@@ -298,8 +303,10 @@ function paintLive() {
   const w = selected.make ? null : state.workflows.find((x) => x.name === selected.workflow);
   const served = state.workflows.filter((x) => !isComp(x) && x.trigger).length;
   const on = !w ? (served ? "Live · " + plural(served, "trigger") : "Live") : !isComp(w) && w.trigger ? "Live on " + w.trigger : "Live";
-  $("live").replaceChildren(el("span", { class: "pulse" }), offline || on);
+  const replay = !offline && state.replay ? " · recorded answers" : "";
+  $("live").replaceChildren(el("span", { class: "pulse" }), (offline || on) + replay);
   $("live").className = offline ? "live down" : "live";
+  $("live").title = replay ? "Started with --replay: ai and decide steps get the answers flowmaker test --record kept, and no model is called" : "";
 }
 
 // loadLatest fetches the latest run of the selected workflow in full, which the
@@ -3951,7 +3958,7 @@ function startButton(w, index, label, focus, opts) {
   const b = el("button", {
       type: "button", class: "btn" + (o.primary ? " primary" : "") + (o.block ? " block" : "") + (o.small ? " small" : ""), "data-focus": focus,
       "aria-disabled": busy ? "true" : "false",
-      title: busy ? "Tests are running" : "Runs the saved file. Calls the models for real and sends no requests.",
+      title: busy ? "Tests are running" : runsSaved(),
     }, icon("run", 12), label);
   b.addEventListener("click", () => {
     if (busy) return;
@@ -4104,7 +4111,8 @@ function testRunDetails(w, run) {
       unsavedNote(w),
       // A test that could not run called no model, and one still running has not finished calling them.
       v === "unrun" ? null : el("p", { class: "muted small" },
-        v === "running" ? "The models are called for real. HTTP steps are not sent." : "The models were called for real. HTTP steps were not sent.")),
+        state.replay ? "The answers are those recorded with flowmaker test --record. HTTP steps " + (v === "running" ? "are" : "were") + " not sent."
+          : v === "running" ? "The models are called for real. HTTP steps are not sent." : "The models were called for real. HTTP steps were not sent.")),
     checks.length ? section("Expectations" + (checks.length ? " (" + checks.length + ")" : ""), checkList(w, checks, true),
       el("p", { class: "muted small" }, "Select Show to see the step a check is about.")) : null,
     // A component's test is a call: what it was given, and what it gave back.
@@ -4158,7 +4166,9 @@ function testsSection(w, title = "Tests") {
   }
   const v = roundView(w.name);
   return section(title,
-    el("p", { class: "muted" }, "Tests call the AI models for real, so they check what the model actually answers. No HTTP request is sent. They run the saved file."),
+    el("p", { class: "muted" }, state.replay
+      ? "Tests get the answers recorded with flowmaker test --record, so they check the workflow but not the models, and cost nothing. No HTTP request is sent. They run the saved file."
+      : "Tests call the AI models for real, so they check what the model actually answers. No HTTP request is sent. They run the saved file."),
     canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) ? startButton(w, null, "Run all tests", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null)
       : el("p", { class: "muted small" }, "Tests cannot run while the file has a problem."),
     canAddTest(w) ? el("p", { class: "muted small" }, "To keep a run as a test, open it and choose Keep as a test.") : null,
@@ -4181,7 +4191,7 @@ function testCase(w, c, i, v) {
   const run = canTest(w) ? el("button", {
       type: "button", class: "btn small", "data-focus": "ov:test:" + i, "aria-label": "Run test: " + c.name,
       "aria-disabled": testsOf(w.name).starting || roundActive(w.name) ? "true" : "false",
-      title: "Runs the saved file. Calls the models for real and sends no requests.",
+      title: runsSaved(),
       onclick: () => { if (!(testsOf(w.name).starting || roundActive(w.name))) startTests(w.name, i); },
     }, icon("run", 11), "Run") : null;
   const checks = finished ? finished.checks || [] : [];
@@ -4631,7 +4641,7 @@ async function addTest() {
 
 // testNext is what to do with a test that has just been written: run it, or look at it.
 function testNext(n, w) {
-  const run = el("button", { type: "button", class: "btn small", "data-focus": "notice-run", title: "Runs the saved file. Calls the models for real and sends no requests." }, icon("run", 11), "Run this test");
+  const run = el("button", { type: "button", class: "btn small", "data-focus": "notice-run", title: runsSaved() }, icon("run", 11), "Run this test");
   run.addEventListener("click", () => {
     const now = workflowByName(w.name);
     if (now && !(testsOf(now.name).starting || roundActive(now.name))) startTests(now.name, n.index);

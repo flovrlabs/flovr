@@ -27,13 +27,31 @@ go install github.com/simonyosb/flowmaker/cmd/flowmaker@latest
 
 ## Try it
 
-The examples are in this repository, and they need an [OpenRouter](https://openrouter.ai) key.
+The examples are in this repository.
 
 ```bash
 git clone https://github.com/simonyosb/flowmaker && cd flowmaker
 ```
 
-Put the key in a file named `.env` in the folder you run flowmaker from. The file is ignored by git. A `.env` file cannot say where keys are sent: it sets `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` only if it gives that provider's key too, and never a proxy.
+### Without a key
+
+Each example keeps, in `answers.jsonl` next to its workflow, what the models answered when its tests were last recorded. With `--replay`, flowmaker gives the steps those answers and calls no model, so nothing is needed but the binary, and nothing is paid.
+
+```bash
+flowmaker test examples/triage-ticket --replay
+```
+
+Serve both examples and open the page address the server prints, which ends with `?key=`. Run their tests from the page, or open a step to see what it read and gave. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
+
+```bash
+PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flowmaker serve examples --edit --replay
+```
+
+An answer is replayed only for exactly the request it was given for. Change a prompt, an input or a fixture, and that step has no answer until the tests are recorded again, which takes a key.
+
+### With a key
+
+The models are called for real with an [OpenRouter](https://openrouter.ai) key. Put the key in a file named `.env` in the folder you run flowmaker from. The file is ignored by git. A `.env` file cannot say where keys are sent: it sets `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` only if it gives that provider's key too, and never a proxy.
 
 ```
 OPENROUTER_API_KEY=...
@@ -49,7 +67,7 @@ flowmaker validate examples/triage-ticket
 flowmaker test examples/triage-ticket
 ```
 
-Serve both examples and open the page address the server prints, which ends with `?key=`. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
+Serve both examples as above, without `--replay`, and the page's tests call the models too.
 
 ```bash
 PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flowmaker serve examples --edit
@@ -167,6 +185,8 @@ tests:
 A key under `expect` is either a step's id, expecting it to be `called` or `skipped`, or an expression whose value is compared with what is written, as in `classify.priority.probabilities.high < 0.3: true`. A workflow with `respond` can expect things of its answer as `response.status` and `response.body`.
 
 In a test, `ai` and `decide` steps call their models for real, because what the model answers is the thing being tested. `http` steps are not sent, and environment variables they would need do not have to be set.
+
+`flowmaker test --record` keeps what the models answered in `answers.jsonl` next to the workflow, if every test passed. `flowmaker test --replay` then runs the tests with those answers instead of calling the models. A replayed test checks the workflow, its expressions, which steps run and what it answers, but not the models; it needs no key and costs nothing. Commit the file with the workflow, so that others and CI can run the tests without a key. Answers are recorded only from tests, never from the runs of a server.
 
 ## Components
 
@@ -336,7 +356,7 @@ FLOWMAKER_TOKEN=... flowmaker serve workflows --addr 0.0.0.0:8080
 
 ## In CI
 
-[.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. The same two commands work for your own workflows:
+[.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. Without the secret, as in pull requests from forks, it runs them with `--replay`. The same commands work for your own workflows:
 
 ```bash
 flowmaker validate path/to/workflow

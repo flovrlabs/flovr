@@ -173,6 +173,7 @@ func TestEditIsRefusedWithoutTouchingTheFile(t *testing.T) {
 	file := filepath.Join(dir, "workflow.yaml")
 	before := readFile(t, file)
 	rev := currentState(t, srv).Workflows[0].Rev
+	entries, _ := os.ReadDir(dir)
 
 	tests := []struct {
 		name   string
@@ -211,8 +212,8 @@ func TestEditIsRefusedWithoutTouchingTheFile(t *testing.T) {
 			}
 		})
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 5 {
-		t.Errorf("the folder holds %d entries, want the 5 it started with", len(entries))
+	if after, _ := os.ReadDir(dir); len(after) != len(entries) {
+		t.Errorf("the folder holds %d entries, want the %d it started with", len(after), len(entries))
 	}
 
 	// A workflow of that name must exist.

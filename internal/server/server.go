@@ -67,6 +67,10 @@ type Options struct {
 	// files by other means, such as an editor or git.
 	Edit bool
 
+	// Replay says that Model answers with recorded answers instead of calling
+	// the models, which the page then says.
+	Replay bool
+
 	// Roots are the folders the server was started with. The page, if it
 	// may change files, makes a new workflow in one of them, and can add a
 	// step from any component in them.

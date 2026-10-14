@@ -127,6 +127,7 @@ type stateView struct {
 	Commit    string `json:"commit"`
 	Protected bool   `json:"protected"` // whether requests need the token
 	Editable  bool   `json:"editable"`  // whether the page may change the files
+	Replay    bool   `json:"replay"`    // whether models are answered from recordings
 	// Roots are the folders a new workflow can be made in, if the page may
 	// make one.
 	Roots     []string       `json:"roots,omitempty"`
@@ -301,7 +302,7 @@ func (s *Server) state() stateView {
 		s.refresh()
 	}
 	view := stateView{
-		Commit: s.commit(), Protected: s.opts.Token != "", Editable: s.opts.Edit,
+		Commit: s.commit(), Protected: s.opts.Token != "", Editable: s.opts.Edit, Replay: s.opts.Replay,
 		Workflows: []workflowView{}, Runs: s.history.recent(),
 	}
 	for i := range view.Runs {

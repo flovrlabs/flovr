@@ -11,6 +11,7 @@ Workflows as files
 - [x] Steps that ask a model for structured output (`ai`), ask a decision model typed questions (`decide`), send a request (`http`), or use a component (`use`)
 - [x] Expressions in CEL, checked before anything runs
 - [x] `flowmaker validate`, `test`, `run` and `serve`; tests call the models for real
+- [x] The answers of a round of tests recorded (`--record`) and replayed (`--replay`), so the examples, the page and CI can be tried without a key
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page

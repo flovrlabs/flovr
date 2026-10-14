@@ -250,11 +250,13 @@ func validateCmd() *cobra.Command {
 
 func runCmd() *cobra.Command {
 	var fixture string
+	var replay bool
 	cmd := &cobra.Command{
 		Use:   "run [workflow]",
 		Short: "Run a workflow once",
 		Long: "Run a workflow once, for real: ai steps call the model and http steps send\n" +
-			"their requests.\n\n" +
+			"their requests. With --replay, ai and decide steps get the answers that\n" +
+			"flowmaker test --record kept instead, and no model is called.\n\n" +
 			"The argument is a workflow file or a directory containing workflow.yaml\n" +
 			"(default: the current directory).",
 		Args: cobra.MaximumNArgs(1),
@@ -275,9 +277,13 @@ func runCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
 
+			model, err := modelFor(replay, w.Path)
+			if err != nil {
+				return err
+			}
 			fmt.Println(w.Name)
 			eng := &engine.Engine{
-				Model:  ai.NewRouter(),
+				Model:  model,
 				HTTP:   httpClient(),
 				Env:    environ(),
 				OnStep: func(r engine.StepResult) { printStep("  ", r) },
@@ -292,11 +298,12 @@ func runCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&fixture, "fixture", "", "JSON file to use as the trigger event; "+
 		"looked up from the current directory, then from the workflow's")
+	cmd.Flags().BoolVar(&replay, "replay", false, "answer ai and decide steps with the answers recorded by flowmaker test --record; no key is needed")
 	return cmd
 }
 
 func testCmd() *cobra.Command {
-	var verbose bool
+	var verbose, record, replay bool
 	cmd := &cobra.Command{
 		Use:   "test [workflow]",
 		Short: "Run a workflow's tests",
@@ -304,24 +311,31 @@ func testCmd() *cobra.Command {
 			"with its fixture as the trigger event and compares the result with expect.\n\n" +
 			"ai steps call the model for real. http steps are not sent, so the environment\n" +
 			"variables they need do not have to be set.\n\n" +
+			"With --record, the answers the models gave are kept in " + ai.AnswersFile + " next to\n" +
+			"the workflow, if every test passed. With --replay, the tests get those answers\n" +
+			"and no model is called, so they run without a key and cost nothing; a test whose\n" +
+			"prompt, input or schema has changed since cannot run until it is recorded again.\n\n" +
 			"The argument is a workflow file or a directory containing workflow.yaml\n" +
 			"(default: the current directory). A component's own tests run the same way:\n" +
 			"give its component.yaml or the directory containing it.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			eng := &engine.Engine{Model: ai.NewRouter(), Env: environ()}
+			if record && replay {
+				return errors.New("--record calls the models and --replay does not; give one of them")
+			}
+			eng := &engine.Engine{Env: environ()}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
 
 			// tests holds one function per test, each running it.
-			var name string
+			var name, file string
 			var tests []func() (engine.TestResult, error)
 			if workflow.IsComponent(target(args)) {
 				c, err := workflow.LoadComponent(target(args))
 				if err != nil {
 					return err
 				}
-				name = c.Name
+				name, file = c.Name, c.Path
 				for _, t := range c.Tests {
 					tests = append(tests, func() (engine.TestResult, error) { return eng.TestComponent(ctx, c, t) })
 				}
@@ -330,7 +344,7 @@ func testCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				name = w.Name
+				name, file = w.Name, w.Path
 				for _, t := range w.Tests {
 					tests = append(tests, func() (engine.TestResult, error) { return eng.Test(ctx, w, t) })
 				}
@@ -339,8 +353,24 @@ func testCmd() *cobra.Command {
 				fmt.Printf("%s has no tests\n", name)
 				return nil
 			}
-
-			fmt.Println(name)
+			answers := filepath.Join(filepath.Dir(file), ai.AnswersFile)
+			var recorder *ai.Recorder
+			switch {
+			case replay:
+				model, err := modelFor(true, file)
+				if err != nil {
+					return err
+				}
+				eng.Model = model
+				fmt.Println(name + ", with the answers recorded for it")
+			case record:
+				recorder = ai.NewRecorder(ai.NewRouter())
+				eng.Model = recorder
+				fmt.Println(name)
+			default:
+				eng.Model = ai.NewRouter()
+				fmt.Println(name)
+			}
 			failed := 0
 			for _, run := range tests {
 				res, err := run()
@@ -365,19 +395,34 @@ func testCmd() *cobra.Command {
 
 			fmt.Println()
 			if failed > 0 {
+				if record {
+					fmt.Println("The answers were not recorded, since a test failed.")
+				}
 				return fmt.Errorf("%d of %s failed", failed, count(len(tests), "test"))
 			}
 			fmt.Printf("%s passed\n", count(len(tests), "test"))
+			if record {
+				if err := recorder.Write(answers); err != nil {
+					return err
+				}
+				if recorder.Len() == 0 {
+					fmt.Println("No model was asked anything, so there are no answers to record.")
+				} else {
+					fmt.Printf("%s recorded in %s\n", count(recorder.Len(), "answer"), answers)
+				}
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show what every step did in each test")
+	cmd.Flags().BoolVar(&record, "record", false, "if every test passes, keep the models' answers in "+ai.AnswersFile+" next to the workflow")
+	cmd.Flags().BoolVar(&replay, "replay", false, "answer with what --record kept instead of calling the models; no key is needed")
 	return cmd
 }
 
 func serveCmd() *cobra.Command {
 	var addr, history, tlsCert, tlsKey string
-	var edit bool
+	var edit, replay bool
 	var maxRuns int
 	var market string
 	cmd := &cobra.Command{
@@ -408,7 +453,11 @@ func serveCmd() *cobra.Command {
 			"starts workflows and nothing else: it does not open the page, and ?wait=true then\n" +
 			"answers with how the run went but not what its steps put out. Give --tls-cert and\n" +
 			"--tls-key, or put the server behind a proxy that does, so the token is not sent in\n" +
-			"the clear.",
+			"the clear.\n\n" +
+			"With --replay, ai and decide steps get the answers that flowmaker test --record\n" +
+			"kept in " + ai.AnswersFile + " files in the paths, and no model is called: a way to try\n" +
+			"the page without a key. A step asked something that was not recorded fails, and\n" +
+			"http steps are still sent.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				args = []string{"."}
@@ -437,9 +486,14 @@ func serveCmd() *cobra.Command {
 					"Listen on 127.0.0.1 to edit", addr)
 			}
 
+			model, err := modelFor(replay, args...)
+			if err != nil {
+				return err
+			}
 			logger := log.New(os.Stdout, "", log.Ltime)
 			opts := server.Options{
-				Model:   ai.NewRouter(),
+				Model:   model,
+				Replay:  replay,
 				HTTP:    httpClient(),
 				Env:     environ(),
 				Token:   token,
@@ -496,6 +550,10 @@ func serveCmd() *cobra.Command {
 			if edit {
 				fmt.Println("  --edit: the page can change the workflow files, and changes to them are picked up")
 			}
+			if replay {
+				fmt.Printf("  --replay: ai and decide steps get the %s recorded in %s; no model is called\n",
+					count(model.(*ai.Replay).Len(), "answer"), ai.AnswersFile)
+			}
 
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
@@ -531,6 +589,7 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&history, "history", filepath.Join(".flowmaker", "runs.jsonl"),
 		"file that finished runs are saved to, with their trigger payloads and step outputs; empty keeps them in memory only")
 	cmd.Flags().BoolVar(&edit, "edit", false, "let the web page change the workflow files, and pick up changes made to them")
+	cmd.Flags().BoolVar(&replay, "replay", false, "answer ai and decide steps with the answers recorded by flowmaker test --record; no key is needed")
 	cmd.Flags().IntVar(&maxRuns, "max-runs", 16, "how many runs webhooks may have going at once; more are answered 429")
 	cmd.Flags().StringVar(&market, "market", defaultMarket, "with --edit, the list of components in git that the page offers: an https address or a file; empty offers none")
 	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "certificate file, to serve https")
@@ -571,6 +630,19 @@ func loopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// modelFor is what answers ai and decide steps: the models, or with replay the
+// answers recorded in the folders at paths.
+func modelFor(replay bool, paths ...string) (engine.Model, error) {
+	if !replay {
+		return ai.NewRouter(), nil
+	}
+	answers, err := ai.LoadAnswers(paths...)
+	if err != nil {
+		return nil, err
+	}
+	return answers, nil
 }
 
 func target(args []string) string {
