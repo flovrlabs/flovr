@@ -200,6 +200,13 @@ func (s *Server) change(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status, answer = s.edit(req)
+	} else if r.URL.Path == "/api/steps/test" {
+		var req stepTestRequest
+		if err := json.Unmarshal(data, &req); err != nil {
+			reply(rw, http.StatusBadRequest, fail("the request body is not the JSON expected"))
+			return
+		}
+		status, answer = s.stepTest(req)
 	} else if r.URL.Path == "/api/workflows" {
 		var req createRequest
 		if err := json.Unmarshal(data, &req); err != nil {
