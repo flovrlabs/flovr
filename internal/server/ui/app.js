@@ -29,6 +29,8 @@ const ICONS = {
   runs: ["M4 6h16", "M4 12h10", "M4 18h13"],
   tests: ["M9 3h6", "M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"],
   chev: ["M6 9l6 6 6-6"],
+  search: ["M18 11a7 7 0 1 1-14 0 7 7 0 0 1 14 0z", "m20 20-3.5-3.5"],
+  clock: ["M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z", "M12 7v5l3 2"],
   chevron: ["M9 6l6 6-6 6"],
   workflow: ["M4 6h6v5H4z", "M14 13h6v5h-6z", "M10 8.5h3a2 2 0 0 1 2 2V13"],
   run: ["M7 4.5v15l12-7.5z"],
@@ -88,7 +90,9 @@ const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", run
 const openInner = new Set();
 
 let state = { commit: "", protected: false, workflows: [], runs: [] };
-let selected = { workflow: null, run: null, node: null, changes: false, add: null, test: null, make: false, edit: null, list: null };
+// What the address picks. `home` is one of the lists, "workflows" or "services".
+const BLANK = { workflow: null, run: null, node: null, changes: false, add: null, test: null, make: false, edit: null, list: null, home: null };
+let selected = { ...BLANK };
 let detail = null;      // the selected run in full, with trigger and outputs
 let latestFull = null;  // the latest run of the selected workflow in full, drawn on it while no run is picked
 let shown = "";         // what the page currently shows, to tell whether anything changed
@@ -135,16 +139,20 @@ if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListen
 function railButton(name, label, onclick, pressed) {
   return el("button", { type: "button", class: "railbtn", "aria-label": label, title: label, "aria-pressed": pressed, onclick }, icon(name, 20));
 }
-// buildRail fills the rail under the logo: the workflows and the components,
-// each a menu to pick one from, and the theme at the bottom. The runs and tests
-// of the one picked are its tabs.
+// buildRail fills the rail under the logo: the list of workflows and the list
+// of services, and the theme at the bottom. The runs and tests of a workflow
+// are its tabs.
 const railButtons = {};
 function buildRail() {
-  railButtons.workflows = railButton("workflow", "Workflows", (e) => openMenu("workflows", e.currentTarget), "false");
-  railButtons.components = railButton("component", "Components", (e) => openMenu("components", e.currentTarget), "false");
+  railButtons.workflows = railButton("workflow", "Workflows", () => go({ home: "workflows" }), "false");
+  railButtons.services = railButton("component", "Services", () => go({ home: "services" }), "false");
   themeButton = railButton("moon", "Switch theme", toggleTheme);
-  $("rail").append(railButtons.workflows, railButtons.components, el("span", { class: "grow" }), themeButton);
+  $("rail").append(railButtons.workflows, railButtons.services, el("span", { class: "grow" }), themeButton);
   paintTheme();
+}
+// paintRail marks the list that what is on show belongs to.
+function paintRail(kind) {
+  for (const [name, b] of Object.entries(railButtons)) b.setAttribute("aria-pressed", name === kind ? "true" : "false");
 }
 
 function append(node, children) {
@@ -199,19 +207,22 @@ function when(started) {
 const percent = (p) => (p * 100).toFixed(p >= 0.995 || p < 0.005 ? 1 : 0) + "%";
 const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 
-// The address is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>,
+// The address is #/workflows or #/services for the lists, the first of them
+// when there is none, and #/new for the form for a new workflow. A workflow,
+// or a component, is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>,
 // or /a/<step> while a step is being added after that step ("trigger" for the
 // first place, "-" for the last). /t/<run> is the form that keeps a run as a
-// test, and /t/- the form for a new test from nothing. /m/1 is the form for
-// a new workflow, which belongs to no workflow: the one named stays selected
-// behind it. /e/<step> is the node editor, the large dialog for one step; a
+// test, and /t/- the form for a new test from nothing. /e/<step> is the node editor, the large dialog for one step; a
 // step of a workflow this page can edit opens in it from /n/<step> too.
 // /v/tests is the list of the workflow's tests, /v/runs the list of its runs.
 function readAddress() {
-  const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  const raw = location.hash.replace(/^#\/?/, "");
+  if (raw === "" || raw === "workflows" || raw === "services") { selected = { ...BLANK, home: raw || "workflows" }; return; }
+  if (raw === "new") { selected = { ...BLANK, make: true }; return; }
+  const parts = raw.split("/").map(decodeURIComponent);
   const found = {};
   for (let i = 0; i + 1 < parts.length; i += 2) found[parts[i]] = parts[i + 1];
-  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null, test: found.t || null, make: found.m === "1", edit: found.e || null, list: found.v === "tests" || found.v === "runs" ? found.v : null };
+  selected = { ...BLANK, workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null, test: found.t || null, edit: found.e || null, list: found.v === "tests" || found.v === "runs" ? found.v : null };
 }
 
 function go(change) {
@@ -228,12 +239,15 @@ function go(change) {
   if (!("edit" in change)) next.edit = null;
   // Nor the list of tests or runs.
   if (!("list" in change)) next.list = null;
+  if (!("home" in change)) next.home = null;
+  // The lists and the form for a new workflow belong to no workflow.
+  const own = next.home ? "#/" + next.home : next.make ? "#/new" : !next.workflow ? "#/workflows" : null;
+  if (own) { if (location.hash !== own) location.hash = own; return; }
   let hash = "#/w/" + encodeURIComponent(next.workflow);
   if (next.run) hash += "/r/" + encodeURIComponent(next.run);
   if (next.node) hash += "/n/" + encodeURIComponent(next.node);
   if (next.add) hash += "/a/" + encodeURIComponent(next.add);
   if (next.test) hash += "/t/" + encodeURIComponent(next.test);
-  if (next.make) hash += "/m/1";
   if (next.edit) hash += "/e/" + encodeURIComponent(next.edit);
   if (next.list) hash += "/v/" + next.list;
   if (next.changes) hash += "/c/1";
@@ -280,7 +294,8 @@ async function refresh() {
 let offline = null;
 function paintLive() {
   const w = selected.make ? null : state.workflows.find((x) => x.name === selected.workflow);
-  const on = w && !isComp(w) && w.trigger ? "Live on " + w.trigger : "Live";
+  const served = state.workflows.filter((x) => !isComp(x) && x.trigger).length;
+  const on = !w ? (served ? "Live · " + plural(served, "trigger") : "Live") : !isComp(w) && w.trigger ? "Live on " + w.trigger : "Live";
   $("live").replaceChildren(el("span", { class: "pulse" }), offline || on);
   $("live").className = offline ? "live down" : "live";
 }
@@ -330,11 +345,6 @@ const failedInside = (rows) => rows.find((r) => r.status === "failed") || null;
 const latestRun = (name) => state.runs.find((r) => r.workflow === name && r.source !== "test");
 
 function render() {
-  if (!state.workflows.some((w) => w.name === selected.workflow)) {
-    const first = state.workflows.find((x) => !x.component) || state.workflows[0];
-    selected = { workflow: first ? first.name : null, run: null, node: null, changes: false, add: null, test: null, make: false, edit: null, list: null };
-    detail = null;
-  }
   // Rebuilding the page drops the reader's focus and text selection, so it is
   // only done when there is something new to show.
   const wanted = state.workflows.find((x) => x.name === selected.workflow);
@@ -348,40 +358,49 @@ function render() {
   shown = next;
   const focusId = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
 
-  // A new workflow is drawn from the form, as a workflow of its own.
+  // A new workflow is drawn from the form, as a workflow of its own. An
+  // address naming no workflow the server knows shows the list of them.
   const real = state.workflows.find((x) => x.name === selected.workflow);
-  const w = real && selected.make ? draftWorkflow() : real;
-  const key = [selected.workflow, selected.run, selected.node, selected.changes, selected.add, selected.test, selected.make, selected.list].join("|");
+  const w = selected.make ? draftWorkflow() : real;
+  const home = w ? null : selected.home || "workflows";
+  const key = [selected.workflow, selected.run, selected.node, selected.changes, selected.add, selected.test, selected.make, selected.list, selected.home].join("|");
   const moved = key !== lastKey;
   lastKey = key;
 
-  renderTop(w);
-  if (!w) {
+  paintRail(home || (isComp(w) ? "services" : "workflows"));
+  renderTop(w, home);
+  if (home) {
     view = null;
     form = null;
     tform = null;
     maker = null;
     insp.body = null;
-    closeMenu();
-    $("changes").replaceChildren();
+    $("app").dataset.view = "home";
+    $("app").dataset.inspector = "closed";
     $("inspector").replaceChildren();
-    $("canvas").replaceChildren(el("p", { class: "none" }, "No workflows are loaded."));
+    $("canvas").replaceChildren();
+    renderHome(home);
     paintEditor();
+    restoreFocus(focusId);
     return;
   }
+  $("app").dataset.view = "flow";
   const run = detail && detail.run === selected.run && detail.workflow === w.name ? detail : null;
   // While no run is picked the drawing shows the latest one, if it is this workflow's.
   const auto = !run && !w.draft && !selected.run && latestFull && latestFull.workflow === w.name ? latestFull : null;
   view = { w, run, auto };
-  paintMenu();
   renderCanvas(moved);
   renderInspector(w, run, moved);
   paintEditor();
-  if (focusId) {
-    const back = document.querySelector('[data-focus="' + CSS.escape(focusId) + '"]');
-    if (back && back !== document.activeElement) back.focus({ preventScroll: true });
-  }
+  restoreFocus(focusId);
   if (afterRender) { const run = afterRender; afterRender = null; run(); }
+}
+
+// restoreFocus puts the focus back on what had it before the page was drawn again.
+function restoreFocus(focusId) {
+  if (!focusId) return;
+  const back = document.querySelector('[data-focus="' + CSS.escape(focusId) + '"]');
+  if (back && back !== document.activeElement) back.focus({ preventScroll: true });
 }
 
 // ---- top bar ----
@@ -406,34 +425,30 @@ function paintTabs(w) {
     comp ? null : tab("tests", "Tests", typeof w.tests === "number" ? w.tests : (w.cases || []).length, () => go({ list: "tests", run: null, node: null }))].filter(Boolean));
 }
 
-function renderTop(w) {
-  paintTabs(w);
+function renderTop(w, home) {
+  paintTabs(home ? null : w);
   paintLive();
-  $("changes").replaceChildren(...(state.editable && w && !isComp(w) && !w.draft ? [changesChip(w)] : []));
+  $("changes").replaceChildren(...(state.editable && w && !home && !isComp(w) && !w.draft ? [changesChip(w)] : []));
 
   const anyFailed = state.runs.some((r) => r.status === "failed" && latestRun(r.workflow) === r);
   document.title = anyFailed ? "flowmaker (a run failed)" : "flowmaker";
-  if (!w) {
-    $("crumb").replaceChildren();
+  if (home) {
+    $("crumb").replaceChildren(...[
+      el("h1", {}, home === "services" ? "Services" : "Workflows"),
+      home === "services" ? el("span", { class: "lede" }, "Pieces that workflows use. A change to one reaches every step that uses it.") : null].filter(Boolean));
     return;
   }
+  // The way back to the list it is in, then its name.
+  const back = (to, label) => [el("a", { href: "#/" + to, class: "crumbback", "data-focus": "back:" + to }, label), icon("chevron", 14)];
   if (w.draft) {
-    $("crumb").replaceChildren(...[
-      el("span", { class: "crumbkind" }, icon("plus", 14), "New workflow"),
-      w.label ? el("strong", {}, w.label) : null].filter(Boolean));
+    $("crumb").replaceChildren(...back("workflows", "Workflows"), el("strong", {}, w.label || "New workflow"));
     return;
   }
   if (isComp(w)) {
-    $("crumb").replaceChildren(
-      el("span", { class: "crumbkind" }, icon("component", 14), "Component"),
-      el("button", { type: "button", class: "crumbname", title: "Pick another component", "aria-haspopup": "dialog", onclick: (e) => openMenu("components", e.currentTarget) },
-        el("span", { title: w.name }, compTitle(w)), icon("chev", 14)),
-      el("span", { class: "pill" }, compKindWord(w)));
+    $("crumb").replaceChildren(...back("services", "Services"), el("strong", { title: w.name }, compTitle(w)), el("span", { class: "pill" }, compKindWord(w)));
     return;
   }
-  $("crumb").replaceChildren(
-    el("button", { type: "button", class: "crumbname", title: "Pick another workflow", "aria-haspopup": "dialog", onclick: (e) => openMenu("workflows", e.currentTarget) },
-      el("span", {}, w.name), icon("chev", 14)));
+  $("crumb").replaceChildren(...back("workflows", "Workflows"), el("strong", { title: w.path }, w.name));
 }
 
 // statusMark is the small round symbol that stands for a status.
@@ -441,93 +456,146 @@ function statusMark(status, size) {
   return el("span", { class: "mark " + status }, icon(status, size || 12));
 }
 
-// ---- the menu: the workflows, or the components, to pick one from ----
+// ---- the lists: every workflow, and every service ----
+//
+// The page opens on the list of workflows, and a row opens its drawing.
+// Services are the components that workflows use. The search box and the
+// filter are built once, so what is typed stays while the poll redraws the rows.
 
-let menu = null;        // the menu on the page: { kind: "workflows" | "components", root, anchor }
+const homeUi = { kind: null, query: "", filter: "all", root: null, search: null, filters: null, newSlot: null, rows: null };
 
-// openMenu opens the list of one kind next to the control that asked for it,
-// or closes it when it is already open.
-function openMenu(kind, anchor) {
-  const again = menu && menu.kind === kind;
-  closeMenu();
-  if (again) return;
-  const root = el("div", { class: "menu", role: "dialog", "aria-label": kind === "components" ? "Components" : "Workflows" });
-  menu = { kind, root, anchor };
-  paintMenu();
-  document.body.append(root);
-  const at = anchor.getBoundingClientRect();
-  // From the rail it opens to the side, from the name below it.
-  const side = !!anchor.closest("#rail") && window.innerWidth > 860;
-  Object.assign(root.style, side ? { left: at.right + 8 + "px", top: at.top + "px" } : { left: Math.max(8, at.left) + "px", top: at.bottom + 6 + "px" });
-  for (const b of Object.values(railButtons)) b.setAttribute("aria-pressed", b === railButtons[kind] ? "true" : "false");
-  const first = root.querySelector('[aria-current="true"]') || root.querySelector("button");
-  if (first) first.focus({ preventScroll: true });
+function renderHome(kind) {
+  if (homeUi.kind !== kind || !homeUi.root || !$("home").contains(homeUi.root)) buildHome(kind);
+  paintHome();
 }
 
-function closeMenu(focusBack) {
-  if (!menu) return;
-  const { root, anchor } = menu;
-  menu = null;
-  root.remove();
-  for (const b of Object.values(railButtons)) b.setAttribute("aria-pressed", "false");
-  if (focusBack && document.contains(anchor)) anchor.focus({ preventScroll: true });
+function buildHome(kind) {
+  const word = kind === "services" ? "service" : "workflow";
+  homeUi.kind = kind;
+  homeUi.query = "";
+  homeUi.filter = "all";
+  homeUi.search = el("input", { type: "search", class: "in", placeholder: "Find a " + word, "aria-label": "Find a " + word });
+  homeUi.search.addEventListener("input", () => { homeUi.query = homeUi.search.value; paintHome(); });
+  homeUi.filters = el("div", { class: "hfilters", role: "group", "aria-label": "Show" });
+  homeUi.newSlot = el("span", { class: "hnewslot" });
+  homeUi.rows = el("div", { class: "hrows" });
+  homeUi.root = el("div", { class: "hwrap" },
+    el("div", { class: "htools" }, el("label", { class: "hfind" }, icon("search", 16), homeUi.search), homeUi.filters, el("span", { class: "grow" }), homeUi.newSlot),
+    homeUi.rows);
+  $("home").replaceChildren(homeUi.root);
 }
 
-// paintMenu fills the menu, and again on every poll, for the flags and the latest runs.
-function paintMenu() {
-  if (!menu) return;
-  const pick = (name) => { closeMenu(); go({ workflow: name, run: null, node: null }); };
-  if (menu.kind === "components") {
-    const list = state.workflows.filter((x) => x.component);
-    menu.root.replaceChildren(
-      el("div", { class: "mhead" }, "Components", el("span", { class: "rs-n" }, list.length)),
-      ...(list.length ? list.map((x) => componentRow(x, pick)) : [el("p", { class: "mempty" }, "None. A component is a folder with a component.yaml, used by its name.")]));
+// failingOf: a workflow whose latest run failed, or a service whose latest test
+// did not pass; either of them with a file the server cannot use.
+function failingOf(x) {
+  if (x.problem) return true;
+  if (!isComp(x)) { const last = latestRun(x.name); return !!last && last.status === "failed"; }
+  const test = state.runs.find((r) => r.workflow === x.name && isTestRun(r));
+  return !!test && (verdictOf(test) === "unmet" || verdictOf(test) === "broke");
+}
+
+function paintHome() {
+  const services = homeUi.kind === "services";
+  const all = state.workflows.filter((x) => isComp(x) === services);
+  const failing = all.filter(failingOf);
+  const q = homeUi.query.trim().toLowerCase();
+  const found = (homeUi.filter === "failing" ? failing : all).filter((x) => !q || [x.name, x.title, x.description, x.trigger].some((t) => (t || "").toLowerCase().includes(q)));
+  const filter = (name, label, n, bad) => el("button", {
+      type: "button", "aria-pressed": homeUi.filter === name ? "true" : "false", "data-focus": "hf:" + name,
+      onclick: () => { homeUi.filter = name; paintHome(); },
+    }, label, el("span", { class: "hn" + (bad && n ? " bad" : "") }, n));
+  homeUi.filters.replaceChildren(filter("all", "All", all.length), filter("failing", "Failing", failing.length, true));
+  homeUi.newSlot.replaceChildren(...(!services && canMake() ? [el("button", {
+      type: "button", class: "btn primary hnew", "data-focus": "new-workflow", onclick: () => go({ make: true }),
+    }, icon("plus", 13), making && makeTouched() ? "Go on with the new workflow" : "New workflow")] : []));
+
+  if (!found.length) {
+    const none = all.length ? "Nothing here matches."
+      : services ? "No services yet. A service is a folder with a component.yaml, and a step uses it by its folder's name."
+      : canMake() ? "No workflows yet. Make the first one with New workflow." : "No workflows yet. A workflow is a folder with a workflow.yaml.";
+    homeUi.rows.replaceChildren(el("p", { class: "hempty" }, none));
     return;
   }
-  const list = state.workflows.filter((x) => !x.component);
-  menu.root.replaceChildren(...[
-    el("div", { class: "mhead" }, "Workflows", el("span", { class: "rs-n" }, list.length)),
-    list.map((x) => {
-      const last = latestRun(x.name);
-      return el("button", { class: "row wf", type: "button", "aria-current": x.name === selected.workflow && !selected.make ? "true" : null, onclick: () => pick(x.name) },
-        el("span", { class: "dot " + (last ? last.status : ""), title: last ? "Latest run: " + last.status : "No runs yet" }),
-        el("span", { class: "name" }, x.name),
-        flagFor(x),
-        el("span", { class: "sub mono" }, x.trigger || "no trigger"),
-        el("span", { class: "aside" }, plural(x.steps.length, "step")));
-    }),
-    canMake() ? newButton(!!selected.make) : null].flat().filter(Boolean));
+  const head = services ? ["Service", "Made of", "Takes", "Gives back", "Used by", "Last test"] : ["Workflow", "Starts on", "Steps", "Last run", "Recent runs", "Tests"];
+  homeUi.rows.replaceChildren(...[
+    el("div", { class: "hbox" }, el("table", { class: "htab" },
+      el("thead", {}, el("tr", {}, head.map((h) => el("th", { scope: "col" }, h)))),
+      el("tbody", {}, found.map(services ? serviceRow : workflowRow)))),
+    services ? el("p", { class: "hfoot" }, "A service is a folder with a ", mono("component.yaml"), ". A step uses one by its folder's name.") : null].filter(Boolean));
 }
 
-document.addEventListener("pointerdown", (event) => {
-  if (menu && !menu.root.contains(event.target) && !menu.anchor.contains(event.target)) closeMenu();
-});
-window.addEventListener("resize", () => closeMenu());
-
-// newButton is the control under the workflows that opens the form for a new one.
-function newButton(on) {
-  return el("button", {
-      type: "button", class: "btn small block newwf", "data-focus": "new-workflow", "aria-current": on ? "true" : null,
-      title: making && makeTouched() ? "Go on with the workflow you started" : null,
-      onclick: () => { closeMenu(); go({ make: true, run: null, node: null }); },
-    }, icon("plus", 12), "New workflow");
+// homeRow is a row of a list: the name is the link, and a click anywhere on the row follows it.
+function homeRow(href, cells) {
+  const tr = el("tr", { class: "hrow" }, cells);
+  tr.addEventListener("click", (event) => { if (!event.target.closest("a, button")) location.hash = href; });
+  return tr;
 }
 
-// componentRow is a component in the menu: the silhouette of its kind, its
-// own name, what kind it is and how many steps use it.
-function componentRow(x, pick) {
-  const kind = compKind(x), uses = usesOf(x);
+const hstat = (tone, text) => el("span", { class: "hstat " + tone }, el("span", { class: "dot " + tone }), text);
+const hnone = (text) => el("span", { class: "hnone" }, text);
+const chipsOf = (names) => (names.length ? el("div", { class: "hchips" }, names.map((n) => el("span", { class: "hchip mono" }, n))) : hnone("Nothing"));
+
+// stepTiles are a workflow's steps in a row, each the tile of its kind.
+function stepTiles(steps, count) {
+  return el("div", { class: "htiles" }, steps.map((s) => {
+    const t = kindTile(s.kind, 22);
+    t.title = s.id + " · " + (s.component || KIND_LABEL[s.kind] || s.kind);
+    return t;
+  }), el("span", { class: "hcount" }, count || steps.length));
+}
+
+// testsWord says how a workflow's tests went, each by its latest run.
+function testsWord(x) {
+  const cases = x.cases || [];
+  if (!cases.length) return hnone(x.tests ? plural(x.tests, "test") : "No tests");
+  const got = cases.map((c) => { const r = latestTestRun(x.name, c.name); return r ? verdictOf(r) : null; });
+  const n = (v) => got.filter((g) => g === v).length;
+  const bad = n("unmet") + n("broke");
+  if (bad) return hstat("failed", plural(bad, "test") + " failing");
+  if (n("passed")) return hstat("ok", n("passed") === cases.length ? "All " + cases.length + " passed" : n("passed") + " of " + cases.length + " passed");
+  if (n("unrun")) return hstat("pending", n("unrun") + " could not run");
+  return hnone(plural(cases.length, "test") + ", not run yet");
+}
+
+function workflowRow(x) {
+  const href = "#/w/" + encodeURIComponent(x.name);
+  const last = latestRun(x.name);
+  const recent = state.runs.filter((r) => r.workflow === x.name && !isTestRun(r)).slice(0, 8).reverse();
+  const ok = recent.filter((r) => r.status === "ok").length;
+  return homeRow(href, [
+    el("td", { class: "hmain" }, el("a", { href, class: "hname", "data-focus": "h:" + x.name }, x.name), flagFor(x), el("div", { class: "hpath mono" }, folderOf(x.path))),
+    el("td", {}, x.trigger ? el("span", { class: "hpill mono" }, icon(isWebhook(x) ? "trigger" : "clock", 12), x.trigger) : hnone("No trigger · flowmaker run")),
+    el("td", {}, stepTiles(x.steps)),
+    el("td", {}, last
+      ? [hstat(last.status, last.status === "failed" ? outcome(last) : last.status === "running" ? "Running" : "Succeeded in " + duration(last.ms)), el("div", { class: "hwhen" }, when(last.started))]
+      : hnone(x.trigger ? "No runs yet" : "Not served")),
+    el("td", {}, recent.length
+      ? el("div", { class: "hrecent" }, el("span", { class: "hbars", "aria-hidden": "true" }, recent.map((r) => el("i", { class: r.status }))), el("span", { class: "hcount" }, ok + " of " + recent.length + " ok"))
+      : hnone("·")),
+    el("td", {}, testsWord(x)),
+  ]);
+}
+
+function serviceRow(x) {
+  const href = "#/w/" + encodeURIComponent(x.name);
   const test = state.runs.find((r) => r.workflow === x.name && isTestRun(r));
-  return el("button", {
-      class: "row comp kind-" + kind, type: "button", "aria-current": x.name === selected.workflow ? "true" : null,
-      title: x.name + (test ? " · latest test: " + VERDICT[verdictOf(test)].word.toLowerCase() : ""),
-      onclick: () => pick(x.name),
-    },
-    kindTile(kind, 28),
-    el("span", { class: "name" }, compTitle(x)),
-    flagFor(x),
-    el("span", { class: "sub" }, compKindWord(x)),
-    el("span", { class: "aside" }, uses ? "used by " + uses : "unused"));
+  const v = test ? verdictOf(test) : null;
+  const uses = x.usedBy || [];
+  return homeRow(href, [
+    el("td", { class: "hmain" }, el("div", { class: "hsvc" }, kindTile(compKind(x), 34),
+      el("div", {}, el("a", { href, class: "hname", "data-focus": "h:" + x.name, title: x.name }, compTitle(x)), flagFor(x), x.description ? el("div", { class: "hdesc" }, x.description) : null))),
+    el("td", {}, x.gives ? stepTiles(x.steps, plural(x.steps.length, "step")) : hnone(compKindWord(x))),
+    el("td", {}, chipsOf(inputNames(x))),
+    el("td", {}, chipsOf(givenNames(x))),
+    el("td", {}, uses.length ? el("div", { class: "huses" }, uses.map((u) => {
+      const at = entryOf(u.workflow);
+      return el("a", { class: "huse", href: "#/w/" + encodeURIComponent(u.workflow) + "/n/" + encodeURIComponent(u.step), title: "Open step " + u.step },
+        el("span", { class: "hw" }, at ? (at.component ? compTitle(at) : at.name) : u.workflow), el("span", { class: "gt" }, " › "), mono(u.step));
+    })) : hnone("Unused")),
+    el("td", {}, test
+      ? [hstat(v === "passed" ? "ok" : v === "unmet" || v === "broke" ? "failed" : v === "running" ? "running" : "pending", VERDICT[v].word), el("div", { class: "hwhen" }, when(test.started))]
+      : hnone((x.cases || []).length ? "Not run yet" : "No tests")),
+  ]);
 }
 
 // outcome says in a few words what a run did.
@@ -1893,7 +1961,6 @@ function draftChanged(name, force) {
     node.setAttribute("aria-label", node.dataset.label + (on ? ", unsaved changes" : ""));
   }
   for (const node of document.querySelectorAll("#inspector [data-node]")) node.classList.toggle("edited", edited.has(node.dataset.node));
-  paintMenu();
   $("changes").replaceChildren(...(state.editable && !isComp(w) ? [changesChip(w)] : []));
   // With nothing picked the panel lists the changed steps, or is there only for them.
   if (!isComp(w) && !selected.node && !selected.run && !selected.add && !selected.test && !selected.make && !selected.list) { uiTick++; render(); }
@@ -5424,7 +5491,6 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key !== "Escape") return;
-  if (menu) { event.preventDefault(); closeMenu(true); return; }
   // The node editor is on top of everything else: Escape closes it, and what was typed stays as a draft.
   if (ed) { event.preventDefault(); closeEditor(); return; }
   // In a form field Escape only leaves the field.
