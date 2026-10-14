@@ -84,7 +84,7 @@ const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", run
 const openInner = new Set();
 
 let state = { commit: "", protected: false, workflows: [], runs: [] };
-let selected = { workflow: null, run: null, node: null, changes: false, add: null, test: null };
+let selected = { workflow: null, run: null, node: null, changes: false, add: null, test: null, make: false };
 let detail = null;      // the selected run in full, with trigger and outputs
 let shown = "";         // what the page currently shows, to tell whether anything changed
 let view = null;        // the workflow and run now drawn, for redrawing on resize and zoom
@@ -150,12 +150,14 @@ const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 // The address is #/w/<workflow>, optionally followed by /r/<run> and /n/<step>,
 // or /a/<step> while a step is being added after that step ("trigger" for the
 // first place, "-" for the last). /t/<run> is the form that keeps a run as a
-// test, and /t/- the form for a new test from nothing.
+// test, and /t/- the form for a new test from nothing. /m/1 is the form for
+// a new workflow, which belongs to no workflow: the one named stays selected
+// behind it.
 function readAddress() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   const found = {};
   for (let i = 0; i + 1 < parts.length; i += 2) found[parts[i]] = parts[i + 1];
-  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null, test: found.t || null };
+  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null, test: found.t || null, make: found.m === "1" };
 }
 
 function go(change) {
@@ -166,11 +168,14 @@ function go(change) {
   if (!("add" in change)) next.add = null;
   // Nor the form for a test.
   if (!("test" in change)) next.test = null;
+  // Nor the form for a new workflow.
+  if (!("make" in change)) next.make = false;
   let hash = "#/w/" + encodeURIComponent(next.workflow);
   if (next.run) hash += "/r/" + encodeURIComponent(next.run);
   if (next.node) hash += "/n/" + encodeURIComponent(next.node);
   if (next.add) hash += "/a/" + encodeURIComponent(next.add);
   if (next.test) hash += "/t/" + encodeURIComponent(next.test);
+  if (next.make) hash += "/m/1";
   if (next.changes) hash += "/c/1";
   if (location.hash !== hash) location.hash = hash;
 }
@@ -241,12 +246,14 @@ const latestRun = (name) => state.runs.find((r) => r.workflow === name && r.sour
 function render() {
   if (!state.workflows.some((w) => w.name === selected.workflow)) {
     const first = state.workflows.find((x) => !x.component) || state.workflows[0];
-    selected = { workflow: first ? first.name : null, run: null, node: null, changes: false, add: null, test: null };
+    selected = { workflow: first ? first.name : null, run: null, node: null, changes: false, add: null, test: null, make: false };
     detail = null;
   }
   // Rebuilding the page drops the reader's focus and text selection, so it is
   // only done when there is something new to show.
   const wanted = state.workflows.find((x) => x.name === selected.workflow);
+  // A page that cannot make a workflow has no form for one, whatever the address says.
+  if (selected.make && !canMake()) selected = { ...selected, make: false };
   // The server has no changes view for a component.
   if (selected.changes && isComp(wanted)) selected = { ...selected, changes: false };
   if (selected.changes && state.editable && wanted) ensureChanges(wanted);
@@ -255,8 +262,10 @@ function render() {
   shown = next;
   const focusId = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
 
-  const w = state.workflows.find((x) => x.name === selected.workflow);
-  const key = [selected.workflow, selected.run, selected.node, selected.changes, selected.add, selected.test].join("|");
+  // A new workflow is drawn from the form, as a workflow of its own.
+  const real = state.workflows.find((x) => x.name === selected.workflow);
+  const w = real && selected.make ? draftWorkflow() : real;
+  const key = [selected.workflow, selected.run, selected.node, selected.changes, selected.add, selected.test, selected.make].join("|");
   const moved = key !== lastKey;
   lastKey = key;
 
@@ -265,6 +274,7 @@ function render() {
     view = null;
     form = null;
     tform = null;
+    maker = null;
     insp.body = null;
     $("side").replaceChildren();
     $("changes").replaceChildren();
@@ -289,13 +299,23 @@ function render() {
 function renderTop(w) {
   $("commit").replaceChildren(...(state.commit ? [icon("branch", 13), el("span", {}, state.commit)] : []));
 
-  $("changes").replaceChildren(...(state.editable && w && !isComp(w) ? [changesChip()] : []));
+  $("changes").replaceChildren(...(state.editable && w && !isComp(w) && !w.draft ? [changesChip()] : []));
 
   const last = w && !isComp(w) ? latestRun(w.name) : null;
   const anyFailed = state.runs.some((r) => r.status === "failed" && latestRun(r.workflow) === r);
   document.title = anyFailed ? "aia (a run failed)" : "aia";
   if (!w) {
     $("crumb").replaceChildren();
+    $("latest").replaceChildren();
+    return;
+  }
+  if (w.draft) {
+    $("crumb").replaceChildren(
+      el("span", { class: "sep", "aria-hidden": "true" }, "/"),
+      el("span", { class: "crumbkind" }, icon("plus", 14), "New workflow"),
+      ...(w.label ? [el("span", { class: "sep", "aria-hidden": "true" }, "/"), el("strong", {}, w.label)] : []),
+      el("span", { class: "pill mono" }, w.trigger));
+    $("latest").className = "latest none";
     $("latest").replaceChildren();
     return;
   }
@@ -372,17 +392,30 @@ function renderSide(w) {
     ? (state.editable ? "None yet. Run its tests and each one appears here." : "None. Tests of a component run with aia test.")
     : w.trigger ? "None yet. A run appears here each time the trigger fires." : "The server does not run this workflow: it has no webhook or cron trigger.";
 
-  $("side").replaceChildren(
-    el("h2", {}, "Workflows"),
-    el("div", { class: "list" }, workflows),
-    components.length ? el("h2", {}, "Components", el("span", { class: "count" }, components.length)) : null,
-    components.length ? el("div", { class: "list comps" }, components) : null,
+  // The runs and tests are a workflow's: a workflow still being made has none.
+  const own = w.draft ? [] : [
     ...testsBlock(w),
     el("h2", {}, comp ? "Test runs" : "Runs", runs.length ? el("span", { class: "count" }, runs.length) : null),
-    runs.length ? el("div", { class: "list runs" }, rows) : el("p", { class: "empty" }, none),
+    runs.length ? el("div", { class: "list runs" }, rows) : el("p", { class: "empty" }, none)];
+
+  $("side").replaceChildren(...[
+    el("h2", {}, "Workflows"),
+    el("div", { class: "list" }, workflows, canMake() ? newButton(!!w.draft) : null),
+    components.length ? el("h2", {}, "Components", el("span", { class: "count" }, components.length)) : null,
+    components.length ? el("div", { class: "list comps" }, components) : null,
+    ...own,
     el("p", { class: "note" }, state.editable
       ? "Edits are written to the YAML file. Committing stays in git."
-      : "Read-only. Workflows and components are files in git: edit the YAML, commit it, restart the server."));
+      : "Read-only. Workflows and components are files in git: edit the YAML, commit it, restart the server.")].filter(Boolean));
+}
+
+// newButton is the control under the workflows that opens the form for a new one.
+function newButton(on) {
+  return el("button", {
+      type: "button", class: "btn small block newwf", "data-focus": "new-workflow", "aria-current": on ? "true" : null,
+      title: making && makeTouched() ? "Go on with the workflow you started" : null,
+      onclick: () => go({ make: true, run: null, node: null }),
+    }, icon("plus", 12), "New workflow");
 }
 
 // componentRow is a component in the list on the left: the silhouette of its
@@ -630,8 +663,10 @@ function renderCanvas(moved) {
       el("button", {
           class: "card shape-" + node.kind + " kind-" + node.kind + (status ? " " + status : "") + (node.sources.length ? " has-in" : "") + (node.hasOut ? " has-out" : "") + (isEdited ? " edited" : ""),
           type: "button", "data-node": node.id, "data-focus": "n:" + node.id, "data-label": label,
-          "aria-pressed": selected.node === node.id ? "true" : "false", "aria-label": label + (isEdited ? ", unsaved changes" : ""),
-          onclick: () => go({ node: selected.node === node.id ? null : node.id }),
+          "aria-pressed": w.draft ? null : selected.node === node.id ? "true" : "false", "aria-label": label + (isEdited ? ", unsaved changes" : ""),
+          // A workflow still being made is only drawn: there is nothing to select yet.
+          "aria-disabled": w.draft ? "true" : null,
+          onclick: w.draft ? null : () => go({ node: selected.node === node.id ? null : node.id }),
         },
         shapeSVG(node.kind, plan.nodeW, CARD_H),
         el("span", { class: "head" },
@@ -662,7 +697,9 @@ function renderCanvas(moved) {
 
   canvas.replaceChildren(...[
     problemBanner(w),
-    run ? runBar(run) : el("div", { class: "hint" },
+    run ? runBar(run) : w.draft ? el("div", { class: "hint" },
+      el("span", {}, "This is the workflow as the form describes it."),
+      el("span", {}, "Nothing is written until you make it.")) : el("div", { class: "hint" },
       el("span", {}, isComp(w) ? "A step that uses this component fills the input; the output is what it gets back." : "Steps run top to bottom in the order numbered."),
       el("span", {}, state.editable && !w.problem
         ? (isComp(w) ? "Select a step or the output to edit it, or a test run on the left to see what happened." : "Select a step to edit it, or a run on the left to see what happened.")
@@ -700,7 +737,7 @@ function pips(rows, ran) {
 
 // canAdd: steps can only be added to a workflow, when the server edits files and the file is sound.
 // A component's steps are fixed on this page: it never adds or removes one.
-const canAdd = (w) => !!w && state.editable && !w.problem && !w.component;
+const canAdd = (w) => !!w && state.editable && !w.problem && !w.component && !w.draft;
 
 // addButton is the round plus under a box, where a step can be put after it.
 function addButton(node, plan, mid) {
@@ -840,9 +877,11 @@ function renderInspector(w, run, moved) {
   const hasForm = !!(fields && fields.length);
   const adding = addMode(w);
   const testing = testMode(w);
+  const drafting = !!w.draft;
   let parts;
   const source = testing && selected.test !== "-" ? state.runs.find((r) => r.run === selected.test) : null;
-  if (testing) parts = [header("workflow", "plus", selected.test === "-" ? "New test" : "Keep as a test",
+  if (drafting) parts = [header("workflow", "plus", "New workflow", "and its first step", true)];
+  else if (testing) parts = [header("workflow", "plus", selected.test === "-" ? "New test" : "Keep as a test",
     selected.test === "-" ? "of " + w.name : "from the run at " + (source ? when(source.started) : selected.test) + " of " + w.name, true)];
   else if (adding) parts = [header("workflow", "plus", "Add a step", "to " + w.name, true)];
   else if (onStart) parts = comp ? inputDetails(w, run) : triggerDetails(w, run);
@@ -855,15 +894,23 @@ function renderInspector(w, run, moved) {
   const top = box.scrollTop;
   insp.head.replaceWith(head);
   insp.head = head;
-  if (testing) {
+  if (drafting) {
+    hideAdder();
+    hideTester();
+    showForm(w, null, null);
+    showMaker();
+  } else if (testing) {
+    hideMaker();
     showForm(w, null, null);
     hideAdder();
     showTester(w);
   } else if (adding) {
+    hideMaker();
     hideTester();
     showForm(w, null, null);
     showAdder(w);
   } else {
+    hideMaker();
     hideAdder();
     hideTester();
     showForm(w, hasForm ? selected.node : null, fields);
@@ -905,7 +952,7 @@ function workflowDetails(w) {
       state.commit ? ["Version", el("span", { class: "mono" }, state.commit)] : null,
     ])),
     section("Steps", outline(w), el("p", { class: "muted small" }, "A step with an IF condition is skipped when the condition is false."),
-      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger, a step" + (w.respond ? " or the response" : "") + " to edit it. Saved changes are written to " + w.path + ".") : null,
+      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the trigger" + (w.respond ? ", a step or the response" : " or a step") + " to edit it. Saved changes are written to " + w.path + ".") : null,
       canAdd(w) ? el("button", { type: "button", class: "btn addstep", "data-focus": "add-outline", onclick: () => openAdd("-") }, icon("plus", 14), "Add a step", el("kbd", {}, "A")) : null),
     testsSection(w),
     isWebhook(w) ? section("Try it", example(w), el("p", { class: "muted small" }, answerNote(w))) : null,
@@ -1314,6 +1361,8 @@ let flagSig = "";       // which steps had unsaved changes the last time the fla
 const drafts = {};      // workflow -> { fields: { pathKey: { path, value, node, label, group } }, prompts: { step: text } }
 const adds = {};        // workflow -> the step being added: { after, component, id, idTouched, when, values }
 let adder = null;       // the add-a-step form now on the page
+let making = null;      // the workflow being made: { root, name, trigger, path, pathTouched, cron, step } (step as in adds)
+let maker = null;       // the new-workflow form now on the page
 const known = {};       // workflow -> the rev this page last saw
 const ui = {};          // workflow -> { saving, notice, conflicts, armed }
 const promptCache = {}; // "workflow|step" -> { state, file, text, rev, wfRev, inflight, error }
@@ -1392,7 +1441,7 @@ function dirtyNodes(name) {
 }
 const editedNodes = (w) => new Set(state.editable ? dirtyNodes(w.name) : []);
 const addTouched = (a) => !!a && (a.idTouched || a.when.trim() !== "" || Object.values(a.values).some((v) => v.trim() !== ""));
-const anyDirty = () => state.editable && (state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name])) || Object.values(keeps).some((k) => k.touched));
+const anyDirty = () => state.editable && (state.workflows.some((w) => dirtyCount(w.name) > 0 || addTouched(adds[w.name])) || Object.values(keeps).some((k) => k.touched) || makeTouched());
 
 // adopt takes in a fresh answer from /api/state. A workflow whose file changed
 // without this page saving it keeps the person's drafts, on top of the new text.
@@ -1766,6 +1815,7 @@ function disarm(name) {
 function updateBar() {
   const b = insp.bar;
   if (!b || !view) return;
+  if (view.w.draft) return paintMakeBar(b);
   const w = view.w, st = uiOf(w.name), n = dirtyCount(w.name);
   const adding = addMode(w), testing = testMode(w);
   const on = state.editable && !w.problem && (adding || testing || form || n > 0 || st.notice);
@@ -1847,7 +1897,8 @@ function noticeView(n, w) {
   let title = "";
   // What was being done: a plain save, or adding or removing a step.
   const isTest = n.did === "test", isUntest = n.did === "untest";
-  const isAdd = n.did === "add" || isTest, isRemove = n.did === "remove" || isUntest;
+  const isMake = n.did === "make";
+  const isAdd = n.did === "add" || isTest || isMake, isRemove = n.did === "remove" || isUntest;
   if (n.kind === "saved") {
     title = n.title || "Saved";
     // A component has no changes view of its own: its file is part of the workflow that uses it.
@@ -1861,7 +1912,7 @@ function noticeView(n, w) {
       isTest ? testNext(n, w) : null,
       droppedView(n));
   } else if (n.kind === "invalid") {
-    title = isTest ? "Not added. Nothing was written." : isAdd ? "Not added. The file was left as it was." : isRemove ? "Not removed. The file was left as it was."
+    title = isMake ? "Not made. Nothing was written." : isTest ? "Not added. Nothing was written." : isAdd ? "Not added. The file was left as it was." : isRemove ? "Not removed. The file was left as it was."
       : isComp(w) ? "Not saved. The component was left as it was." : "Not saved. The file was left as it was.";
     if (n.saved && n.saved.length) text.push(el("p", {}, "Already written: ", n.saved.join(", "), "."));
     if (n.problems && n.problems.length) {
@@ -1875,6 +1926,7 @@ function noticeView(n, w) {
               ? "Nothing was written, so the " + plural(usesOf(w), "step") + " that use" + (usesOf(w) === 1 ? "s" : "") + " " + compTitle(w) + " still work as before."
               : compTitle(w) + " is shared by " + plural(usesOf(w), "step") + ", and the server checks them with it, so a change that breaks one of them is refused. Nothing was written."));
       }
+      if (isMake && n.error) text.push(el("p", {}, n.error));
       text.push(el("p", {}, isRemove ? "What the server found:" : isAdd ? "Fix this and try again:" : "Fix this and save again:"),
         el("ul", { class: "problems" }, n.problems.map((p) => problemItem(p, w, n.did === "add" ? n.id : null))));
     } else text.push(el("p", {}, n.error || "The server did not accept the change."));
@@ -1902,7 +1954,7 @@ function noticeView(n, w) {
       : isRemove ? "Nothing was removed. Try again when it is back."
       : "Nothing was lost: your edits are still here. Try saving again when it is back."));
   } else {
-    title = isAdd ? "Not added" : isRemove ? "Not removed" : "Not saved";
+    title = isMake ? "Not made" : isAdd ? "Not added" : isRemove ? "Not removed" : "Not saved";
     text.push(el("p", {}, n.error || "The server answered " + n.status + "."));
   }
   const close = el("button", { type: "button", class: "x small", "aria-label": "Dismiss this message", title: "Dismiss" }, icon("close", 13));
@@ -1975,6 +2027,7 @@ function failureOf(r, what, extra) {
 
 async function saveCurrent() {
   if (!view || !state.editable) return;
+  if (view.w.draft) return makeWorkflow();
   if (addMode(view.w)) return addStep();
   if (testMode(view.w)) return addTest();
   const name = view.w.name, st = uiOf(name);
@@ -2061,6 +2114,7 @@ async function saveCurrent() {
 
 function discardCurrent() {
   if (!view) return;
+  if (view.w.draft) return cancelMake();
   if (addMode(view.w)) return go({ add: null });
   if (testMode(view.w)) return go({ test: null });
   const name = view.w.name, st = uiOf(name);
@@ -2091,7 +2145,9 @@ function discardCurrent() {
 const ID_OK = /^[A-Za-z0-9_]+$/;
 const addOf = (name) => adds[name] || (adds[name] = { after: "", component: null, id: "", idTouched: false, when: "", values: {} });
 const componentsOf = (w) => w.components || [];
-const componentOf = (w, name) => componentsOf(w).find((c) => c.name === name) || null;
+// A workflow is offered components from other folders too, so two can share a
+// name: one is told from another by its use, the path it is used by.
+const componentOf = (w, use) => componentsOf(w).find((c) => c.use === use) || null;
 const addMode = (w) => canAdd(w) && !!selected.add;
 const folderOf = (path) => path.replace(/\/[^/]*$/, "");
 
@@ -2115,8 +2171,9 @@ function resolveAfter(w, v) {
 function referencesFor(w, after) {
   const rows = [];
   const keys = w.sample && typeof w.sample === "object" && !Array.isArray(w.sample) ? Object.keys(w.sample).slice(0, 6) : [];
+  // Where no test shows what a request holds, the field's name is typed.
   rows.push({ id: "trigger", kind: "trigger", chips: isWebhook(w) || !w.trigger
-    ? [{ text: "trigger.body" }, ...keys.map((k) => ({ text: "trigger.body." + k }))]
+    ? [{ text: "trigger.body" }, ...(keys.length ? keys.map((k) => ({ text: "trigger.body." + k })) : [{ text: "trigger.body.", open: true, short: "body.field" }])]
     : [{ text: "trigger.time" }] });
   const upto = after === "trigger" ? 0 : w.steps.findIndex((s) => s.id === after) + 1;
   for (const s of w.steps.slice(0, upto)) {
@@ -2180,18 +2237,70 @@ function buildAdder(w) {
   A.detail = el("div", { class: "adddetail" });
   A.empty = el("div", { class: "emptystate" });
   A.root = el("section", { class: "editform addform" }, A.empty, A.posField, A.picker, A.detail);
+  A.pick = (use) => pickComponent(A.workflow, use);
+  A.submit = () => addStep();
   return A;
 }
 
-function pickComponent(name, comp) {
+function pickComponent(name, use) {
   const a = addOf(name);
-  a.component = comp;
+  a.component = use;
   const w = workflowByName(name);
   if (w) {
-    if (!a.idTouched) a.id = freeId(w, comp);
+    const comp = componentOf(w, use);
+    if (!a.idTouched) a.id = freeId(w, comp ? comp.name : use);
     syncAdder(w);
   }
   updateBar();
+}
+
+// settleChoice keeps the component chosen one that is still offered, and picks
+// the only one when there is only one.
+function settleChoice(w, comps, a) {
+  if (a.component && !comps.some((c) => c.use === a.component)) a.component = null;
+  if (!a.component && comps.length === 1) { a.component = comps[0].use; if (!a.idTouched) a.id = freeId(w, comps[0].name); }
+}
+
+// syncChoices draws the components to choose from and marks the chosen one.
+// A component whose use says it is from another folder, or that `far` says
+// shares its name with another, shows where it is from.
+function syncChoices(A, comps, current, far) {
+  const sig = JSON.stringify(comps.map((c) => [c.use, c.name, c.kind, c.description, (c.inputs || []).map((i) => i.name)]));
+  if (sig !== A.compSig) {
+    A.compSig = sig;
+    const group = "comp" + A.uid;
+    A.choiceEls = {};
+    A.choices.replaceChildren(...comps.map((c) => {
+      const input = el("input", { type: "radio", name: group, value: c.use });
+      input.addEventListener("change", () => { if (input.checked) A.pick(c.use); });
+      const row = el("label", { class: "choice kind-" + c.kind },
+        input, kindTile(c.kind, 38),
+        el("span", { class: "ctext" },
+          el("span", { class: "chead" }, el("span", { class: "cname mono" }, c.name), el("span", { class: "ckind" }, KIND_LABEL[c.kind] || c.kind)),
+          c.description ? el("span", { class: "cdesc" }, c.description) : null,
+          far(c) ? el("span", { class: "cin mono" }, "From " + c.use) : null,
+          el("span", { class: "cin mono" }, (c.inputs || []).length ? "Takes " + c.inputs.map((i) => i.name).join(", ") : "Takes no input")));
+      A.choiceEls[c.use] = { row, input };
+      return row;
+    }));
+  }
+  for (const [use, c] of Object.entries(A.choiceEls)) {
+    c.input.checked = current === use;
+    c.row.classList.toggle("on", current === use);
+  }
+}
+
+// syncDetail brings the fields of the step up to date with what has been typed.
+// `sig` says when what the chips offer has changed.
+function syncDetail(A, w, comp, a, sig) {
+  const key = comp.use + "|" + JSON.stringify(comp.inputs || []);
+  if (key !== A.detailKey) { A.detailKey = key; A.refSig = ""; buildDetail(A, w, comp); }
+  if (!a.idTouched) a.id = freeId(w, comp.name);
+  setValue(A.idBox, a.id);
+  setValue(A.whenBox, a.when);
+  (comp.inputs || []).forEach((inp, i) => setValue(A.targets[i + 1], a.values[inp.name] || ""));
+  idNote(A, w, a);
+  if (sig !== A.refSig) { A.refSig = sig; buildRefs(A, w, a.after); }
 }
 
 function syncAdder(w) {
@@ -2229,44 +2338,14 @@ function syncAdder(w) {
   A.posWarn.hidden = valid;
 
   // Components.
-  const compSig = JSON.stringify(comps.map((c) => [c.name, c.kind, c.description, (c.inputs || []).map((i) => i.name)]));
-  if (compSig !== A.compSig) {
-    A.compSig = compSig;
-    const group = "comp" + A.uid;
-    A.choiceEls = {};
-    A.choices.replaceChildren(...comps.map((c) => {
-      const input = el("input", { type: "radio", name: group, value: c.name });
-      input.addEventListener("change", () => { if (input.checked) pickComponent(w.name, c.name); });
-      const row = el("label", { class: "choice kind-" + c.kind },
-        input, kindTile(c.kind, 38),
-        el("span", { class: "ctext" },
-          el("span", { class: "chead" }, el("span", { class: "cname mono" }, c.name), el("span", { class: "ckind" }, KIND_LABEL[c.kind] || c.kind)),
-          c.description ? el("span", { class: "cdesc" }, c.description) : null,
-          el("span", { class: "cin mono" }, (c.inputs || []).length ? "Takes " + c.inputs.map((i) => i.name).join(", ") : "Takes no input")));
-      A.choiceEls[c.name] = { row, input };
-      return row;
-    }));
-  }
-  if (a.component && !componentOf(w, a.component)) a.component = null;
-  if (!a.component && comps.length === 1) { a.component = comps[0].name; if (!a.idTouched) a.id = freeId(w, a.component); }
-  for (const [name, c] of Object.entries(A.choiceEls)) {
-    c.input.checked = a.component === name;
-    c.row.classList.toggle("on", a.component === name);
-  }
+  settleChoice(w, comps, a);
+  syncChoices(A, comps, a.component, (c) => c.use.startsWith("../"));
 
   // The step itself.
   const comp = componentOf(w, a.component);
   A.detail.hidden = !comp;
   if (!comp) { A.detailKey = ""; return; }
-  const key = comp.name + "|" + JSON.stringify(comp.inputs || []);
-  if (key !== A.detailKey) { A.detailKey = key; buildDetail(A, w, comp); }
-  if (!a.idTouched) a.id = freeId(w, comp.name);
-  setValue(A.idBox, a.id);
-  setValue(A.whenBox, a.when);
-  (comp.inputs || []).forEach((inp, i) => setValue(A.targets[i + 1], a.values[inp.name] || ""));
-  idNote(A, w, a);
-  const sig = w.name + "|" + a.after + "|" + w.steps.map((s) => s.id + ":" + (s.outputs || []).join("+")).join(",") + "|" + JSON.stringify(w.sample || null);
-  if (sig !== A.refSig) { A.refSig = sig; buildRefs(A, w, a.after); }
+  syncDetail(A, w, comp, a, w.name + "|" + a.after + "|" + w.steps.map((s) => s.id + ":" + (s.outputs || []).join("+")).join(",") + "|" + JSON.stringify(w.sample || null));
 }
 
 // idNote warns, without stopping anything, about an id the server would refuse.
@@ -2286,18 +2365,21 @@ function plainField(A, label, tag, box, hint) {
     hint ? el("p", { class: "hint-text" }, hint) : null);
 }
 
+// formBox is a text box of the form for a new step or a new workflow. Typing in
+// it is remembered by props.set, and Enter in a one-line box sends the form
+// (A.submit); in a larger one it starts a new line.
+function formBox(A, id, props) {
+  const box = el(props.rows ? "textarea" : "input", { id, ...props.attrs, class: "in" + (props.mono ? " mono" : ""), spellcheck: "false", autocomplete: "off", autocapitalize: "off", rows: props.rows ? 1 : null, type: props.rows ? null : "text" });
+  box.addEventListener("input", () => { props.set(box.value); autosize(box); updateBar(); if (A.onInput) A.onInput(); });
+  if (!props.rows) box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); A.submit(); } });
+  return box;
+}
+
 function buildDetail(A, w, comp) {
-  const a = addOf(w.name);
+  const a = A.a || addOf(w.name);
   A.targets = [];
-  const noteInput = () => { updateBar(); };
   const remember = (box) => box.addEventListener("focus", () => { A.target = box; });
-  const textBox = (id, props) => {
-    const box = el(props.rows ? "textarea" : "input", { id, ...props.attrs, class: "in" + (props.mono ? " mono" : ""), spellcheck: "false", autocomplete: "off", autocapitalize: "off", rows: props.rows ? 1 : null, type: props.rows ? null : "text" });
-    box.addEventListener("input", () => { props.set(box.value); autosize(box); noteInput(); });
-    // Enter in a one-line box adds the step; in a larger one it starts a new line.
-    if (!props.rows) box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); addStep(); } });
-    return box;
-  };
+  const textBox = (id, props) => formBox(A, id, props);
 
   const idId = "sid" + A.uid + "x";
   A.idBox = textBox(idId, { mono: true, set: (v) => { a.id = v; a.idTouched = true; const now = workflowByName(w.name); if (now) idNote(A, now, a); } });
@@ -2336,10 +2418,10 @@ function buildDetail(A, w, comp) {
     : el("p", { class: "muted small" }, comp.name + " takes no input.");
 
   A.refs = el("div", { class: "refs" });
-  A.detail.replaceChildren(
+  A.detail.replaceChildren(...[
     el("h2", { class: "sub" }, "New " + (KIND_LABEL[comp.kind] || comp.kind) + " step from " + comp.name),
     comp.kind === "flow" ? el("p", { class: "muted small flownote" }, "Runs steps of its own, written in the component's file. This step only chooses what goes in.") : null,
-    idField, A.refs, whenField, inputs);
+    idField, A.refs, whenField, inputs].filter(Boolean));
 }
 
 // buildRefs shows what can be referred to at the chosen position. A click puts
@@ -2355,15 +2437,13 @@ function buildRefs(A, w, after) {
         const b = el("button", { type: "button", class: "pill link mono", title: (chip.open ? "Put " + chip.text + " there, then type the rest" : "Put " + chip.text + " there") }, chip.short || chip.text.replace(/^trigger\./, ""));
         // Keep the text field's caret and focus while the button is pressed.
         b.addEventListener("mousedown", (e) => e.preventDefault());
-        b.addEventListener("click", () => insertRef(chip));
+        b.addEventListener("click", () => insertRef(A, chip));
         return b;
       })))),
   ]);
 }
 
-function insertRef(chip) {
-  const A = adder;
-  if (!A) return;
+function insertRef(A, chip) {
   const t = A.target && A.target.isConnected ? A.target : A.targets[1] || A.targets[0];
   if (!t) return;
   const raw = t.dataset.raw === "1";
@@ -2457,6 +2537,301 @@ async function removeStep(name, id) {
   uiTick++;
   shown = "";
   render();
+}
+
+// ---- making a workflow ----
+//
+// The form for a new workflow is a sibling of the form for a new step and
+// shares its parts: the picker of components, the fields of the step and the
+// chips that put a reference into the field being edited. What has been typed
+// lives in `making`, so the poll, a trip to another workflow or a redraw loses
+// none of it, until the workflow is made or the form is cancelled. The drawing
+// in the middle is built from the same draft, by the same code that draws any
+// workflow.
+
+const NEW = "\u0000new";                      // what a workflow being made is called in `ui`, where saving and refusals are kept
+const NAME_OK = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const NO_STEPS = { steps: [] };
+const MAKEW = { name: NEW, steps: [], path: "" }; // for the notice, which looks at a workflow to word itself
+const canMake = () => !!state.editable && !!state.roots && state.roots.length > 0;
+const makeMode = () => canMake() && !!selected.make;
+const pathOf = (m) => (m.pathTouched ? m.path : "/" + m.name.trim());
+const fileOf = (m) => (m.root ? m.root + "/" : "") + (m.name.trim() || "<name>") + "/workflow.yaml";
+const makeTouched = () => !!making && (making.name.trim() !== "" || making.pathTouched || making.cron.trim() !== "" || addTouched(making.step));
+
+function makeOf() {
+  if (!making) {
+    making = { root: (state.roots || [])[0] || "", name: "", trigger: "webhook", path: "", pathTouched: false, cron: "",
+      step: { after: "trigger", component: null, id: "", idTouched: false, when: "", values: {} } };
+  }
+  return making;
+}
+
+// makerComps are the components the first step can use, in the shape the
+// picker draws them: by the name the page knows each by (its folder) in `use`.
+function makerComps() {
+  return state.workflows.filter(isComp).map((x) => ({
+    name: compTitle(x), use: x.name, kind: compKind(x), description: x.description || "", inputs: x.inputs || [],
+    inner: x.gives ? x.steps.map((s) => ({ id: s.id, kind: s.kind, subtitle: s.subtitle })) : null,
+  }));
+}
+
+// settleMaker settles the choice of component and the id that goes with it, and
+// returns the component chosen, if any.
+function settleMaker(m, comps) {
+  settleChoice(NO_STEPS, comps, m.step);
+  const comp = comps.find((c) => c.use === m.step.component) || null;
+  if (comp && !m.step.idTouched) m.step.id = freeId(NO_STEPS, comp.name);
+  return comp;
+}
+
+// makerBase is the draft as far as the trigger: the workflow the chips refer to.
+function makerBase(m) {
+  const trigger = m.trigger === "webhook" ? "POST " + pathOf(m).trim() : "cron" + (m.cron.trim() ? " " + m.cron.trim() : "");
+  return { name: NEW, draft: true, label: m.name.trim(), trigger, steps: [] };
+}
+
+// draftWorkflow is the workflow the form describes, in the shape the server
+// gives one, so that it can be drawn like any other.
+function draftWorkflow() {
+  const m = makeOf(), w = makerBase(m), comp = settleMaker(m, makerComps());
+  if (comp) {
+    w.steps = [{ id: m.step.id.trim() || "step", kind: comp.kind, subtitle: comp.name, when: m.step.when.trim(), reads: [], outputs: [], inner: comp.inner || undefined }];
+  }
+  return w;
+}
+
+// redrawMake draws the draft again, in the top bar and in the middle.
+function redrawMake() {
+  if (!view || !view.w.draft) return;
+  const w = draftWorkflow();
+  view = { w, run: null };
+  renderTop(w);
+  renderCanvas(false);
+}
+
+// changedMake is what a change in the form brings about, apart from the form itself.
+function changedMake() {
+  syncMaker();
+  redrawMake();
+  updateBar();
+}
+
+function hideMaker() {
+  if (!maker) return;
+  maker = null;
+  insp.formslot.replaceChildren();
+}
+
+function showMaker() {
+  makeOf();
+  if (!maker) {
+    maker = buildMaker();
+    insp.formslot.replaceChildren(maker.root);
+    syncMaker();
+    afterRender = () => { if (maker) maker.nameBox.focus({ preventScroll: false }); };
+  } else syncMaker();
+}
+
+function buildMaker() {
+  const m = making, uid = ++formId;
+  const A = { maker: true, workflow: NEW, uid, compSig: "", detailKey: "", refSig: "", rootSig: "", target: null, targets: [], idBox: null, a: m.step };
+  A.submit = () => makeWorkflow();
+  A.onInput = changedMake;
+  A.pick = (use) => {
+    const comp = makerComps().find((c) => c.use === use);
+    m.step.component = use;
+    if (comp && !m.step.idTouched) m.step.id = freeId(NO_STEPS, comp.name);
+    changedMake();
+  };
+
+  // The name, which is also the folder's.
+  const nameId = "mname" + uid;
+  A.nameBox = formBox(A, nameId, { mono: true, attrs: { placeholder: "refund-alerts" }, set: (v) => { m.name = v; } });
+  A.nameWarn = el("p", { class: "conflict", hidden: true });
+  A.fileNote = el("p", { class: "hint-text" });
+  A.nameField = el("div", { class: "field" },
+    el("div", { class: "lab" }, el("label", { for: nameId }, "Name")),
+    A.nameBox,
+    el("p", { class: "hint-text" }, "The folder's name too: letters, digits, - and _."),
+    A.fileNote,
+    A.nameWarn);
+
+  // Where the folder is made, when there is a choice.
+  const rootId = "mroot" + uid;
+  A.rootBox = el("select", { id: rootId, class: "in" });
+  A.rootBox.addEventListener("change", () => { m.root = A.rootBox.value; changedMake(); });
+  A.rootField = plainField(A, "Folder", null, A.rootBox, "Where the workflow's folder is made.");
+
+  // What starts it.
+  const kinds = [
+    ["webhook", "A request arrives", "Webhook", "Runs when something sends a request to a path of this server."],
+    ["cron", "On a schedule", "Schedule", "Runs at the times a schedule gives."],
+  ];
+  A.triggerEls = {};
+  const group = "mtrig" + uid;
+  const rows = kinds.map(([key, title, kind, text]) => {
+    const input = el("input", { type: "radio", name: group, value: key });
+    input.addEventListener("change", () => { if (input.checked) { m.trigger = key; changedMake(); } });
+    const row = el("label", { class: "choice kind-trigger" },
+      input, kindTile("trigger", 38),
+      el("span", { class: "ctext" },
+        el("span", { class: "chead" }, el("span", { class: "cname" }, title), el("span", { class: "ckind" }, kind)),
+        el("span", { class: "cdesc" }, text)));
+    A.triggerEls[key] = { row, input };
+    return row;
+  });
+  A.when = el("fieldset", { class: "picker" }, el("legend", {}, "Starts when"), el("div", { class: "choices", role: "presentation" }, rows));
+  A.pathBox = formBox(A, "mpath" + uid, { mono: true, attrs: { placeholder: "/path" }, set: (v) => { m.path = v; m.pathTouched = true; } });
+  A.pathField = plainField(A, "Path", el("span", { class: "tag", title: "The method of the request" }, "POST"), A.pathBox,
+    "Steps read the request's JSON body as trigger.body.");
+  A.cronBox = formBox(A, "mcron" + uid, { mono: true, attrs: { placeholder: "0 3 * * *" }, set: (v) => { m.cron = v; } });
+  A.cronField = plainField(A, "Schedule", el("span", { class: "tag", title: "A cron schedule" }, "CRON"), A.cronBox,
+    "Five fields: minute hour day month weekday. Steps read the time as trigger.time.");
+
+  // The first step.
+  A.stepHead = el("h2", { class: "sub" }, "First step");
+  A.empty = el("div", { class: "emptystate" },
+    el("div", { class: "etitle" }, "No components yet"),
+    el("p", {}, "The first step uses a component: a step written once, with named inputs. None exists yet, so no workflow can be made from here."),
+    el("p", {}, "A component is written as a ", el("span", { class: "mono" }, "component.yaml"), " file in a folder of its own."),
+    el("p", { class: "muted small" }, "Write one in your editor and commit it. This page notices by itself, and it appears here."));
+  A.choices = el("div", { class: "choices", role: "presentation" });
+  A.picker = el("fieldset", { class: "picker" }, el("legend", {}, "Component"), A.choices);
+  A.detail = el("div", { class: "adddetail" });
+  A.root = el("section", { class: "editform addform" }, A.nameField, A.rootField, A.when, A.pathField, A.cronField, A.stepHead, A.empty, A.picker, A.detail);
+  return A;
+}
+
+// nameNote says what the file will be, and warns, without stopping anything,
+// about a name the server would refuse.
+function nameNote(A, m) {
+  const name = m.name.trim();
+  let text = "";
+  if (name && !NAME_OK.test(name)) text = "Use letters, digits, - and _, and start with a letter or a digit.";
+  else if (name && state.workflows.some((x) => !x.component && x.name === name)) text = "A workflow called " + name + " already exists.";
+  A.nameWarn.hidden = !text;
+  A.nameWarn.textContent = text;
+  A.fileNote.replaceChildren("Written to ", mono(fileOf(m)));
+}
+
+// syncMaker brings the form up to date with the draft and with the page's data
+// without touching a box whose text already matches.
+function syncMaker() {
+  const A = maker, m = making;
+  if (!A || !m) return;
+  const roots = state.roots || [];
+  if (!roots.includes(m.root)) m.root = roots[0] || "";
+  A.rootField.hidden = roots.length < 2;
+  if (roots.join("\n") !== A.rootSig) {
+    A.rootSig = roots.join("\n");
+    A.rootBox.replaceChildren(...roots.map((r) => el("option", { value: r }, r)));
+  }
+  A.rootBox.value = m.root;
+
+  setValue(A.nameBox, m.name);
+  nameNote(A, m);
+  for (const [key, c] of Object.entries(A.triggerEls)) {
+    c.input.checked = m.trigger === key;
+    c.row.classList.toggle("on", m.trigger === key);
+  }
+  A.pathField.hidden = m.trigger !== "webhook";
+  A.cronField.hidden = m.trigger !== "cron";
+  setValue(A.pathBox, pathOf(m));
+  setValue(A.cronBox, m.cron);
+
+  const comps = makerComps();
+  A.empty.hidden = comps.length > 0;
+  A.stepHead.hidden = A.picker.hidden = A.detail.hidden = comps.length === 0;
+  if (!comps.length) return;
+  const comp = settleMaker(m, comps);
+  syncChoices(A, comps, m.step.component, (c) => comps.some((o) => o !== c && o.name === c.name));
+  A.detail.hidden = !comp;
+  if (!comp) { A.detailKey = ""; return; }
+  syncDetail(A, makerBase(m), comp, m.step, m.trigger);
+}
+
+function cancelMake() {
+  const st = uiOf(NEW);
+  if (st.saving) return;
+  making = null;
+  st.notice = null;
+  go({ make: false });
+  readAddress();
+  shown = "";
+  render();
+}
+
+async function makeWorkflow() {
+  if (!state.editable || !making || !maker) return;
+  const st = uiOf(NEW), m = making;
+  if (st.saving) return;
+  const comp = settleMaker(m, makerComps());
+  if (!comp) return;
+  const given = {};
+  for (const inp of comp.inputs || []) {
+    const v = m.step.values[inp.name] || "";
+    if (v.trim() !== "") given[inp.name] = v;
+  }
+  const id = m.step.id.trim();
+  const body = {
+    name: m.name.trim(), root: m.root,
+    trigger: m.trigger === "webhook" ? { webhook: pathOf(m).trim() } : { cron: m.cron.trim() },
+    step: { id, use: comp.use, when: m.step.when.trim(), with: given },
+  };
+  st.saving = true;
+  st.notice = null;
+  updateBar();
+  let r = null, failure = null;
+  try {
+    r = await request("POST", "/api/workflows", body);
+  } catch (err) {
+    failure = { kind: "network", did: "make" };
+  }
+  st.saving = false;
+  if (!failure && r.ok && r.body.workflow) {
+    const made = r.body.workflow;
+    epoch++;
+    changesEpoch++;
+    if (state.workflows.some((x) => x.name === made.name)) replaceWorkflow(made); else state.workflows.push(made);
+    known[made.name] = made.rev;
+    making = null;
+    hideMaker();
+    uiOf(made.name).notice = { kind: "saved", did: "make", title: "Made " + made.name, files: [made.path], dropped: null };
+    afterRender = () => {
+      const card = document.querySelector('#canvas [data-node="' + CSS.escape(id) + '"]');
+      if (card) card.focus({ preventScroll: true });
+    };
+    go({ workflow: made.name, run: null, node: null });
+    readAddress();
+  } else {
+    st.notice = failure || failureOf(r, "workflow", { did: "make" });
+  }
+  await refresh();
+  uiTick++;
+  shown = "";
+  render();
+}
+
+// paintMakeBar is the save bar for the form: Cancel and Make workflow.
+function paintMakeBar(b) {
+  const st = uiOf(NEW), m = making;
+  const comps = makerComps(), comp = m ? comps.find((c) => c.use === m.step.component) : null;
+  b.root.hidden = false;
+  b.shared.hidden = true;
+  b.status.replaceChildren(...(st.saving ? ["Making…"] : comp && m ? ["Writes a new workflow file."]
+    : [comps.length ? "Choose a component." : "No component yet."]));
+  b.status.classList.remove("dirty");
+  b.save.setAttribute("aria-disabled", st.saving || !comp ? "true" : "false");
+  b.discard.setAttribute("aria-disabled", st.saving ? "true" : "false");
+  b.discard.classList.remove("armed");
+  b.discard.textContent = "Cancel";
+  const mode = st.saving ? "making" : "make";
+  if (b.save.dataset.mode !== mode) { b.save.dataset.mode = mode; b.save.replaceChildren(st.saving ? "Making…" : "Make workflow", el("kbd", {}, isMac ? "⌘S" : "Ctrl+S")); }
+  if (b.shownNotice !== st.notice) {
+    b.shownNotice = st.notice;
+    b.slot.replaceChildren(...(st.notice ? [noticeView(st.notice, MAKEW)] : []));
+  }
 }
 
 // ---- tests ----
@@ -3514,7 +3889,8 @@ window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   // In a form field Escape only leaves the field.
   if (event.target.closest && event.target.closest(".editform")) { event.target.blur(); return; }
-  if (selected.add) go({ add: null });
+  if (selected.make) go({ make: false });
+  else if (selected.add) go({ add: null });
   else if (selected.test) go({ test: null });
   else if (selected.changes) go({ changes: false });
   else if (selected.node) go({ node: null });

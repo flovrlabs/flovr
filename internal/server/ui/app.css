@@ -1291,3 +1291,8 @@ pre.plain { margin-top: 8px; }
 .trow { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border); }
 .btn.danger.rmtest { margin: 0; }
 .inspector .rmnote { margin: 6px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+
+/* The control under the workflows that opens the form for a new one. */
+.side .list .newwf { margin-top: 6px; }
+.btn.newwf[aria-current="true"] { border-color: var(--accent); }
+.card[aria-disabled="true"] { cursor: default; }

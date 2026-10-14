@@ -244,7 +244,8 @@ A component can carry tests of its own. Each gives it `input`, written out or as
 With `--edit` the page becomes a place to work on the workflows:
 
 - Select a step, the trigger or the response and change its values in the form. Saving writes only the lines of those values, so comments, blank lines and order in the file stay as they were.
-- Add a step from one of the components in the workflow's folder, or remove a step.
+- Make a new workflow: give it a name, say what starts it, and choose a component for its first step. It is written as a folder of that name holding a `workflow.yaml`, in the folder the server was started with, and is served at once.
+- Add a step from a component, or remove a step. The components on offer are those in the folders the server was started with, so a workflow can use a component that lives in another workflow's folder.
 - Open a component, which is drawn like a workflow with what it takes at the top and what it gives back at the bottom, and change its values the same way. The change is refused if it would break a workflow that uses the component.
 - Run the tests of a workflow or of a component and see, for each, which expectations were met.
 - Keep a run that went right as a test. Its request becomes the fixture, saved as a new file in the workflow's folder, and what the run did becomes what to expect: which steps ran, and what a model decided. Text a model wrote is left out unless you ask for it, since it reads differently each time. A test can also be written from nothing, or removed.
@@ -286,5 +287,6 @@ Both exit with a status other than 0 when something is wrong, and print what.
 - It does not retry a step that failed or queue runs; a run is one pass through the steps in one process.
 - It has no steps for databases or message brokers. A workflow reaches other systems through `http`.
 - It does not check signatures of webhooks from providers such as Stripe or GitHub.
-- The page adds steps only from components, does not reorder steps, and does not add or remove the steps of a component.
+- The page adds steps only from components, does not reorder steps, and does not add or remove the steps of a component. A workflow it makes starts with one step and has no `respond`.
+- A workflow file that appears or goes away while the server runs is not noticed until the server is restarted, unless the page made it.
 - A webhook is always a POST to a fixed path.
