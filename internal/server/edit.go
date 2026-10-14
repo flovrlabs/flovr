@@ -221,6 +221,13 @@ func (s *Server) change(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status, answer = s.create(req)
+	} else if r.URL.Path == "/api/trigger" {
+		var req triggerRequest
+		if err := json.Unmarshal(data, &req); err != nil {
+			reply(rw, http.StatusBadRequest, fail("the request body is not the JSON expected"))
+			return
+		}
+		status, answer = s.switchTrigger(req)
 	} else if r.URL.Path == "/api/components" {
 		var req componentRequest
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -293,6 +300,9 @@ type editRequest struct {
 		// step's id, "trigger" or "response". Steps are found by position,
 		// and a position holds another step once steps are added or removed.
 		Node string `json:"node"`
+		// Remove takes a field of the response's body out. A path under
+		// respond.body that the body does not have yet adds one.
+		Remove bool `json:"remove"`
 	} `json:"edits"`
 }
 
@@ -383,7 +393,16 @@ func (s *Server) edit(req editRequest) (int, any) {
 	if bytes.Equal(out, data) {
 		return http.StatusOK, map[string]any{"workflow": s.view(w)}
 	}
-	return s.save(i, out, strings.Join(changed, ", "))
+	status, answer := s.save(i, out, strings.Join(changed, ", "))
+	// A field added or taken out moves the lines, so the problems, found in
+	// the file as it would have been, name none.
+	if f, ok := answer.(failure); ok && status != http.StatusOK && bytes.Count(out, []byte("\n")) != bytes.Count(data, []byte("\n")) {
+		for j := range f.Problems {
+			f.Problems[j].Line = 0
+		}
+		answer = f
+	}
+	return status, answer
 }
 
 // editsFor turns the changes a request asks for into edits of the file that
@@ -415,7 +434,30 @@ func editsFor(view workflowView, owner func(path []any) string, req editRequest)
 		path := wholeNumbers(e.Path)
 		f, ok := offered[pathKey(path)]
 		value := strings.TrimSpace(e.Value)
+		// A field of the response's body is added or taken out, as long as
+		// the body is a set of fields.
+		if bodyField(view, path) {
+			name := path[2].(string)
+			switch {
+			case e.Remove && !ok:
+				return nil, nil, http.StatusUnprocessableEntity, fail("The body has no field %s.", name)
+			case e.Remove:
+				edits = append(edits, yamledit.Edit{Path: path, Remove: true})
+				changed = append(changed, pathKey(path))
+				continue
+			case !ok && !inputName.MatchString(name):
+				return nil, nil, http.StatusUnprocessableEntity, fail("%q cannot name a field: a name holds letters, digits and _, and starts with a letter or _.", name)
+			case !ok && value == "":
+				return nil, nil, http.StatusUnprocessableEntity, fail("The new field %s needs a value.", name)
+			case !ok:
+				edits = append(edits, yamledit.Edit{Path: path, Value: value})
+				changed = append(changed, pathKey(path))
+				continue
+			}
+		}
 		switch {
+		case e.Remove:
+			return nil, nil, http.StatusUnprocessableEntity, fail("Only a field of the response's body is taken out this way.")
 		case !ok || f.Kind == kindPrompt:
 			return nil, nil, http.StatusUnprocessableEntity, fail("the page cannot change this value")
 		case e.Node != "" && e.Node != owner(path):
@@ -443,6 +485,17 @@ func editsFor(view workflowView, owner func(path []any) string, req editRequest)
 		changed = append(changed, pathKey(path))
 	}
 	return edits, changed, 0, failure{}
+}
+
+// bodyField reports whether path names a field of the response's body, when
+// that body is a set of fields.
+func bodyField(view workflowView, path []any) bool {
+	if view.Respond == nil || len(path) != 3 || path[0] != "respond" || path[1] != "body" {
+		return false
+	}
+	_, isMap := view.Respond.Body.(map[string]any)
+	_, named := path[2].(string)
+	return isMap && named
 }
 
 // owner names what the value at path belongs to, as the page names it: a

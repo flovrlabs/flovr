@@ -1801,3 +1801,33 @@ body.ned-open { overflow: hidden; }
 .ned-schema.edited .ned-h::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--brand); }
 .ned-schematext { min-height: 260px; white-space: pre; overflow: auto; background: var(--chrome); }
 .ned-schemafile { margin-bottom: 6px; }
+
+/* ---- The trigger and the response, in the node editor. ---- */
+.ned-starts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 4px; }
+.ned-start { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--raised); color: var(--text); text-align: left; cursor: pointer; }
+.ned-start:hover { border-color: var(--border-strong); }
+.ned-start[aria-pressed="true"] { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); background: color-mix(in srgb, var(--accent-soft) 45%, var(--raised)); cursor: default; }
+.ned-start .tile { width: 32px; height: 32px; border-radius: 50%; }
+.ned-start .ctext { display: flex; flex-direction: column; min-width: 0; }
+.ned-start .cname { font-size: 13px; font-weight: 650; }
+.ned-start .cdesc { color: var(--muted); font-size: 12px; }
+.ned-switch { margin: 6px 0 14px; padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 11px; }
+.ned-switch .ned-words { margin-top: 0; }
+.ned-switchrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ned-switchrow .in { flex: 1 1 180px; height: 32px; }
+.ned-prefixed { display: flex; align-items: stretch; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--sunken); }
+.ned-prefixed:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.ned-prefix { display: flex; align-items: center; padding: 0 10px; border-right: 1px solid var(--border); background: var(--raised); color: var(--muted); font-size: 12px; font-weight: 600; }
+.ned-prefixed .in { flex: 1 1 auto; min-width: 0; border: 0; border-radius: 0; outline: none; }
+.ned-callergets { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--raised); }
+.ned-body { display: grid; gap: 4px; }
+.ned-bodyrow { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.ned-bodyrow .lab label.mono { font-family: var(--mono); font-size: 12.5px; }
+.ned-takeout { margin-left: auto; color: var(--muted); }
+.ned-takeout.armed { color: var(--failed); }
+.ned-addfield { padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 10px; }
+.ned-addrow { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr) auto; gap: 8px; align-items: center; }
+.ned-addrow .in { height: 32px; }
+.ned-addrow .in.drop { outline: 2px dashed var(--accent); }
+.ned-addfield .conflict { margin-top: 6px; }
+.ned-colbody .code { margin-bottom: 10px; }

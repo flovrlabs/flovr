@@ -1071,7 +1071,7 @@ function renderCanvas(moved) {
     const brokeAt = inside && status === "failed" ? failedInside(inside) : null;
     const said = node.id === "response" && ran && ran.response ? "answered " + ran.response.status : node.id === OUT && ran && ran.gave !== undefined ? "gave back" : (STATUS_TEXT[status] || status).toLowerCase();
     const label = node.title + ", " + KIND_LABEL[node.kind] + (node.step && node.step.component ? ", uses " + node.step.component : "") + (inside ? ", " + plural(inside.length, "step") + " inside" : "")
-      + (node.order ? ", step " + node.order : "") + (node.step && canOpen(w, node.id) ? ", Enter opens the editor" : "") + (cond ? ", runs only when " + readable(cond) : "") + (status ? ", " + said : "") + (brokeAt ? ", failed at " + brokeAt.s.id : "");
+      + (node.order ? ", step " + node.order : "") + (canOpen(w, node.id) ? ", Enter opens the editor" : "") + (cond ? ", runs only when " + readable(cond) : "") + (status ? ", " + said : "") + (brokeAt ? ", failed at " + brokeAt.s.id : "");
     const isEdited = edited.has(node.id);
     const chosen = selected.node === node.id;
     const leaf = !node.children.length;
@@ -1321,8 +1321,8 @@ function renderInspector(w, run, moved) {
   const step = editing(w) ? null : w.steps.find((s) => s.id === selected.node);
   const comp = isComp(w);
   const canEdit = state.editable && !w.problem;
-  const onStart = selected.node === START(w);
-  const onEnd = comp ? selected.node === OUT : selected.node === "response" && !!w.respond;
+  const onStart = selected.node === START(w) && !editing(w);
+  const onEnd = !editing(w) && (comp ? selected.node === OUT : selected.node === "response" && !!w.respond);
   const endEdit = comp ? (w.gives ? w.gives.edit : null) : w.respond ? w.respond.edit : null;
   const fields = !canEdit ? null : onStart ? (comp ? null : w.edit) : onEnd ? endEdit : step ? step.edit : null;
   const hasForm = !!(fields && fields.length);
@@ -4805,11 +4805,293 @@ function renderChanges(w) {
 const WHOLE_REF = /^\$\{\s*([^{}]+?)\s*\}$/;
 const SOURCE_WORD = { trigger: "the request", decide: "decided", ai: "wrote", http: "sent", flow: "ran" };
 
+// ---- the trigger and the response, in the editor ----
+//
+// The trigger and the response open in the node editor too, in the shape of
+// a step: nodeOf gives each an id, a kind and the fields the page may change.
+// What starts the workflow, and which fields the response's body has, change
+// at once, as adding or removing a step does; values are drafts like any.
+
+function nodeOf(w, id) {
+  if (!w) return null;
+  if (id === "trigger") return w.edit && w.edit.length ? { id, kind: "trigger", end: true, edit: w.edit, reads: [], outputs: [] } : null;
+  if (id === "response") return w.respond && w.respond.edit ? { id, kind: "response", end: true, edit: w.respond.edit, reads: w.respond.reads || [], outputs: [] } : null;
+  return w.steps.find((s) => s.id === id) || null;
+}
+
+// endTitle is what the editor calls the trigger or the response.
+const endTitle = (w, step) => (step.kind === "trigger" ? (isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Trigger") : "Response");
+
+// changeNow makes a change of shape at once and says how it went, as adding
+// a step does: a field of the body in or out, or what starts the workflow.
+async function changeNow(name, url, extra, title) {
+  const w = workflowByName(name), st = uiOf(name);
+  if (!w || st.saving) return;
+  st.saving = true;
+  st.notice = null;
+  updateBar();
+  let r = null, failure = null;
+  try {
+    r = await request("POST", url, { workflow: name, rev: w.rev, ...extra });
+  } catch (err) {
+    failure = { kind: "network" };
+  }
+  st.saving = false;
+  if (!failure && r.ok && r.body.workflow) {
+    epoch++;
+    changesEpoch++;
+    const prev = workflowByName(name);
+    replaceWorkflow(r.body.workflow);
+    known[name] = r.body.workflow.rev;
+    const dropped = reattach(name, prev, r.body.workflow);
+    st.notice = { kind: "saved", title, files: [r.body.workflow.path || w.path], dropped: dropped.length ? dropped : null };
+  } else st.notice = failure || failureOf(r, "workflow");
+  await refresh();
+  uiTick++;
+  shown = "";
+  render();
+}
+
+function switchTrigger(name, to, value) {
+  if (!value) return;
+  if (to === "webhook" && !value.startsWith("/")) value = "/" + value;
+  changeNow(name, "/api/trigger", to === "cron" ? { cron: value } : { webhook: value }, to === "cron" ? "Now runs on " + value : "Now starts on POST " + value);
+}
+
+function buildTriggerForm(w, step, key) {
+  const f = { key, workflow: w.name, node: "trigger", fields: step.edit, controls: [], root: ed.midBody };
+  const cs = step.edit.map((field) => {
+    const c = makeControl(f, field);
+    c.refable = false;
+    f.controls.push(c);
+    return c;
+  });
+  const at = (...path) => cs.find((c) => pathKey(c.field.path) === pathKey(path));
+  const path = at("trigger", "webhook"), schema = at("trigger", "input"), cron = at("trigger", "cron");
+  const webhook = isWebhook(w), schedule = !webhook && !!w.trigger;
+
+  // Starts on: a request or a schedule. Choosing the other asks for its path or its cron line.
+  const switchBox = el("div", { class: "ned-switch", hidden: true });
+  const openSwitch = (to) => {
+    const box = el("input", { type: "text", class: "in mono", placeholder: to === "cron" ? "0 9 * * *" : "/" + w.name, "aria-label": to === "cron" ? "The schedule, as a cron line" : "The path of the request" });
+    const ok = el("button", { type: "button", class: "btn primary small" }, to === "cron" ? "Run it on this schedule" : "Start it on this path");
+    const cancel = el("button", { type: "button", class: "btn small" }, "Cancel");
+    ok.addEventListener("click", () => switchTrigger(w.name, to, box.value.trim()));
+    cancel.addEventListener("click", () => { switchBox.hidden = true; switchBox.replaceChildren(); });
+    box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); ok.click(); } });
+    const loses = to === "cron"
+      ? (webhook ? " It stops answering " + w.trigger + "." + (w.respond ? " A workflow that answers its caller cannot run on a schedule, so its response has to come out of the file first." : "") : "")
+      : (schedule ? " It stops running on " + w.trigger.replace(/^cron /, "") + "." : "");
+    switchBox.replaceChildren(
+      el("p", { class: "ned-words" }, (to === "cron" ? "Run it on a schedule instead of on requests." : "Start it on requests instead of a schedule.") + loses + " This is written at once."),
+      el("div", { class: "ned-switchrow" }, box, ok, cancel));
+    switchBox.hidden = false;
+    box.focus();
+  };
+  const card = (on, to, title, text, iconName) => {
+    const b = el("button", { type: "button", class: "ned-start", "aria-pressed": on ? "true" : "false" },
+      el("span", { class: "tile kind-trigger" }, icon(iconName, 16)),
+      el("span", { class: "ctext" }, el("span", { class: "cname" }, title), el("span", { class: "cdesc" }, text)));
+    b.addEventListener("click", () => { if (!on) openSwitch(to); });
+    return b;
+  };
+  const params = [
+    el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Starts on")),
+    el("div", { class: "ned-starts", role: "group", "aria-label": "Starts on" },
+      card(webhook, "webhook", "A request", "POST to a path of this server", "trigger"),
+      card(schedule, "cron", "A schedule", "At the times a cron line gives", "clock")),
+    switchBox,
+  ];
+  if (path) {
+    relabel(path, "Path");
+    path.input.classList.add("mono");
+    const holder = el("div", { class: "ned-prefixed" }, el("span", { class: "ned-prefix mono", "aria-hidden": "true" }, "POST"));
+    path.input.replaceWith(holder);
+    holder.append(path.input);
+    params.push(path.row, el("p", { class: "ned-words" }, "Once it is saved, whatever sends to " + w.trigger.slice(5) + " must send to the new path."));
+  }
+  if (cron) {
+    relabel(cron, "Schedule");
+    cron.input.classList.add("mono");
+    params.push(cron.row, el("p", { class: "ned-words" }, "Minute, hour, day of the month, month and day of the week, as cron writes them."));
+  }
+  if (schema) { relabel(schema, "The body must match"); params.push(schema.row); }
+  for (const c of cs) if (c !== path && c !== schema && c !== cron) params.push(c.row);
+  if (webhook) {
+    const open = el("button", { type: "button", class: "linkbtn" }, "Open the response");
+    open.addEventListener("click", () => openEditor("response"));
+    params.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "The caller gets")),
+      el("p", { class: "ned-callergets" }, w.respond ? ["What the response says, once the steps have run. ", open] : "The run's id at once, or with ?wait=true the finished run."));
+  }
+  f.params = params;
+  f.settings = [];
+  return f;
+}
+
+// takeOut is the way to take a field out of the body: like Discard, the first
+// click arms it and the second does it.
+function takeOut(w, name) {
+  const b = el("button", { type: "button", class: "linkbtn ned-takeout", title: "Take " + name + " out of the body" }, "Take out");
+  let armed = false, timer = 0;
+  b.addEventListener("click", () => {
+    if (!armed) {
+      armed = true;
+      b.textContent = "Take " + name + " out?";
+      b.classList.add("armed");
+      timer = setTimeout(() => { armed = false; b.textContent = "Take out"; b.classList.remove("armed"); }, 4000);
+      return;
+    }
+    clearTimeout(timer);
+    changeNow(w.name, "/api/edit", { edits: [{ path: ["respond", "body", name], value: "", remove: true, node: "response" }] }, "Took " + name + " out of the body");
+  });
+  return b;
+}
+
+// addField is a row to add a field to the body: its name and its value, which
+// a key from the left can be dropped on.
+function addField(w) {
+  const name = el("input", { type: "text", class: "in mono", placeholder: "name", "aria-label": "Name of the new field", spellcheck: "false", autocomplete: "off" });
+  const value = el("input", { type: "text", class: "in", placeholder: "a value, or drop a key here", "aria-label": "Value of the new field", spellcheck: "false", autocomplete: "off" });
+  const add = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add a field");
+  const note = el("p", { class: "conflict", hidden: true });
+  const send = () => {
+    const n = name.value.trim(), v = value.value.trim();
+    note.hidden = !!(n && v);
+    note.textContent = !n ? "Give the field a name." : !v ? "Give " + n + " a value." : "";
+    if (n && v) changeNow(w.name, "/api/edit", { edits: [{ path: ["respond", "body", n], value: v, node: "response" }] }, "Added " + n + " to the body");
+  };
+  add.addEventListener("click", send);
+  for (const box of [name, value]) box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); send(); } });
+  value.addEventListener("dragover", (e) => { if (dragRef) { e.preventDefault(); value.classList.add("drop"); } });
+  value.addEventListener("dragleave", () => value.classList.remove("drop"));
+  value.addEventListener("drop", (e) => {
+    value.classList.remove("drop");
+    if (!dragRef) return;
+    e.preventDefault();
+    value.value = "${" + dragRef.path + "}";
+    dragRef = null;
+    value.focus();
+  });
+  return el("div", { class: "ned-addfield" }, el("div", { class: "ned-addrow" }, name, value, add), note);
+}
+
+function buildResponseForm(w, step, key) {
+  const f = { key, workflow: w.name, node: "response", fields: step.edit, controls: [], root: ed.midBody };
+  const cs = step.edit.map((field) => {
+    const c = makeControl(f, field);
+    c.refable = field.kind === "text" || field.kind === "expression";
+    f.controls.push(c);
+    return c;
+  });
+  const status = cs.find((c) => pathKey(c.field.path) === pathKey(["respond", "status"]));
+  const body = cs.filter((c) => c.field.group === "Body");
+  const params = [];
+  if (status) { relabel(status, "Status"); params.push(status.row); }
+  params.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Body"), el("span", { class: "ned-count" }, String(body.length))));
+  const fields = el("div", { class: "ned-body" });
+  for (const c of body) {
+    if (c.refable) dataField(c);
+    c.row.classList.add("ned-bodyrow");
+    c.row.querySelector("label").classList.add("mono");
+    c.row.querySelector(".lab").append(takeOut(w, c.field.label));
+    fields.append(c.row);
+  }
+  const isMap = !!w.respond.body && typeof w.respond.body === "object" && !Array.isArray(w.respond.body);
+  if (isMap) fields.append(addField(w));
+  params.push(fields, el("p", { class: "ned-words" }, isMap
+    ? "A field takes a value as written, or a key from Input. The caller gets them as one JSON object."
+    : "The body is written as one value, not as fields, so its fields are changed in the file."));
+  for (const c of cs) if (c !== status && !body.includes(c)) params.push(c.row);
+  for (const c of cs) if (c.refable) wireDrop(c);
+  f.params = params;
+  f.settings = [];
+  return f;
+}
+
+// keyRow is one key in a column of the editor: its type, the key, and its value.
+function keyRow(r, source, kind, onPick) {
+  const shown = previewOf(r.value);
+  const p = refPill(r.path, source, kind, r.short);
+  p.addEventListener("click", () => onPick(r.path));
+  p.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick(r.path); } });
+  return el("div", { class: "ned-row" },
+    el("span", { class: "ned-type", "aria-hidden": "true" }, shown === null ? "·" : typeTag(r.value)),
+    p,
+    el("span", { class: "ned-val-text" + (shown === null ? " none" : ""), title: shown === null ? null : shown }, shown === null ? "" : shown));
+}
+
+// The trigger's left column: a request it took, and how to send one.
+function paintTriggerInput(w, ran) {
+  const got = ran && ran.trigger && typeof ran.trigger === "object" ? ran.trigger : null;
+  const sample = got ? (got.body !== undefined ? got.body : got) : w.sample;
+  put(ed.inCol.meta, got ? ["from run ", el("span", { class: "mono" }, ran.run)] : w.sample !== undefined ? "from its first test" : "none yet");
+  ed.inCol.seg.replaceChildren();
+  const body = [sample !== undefined ? jsonView(sample) : el("p", { class: "ned-plain" }, "No request has come yet, and no test gives one.")];
+  if (isWebhook(w)) {
+    body.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Try it")), example(w),
+      el("p", { class: "ned-words" }, w.respond ? "The request waits for the answer." : "With ?wait=true the answer is the finished run. Without it, the run's id comes back at once."));
+  } else if (w.trigger) body.push(el("p", { class: "ned-words" }, "It runs on its schedule. flowmaker run runs it now."));
+  ed.inCol.body.replaceChildren(...body);
+  setNote(ed.inCol, "");
+}
+
+const copyRef = (col, path) => {
+  const text = "${" + path + "}";
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => setNote(col, "Copied " + text + ". Paste it into a field of a step."), () => setNote(col, "Press Ctrl+C on " + text));
+  else setNote(col, text + " is what a step writes to use it.");
+};
+
+// The trigger's right column: what steps read of it, and which steps do.
+function paintTriggerOutput(w, ran) {
+  ed.outCol.seg.replaceChildren();
+  put(ed.outCol.meta, "what steps read");
+  const got = ran && ran.trigger && typeof ran.trigger === "object" ? ran.trigger : null;
+  const rows = [];
+  if (isWebhook(w) || !w.trigger) {
+    const sample = got ? got.body : w.sample;
+    rows.push({ path: "trigger.body", short: "body", value: sample });
+    flattenBody("trigger.body", sample, 0, rows);
+  } else rows.push({ path: "trigger.time", short: "time", value: got ? got.time : undefined });
+  const readers = w.steps.filter((s) => (s.reads || []).includes("trigger"));
+  const read = (s) => { const b = el("button", { type: "button", class: "pill link mono", title: "Open " + s.id }, s.id); b.addEventListener("click", () => openEditor(s.id)); return b; };
+  ed.outCol.body.replaceChildren(
+    el("div", { class: "ned-src kind-trigger" }, rows.map((r) => keyRow(r, "trigger", "trigger", (p) => copyRef(ed.outCol, p)))),
+    el("div", { class: "ned-later" }, el("span", { class: "ned-h" }, "Read by"),
+      readers.length ? el("div", { class: "ned-pills" }, readers.map(read)) : el("p", { class: "ned-plain" }, "No step reads it yet.")));
+  if (!ed.outCol.note.textContent) setNote(ed.outCol, "Click a key to copy it, then paste it into a field of a step.");
+}
+
+// The response's right column: what the caller got in the run on show.
+function paintResponseOutput(w, ran) {
+  ed.outCol.seg.replaceChildren();
+  const body = [];
+  if (!ran) {
+    ed.outCol.meta.replaceChildren("no run yet");
+    body.push(el("p", { class: "ned-plain" }, "Nothing has run yet, so no caller has been answered. Send the workflow a request with the curl command under the trigger, then come back."));
+  } else if (!ran.response) {
+    ed.outCol.meta.replaceChildren("run ", el("span", { class: "mono" }, ran.run));
+    body.push(el("p", { class: "ned-plain" }, ran.status === "running" ? "The run has not got this far yet."
+      : ran.status === "failed" ? "A step failed first, so the caller got 500 with only the run's id."
+      : "This run was not started by a request, so nobody was waiting for an answer."));
+  } else {
+    const got = ran.response;
+    ed.outCol.meta.replaceChildren(view.run ? "this run" : "last run");
+    body.push(el("div", { class: "ned-qrow" }, el("span", { class: "ref static kind-response" }, String(got.status)), el("span", { class: "ned-faint" }, got.status >= 400 ? "a status the workflow chose itself" : "answered")));
+    body.push(got.body !== undefined && got.body !== null ? jsonView(got.body) : el("p", { class: "ned-plain" }, "No body."));
+    const headers = got.headers ? Object.entries(got.headers) : [];
+    if (headers.length) body.push(el("div", { class: "ned-later" }, el("span", { class: "ned-h" }, "Headers"), pairs(headers.map(([k, v]) => [k, mono(String(v))]))));
+  }
+  const drafted = dirtyCount(w.name) && draftCountFor(w.name, "response");
+  if (drafted) body.push(el("p", { class: "ned-warn" }, "Unsaved: once saved, the next run answers with your " + plural(drafted, "change") + "."));
+  ed.outCol.body.replaceChildren(...body);
+  setNote(ed.outCol, "");
+}
+
 let ed = null;          // the editor now on the page, if any
 let dragRef = null;     // the key being dragged: { path, source }
 const stepTests = {};   // "workflow|step" -> { state: running | done | error, run, at, rev, unsaved, result, error }
 
-const canOpen = (w, id) => !!w && !!state.editable && !w.problem && !w.draft && !isComp(w) && w.steps.some((s) => s.id === id);
+const canOpen = (w, id) => !!w && !!state.editable && !w.problem && !w.draft && !isComp(w) && !!nodeOf(w, id);
 function openEditor(id) { if (view && canOpen(view.w, id)) go({ node: id, edit: id }); }
 // Closing the editor leaves the step too: it has no other view to fall back to.
 // A save the editor already said was done is not said again behind it.
@@ -4826,7 +5108,7 @@ const editing = (w) => (!w ? null : selected.edit || (selected.node && canOpen(w
 
 const curOf = () => {
   const w = ed ? workflowByName(ed.workflow) : null;
-  return { w, step: w ? w.steps.find((s) => s.id === ed.step) || null : null };
+  return { w, step: w ? nodeOf(w, ed.step) : null };
 };
 // The run the editor shows: the one picked, else the latest of the workflow.
 const runShown = () => (view ? view.run || view.auto : null);
@@ -4894,20 +5176,22 @@ function showEditor(w, step) {
   const head = el("header", { class: "ned-head kind-" + step.kind },
     kindTile(step.kind, 42),
     el("div", { class: "ned-names" },
-      el("div", { class: "ned-title" }, el("h1", { class: "mono ned-id" }, step.id), el("span", { class: "ned-badge" }, KIND_LABEL[step.kind] || step.kind)),
+      el("div", { class: "ned-title" }, ed.title = el("h1", { class: (step.end ? "" : "mono ") + "ned-id" }, step.end ? endTitle(w, step) : step.id), el("span", { class: "ned-badge" }, KIND_LABEL[step.kind] || step.kind)),
       ed.line),
     el("span", { class: "grow" }), ed.testBtn, close);
 
-  ed.inCol = sideColumn("in", "Input");
+  ed.testBtn.hidden = !!step.end;
+  ed.inCol = sideColumn("in", step.kind === "trigger" ? "Sample request" : "Input");
   ed.outCol = sideColumn("out", "Output");
 
   ed.tabBtns = {};
   const tabs = el("div", { class: "ned-tabs", role: "tablist", "aria-label": "Editing " + step.id });
-  for (const [name, label] of [["params", "Parameters"], ["settings", "Settings"]]) {
+  // The trigger and the response have no settings of their own.
+  for (const [name, label] of step.end ? [["params", "Parameters"]] : [["params", "Parameters"], ["settings", "Settings"]]) {
     const b = el("button", { type: "button", role: "tab", id: "nedtab-" + name, "aria-controls": "nedpanel-" + name }, label);
     b.addEventListener("click", () => setTab(name, true));
     b.addEventListener("keydown", (e) => {
-      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      if (step.end || (e.key !== "ArrowRight" && e.key !== "ArrowLeft")) return;
       e.preventDefault();
       setTab(name === "params" ? "settings" : "params", true);
     });
@@ -4969,7 +5253,7 @@ function hideEditor(keepFocus) {
 function paintEditor() {
   const w = view && view.w;
   const id = editing(w);
-  const step = id ? w.steps.find((s) => s.id === id) : null;
+  const step = id ? nodeOf(w, id) : null;
   if (!step || !canOpen(w, step.id)) {
     hideEditor();
     // An address that names a step that cannot be edited here goes back to the drawing.
@@ -4982,10 +5266,10 @@ function paintEditor() {
 
 function setTab(name, focus) {
   ed.tab = name;
+  for (const [n, panel] of Object.entries(ed.panels)) panel.hidden = n !== name;
   for (const [n, b] of Object.entries(ed.tabBtns)) {
     b.setAttribute("aria-selected", n === name ? "true" : "false");
     b.tabIndex = n === name ? 0 : -1;
-    ed.panels[n].hidden = n !== name;
   }
   if (ed.form) ed.form.controls.forEach((c) => autosize(c.input));
   if (focus) ed.tabBtns[name].focus();
@@ -5161,6 +5445,8 @@ function questionCard(q, ask, meanings) {
 // buildEditorForm makes one control per editable field of the step, in the
 // order of step.edit (syncForm pairs them by position), and lays them out.
 function buildEditorForm(w, step, key) {
+  if (step.kind === "trigger") return buildTriggerForm(w, step, key);
+  if (step.kind === "response") return buildResponseForm(w, step, key);
   const f = { key, workflow: w.name, node: step.id, fields: step.edit, controls: [], root: ed.midBody };
   const cs = step.edit.map((field) => {
     const c = makeControl(f, field);
@@ -5246,6 +5532,14 @@ function buildEditorForm(w, step, key) {
 function paintHead() {
   const { w, step } = curOf();
   if (!w || !step) return;
+  if (step.end) {
+    ed.title.textContent = endTitle(w, step);
+    ed.line.replaceChildren(...(step.kind === "response" ? ["What the caller of ", mono(w.trigger || w.name), " gets back, once the steps have run"]
+      : isWebhook(w) ? ["Starts ", mono(w.name), " when a request arrives at ", mono(w.trigger)]
+      : w.trigger ? ["Starts ", mono(w.name), " on the schedule ", mono(w.trigger.replace(/^cron /, ""))]
+      : ["Starts ", mono(w.name), " when it is run by hand"]));
+    return;
+  }
   const c = ed.form && ed.form.controls.find((x) => x.field.path.length === 3 && x.field.path[2] === "when");
   const cond = c ? curValue(c).trim() : (step.when || "").trim();
   // What a component does is changed in the component: the way there.
@@ -5432,7 +5726,8 @@ function flattenBody(prefix, value, depth, out) {
 // each earlier step (with what it gives, as the run had it) and the environment.
 // The ones the step reads come first.
 function inputSources(w, step, ran) {
-  const idx = w.steps.indexOf(step), reads = new Set(step.reads || []);
+  // The response reads what every step put out.
+  const idx = w.steps.includes(step) ? w.steps.indexOf(step) : w.steps.length, reads = new Set(step.reads || []);
   const out = [];
   const trig = { id: "trigger", kind: "trigger", rows: [], read: reads.has("trigger"), note: null };
   if (ran && ran.trigger && typeof ran.trigger === "object") {
@@ -5498,6 +5793,7 @@ function paintInput() {
   const { w, step } = curOf();
   if (!w || !step) return;
   const ran = runShown();
+  if (step.kind === "trigger") return paintTriggerInput(w, ran);
   put(ed.inCol.meta, ran ? ["run ", el("span", { class: "mono" }, ran.run)] : "no run yet");
   ed.inCol.seg.replaceChildren(seg("Show input as", [["schema", "Schema"], ["json", "JSON"]], ed.inMode, (v) => { ed.inMode = v; paintInput(); }));
   const sources = inputSources(w, step, ran);
@@ -5598,6 +5894,8 @@ function paintOutput() {
   const { w, step } = curOf();
   if (!w || !step) return;
   const ran = runShown();
+  if (step.kind === "trigger") return paintTriggerOutput(w, ran);
+  if (step.kind === "response") return paintResponseOutput(w, ran);
   const t = stepTests[testKey()] || null;
   const source = t && ed.outSource !== "run" ? "test" : "run";
   const ctl = [];
@@ -5688,13 +5986,14 @@ async function testStep() {
 
 const wordsFor = (e, step) => {
   if (e.group && e.group !== "Input") return step.kind === "decide" ? "the " + e.group + " question" : e.label.toLowerCase() + " of " + e.group;
+  if (e.group === "Body") return "the body's " + e.label;
   if (e.group) return "the " + e.label + " input";
   return { "Run only when": "the condition", Model: "the model", Input: "the input", "Output schema": "the schema file's name" }[e.label] || "the " + e.label.toLowerCase();
 };
 
 function buildFoot(w, step) {
   const b = {};
-  b.remove = canAdd(w) ? removeButton(w, step) : null;
+  b.remove = canAdd(w) && !step.end ? removeButton(w, step) : null;
   b.slot = el("div", { class: "ned-noticeslot" });
   b.diff = el("pre", { class: "diff ned-diff", tabindex: "0", "aria-label": "What saving would change", hidden: true });
   b.dot = el("span", { class: "ned-dot", "aria-hidden": "true" });

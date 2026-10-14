@@ -301,7 +301,8 @@ The page opens on a list of the workflows and one of the services, the component
 
 With `--edit` the page becomes a place to work on the workflows:
 
-- Open a step and change its values in the editor, or the trigger and the response beside the drawing. Saving writes only the lines of those values, so comments, blank lines and order in the file stay as they were.
+- Open a step, the trigger or the response and change its values in the editor, with what it can read on one side and what it gave on the other. Saving writes only the lines of those values, so comments, blank lines and order in the file stay as they were.
+- Switch what starts a workflow between a request and a schedule, and add a field to the response's body or take one out. These are written at once, as adding a step is.
 - Make a new workflow: give it a name, say what starts it, and choose a component for its first step. It is written as a folder of that name holding a `workflow.yaml`, in the folder the server was started with, and is served at once.
 - Add a step that asks a model to write or to decide, sends an HTTP request, or uses a component; or remove a step. The components on offer are those in the folders the server was started with, so a workflow can use a component that lives in another workflow's folder.
 - Open a component, which is drawn like a workflow with what it takes at the top and what it gives back at the bottom, and change its values the same way. The change is refused if it would break a workflow that uses the component.
