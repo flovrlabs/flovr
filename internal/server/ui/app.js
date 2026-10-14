@@ -6,25 +6,29 @@
 const REFRESH_MS = 3000;
 
 // Sizes of the drawing, in pixels before it is scaled to fit the window. The
-// workflow flows from top to bottom, so it stays narrow: branches sit side by
-// side and the page never needs to squeeze it to make room for the details.
-const CARD_H = 88;
-const W_MIN = 214;
-const W_MAX = 272;
-const GAP_X = 28;
-const GAP_Y = 46;
-const PAD = 28;
-const FOOT = 28;     // height of the strip at the bottom of a box
-const LEAN = CARD_H * 0.18; // how far an HTTP box leans
-const ZOOM_MIN = 0.5;
+// workflow flows from left to right: a column per depth, a row per branch end.
+const CARD_H = 68;
+const CARD_W = 216;
+const END_W = 188;   // the way out is a little smaller
+const END_H = 56;
+const COL = 360;     // distance between columns, which leaves room for a condition on each line
+const ROW = 112;     // distance between rows, which leaves room for the line of result under a node
+const PAD = 36;
+const HANDLE = 56;   // room to the right of the last column for the plus
+const ZOOM_MIN = 0.3;
 const ZOOM_MAX = 1.5;
 
 const ICONS = {
-  trigger: ["M13 2 4.5 13.5H11L10 22l8.5-11.5H12z"],
-  decide: ["M6 3v18", "M6 15c8 0 12-2 12-9", "M14.5 8.5 18 5l3.5 3.5"],
-  ai: ["M11 4l1.9 5.1L18 11l-5.1 1.9L11 18l-1.9-5.1L4 11l5.1-1.9z", "M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"],
-  http: ["M4 12h15", "M13 6l6 6-6 6"],
-  flow: ["M12 3.5 3.5 8 12 12.5 20.5 8z", "M3.5 12 12 16.5 20.5 12", "M3.5 16 12 20.5 20.5 16"],
+  trigger: ["M13 2 4 14h7l-1 8 9-12h-7z"],
+  decide: ["M6 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M6 16a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M18 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M6 8v8", "M18 11a6 6 0 0 1-6 6H8"],
+  ai: ["M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z", "M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"],
+  http: ["M22 2 11 13", "M22 2 15 22l-4-9-9-4z"],
+  flow: ["M21 8 12 3 3 8v8l9 5 9-5z", "M3 8l9 5 9-5", "M12 13v8"],
+  moon: ["M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"],
+  sun: ["M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M12 2.5v2.2", "M12 19.3v2.2", "M2.5 12h2.2", "M19.3 12h2.2", "M5.3 5.3l1.6 1.6", "M17.1 17.1l1.6 1.6", "M5.3 18.7l1.6-1.6", "M17.1 6.9l1.6-1.6"],
+  runs: ["M4 6h16", "M4 12h10", "M4 18h13"],
+  tests: ["M9 3h6", "M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"],
+  chev: ["M6 9l6 6 6-6"],
   chevron: ["M9 6l6 6-6 6"],
   workflow: ["M4 6h6v5H4z", "M14 13h6v5h-6z", "M10 8.5h3a2 2 0 0 1 2 2V13"],
   run: ["M7 4.5v15l12-7.5z"],
@@ -39,7 +43,7 @@ const ICONS = {
   plus: ["M12 5v14", "M5 12h14"],
   trash: ["M5 7h14", "M10 7V4.5h4V7", "M7 7l.8 12h8.4L17 7", "M10.5 11v5", "M13.5 11v5"],
   minus: ["M5 12h14"],
-  response: ["M10 5 4 11l6 6", "M4 11h9a7 7 0 0 1 7 7v1"],
+  response: ["M9 14 4 9l5-5", "M4 9h10a6 6 0 0 1 6 6v5"],
   fit: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"],
   // A component's two ends: an arrow into a bar, and an arrow out of one.
   input: ["M4 12h10", "M10.5 7.5 15 12l-4.5 4.5", "M19.5 5v14"],
@@ -84,8 +88,9 @@ const STATUS_TEXT = { ok: "Succeeded", failed: "Failed", skipped: "Skipped", run
 const openInner = new Set();
 
 let state = { commit: "", protected: false, workflows: [], runs: [] };
-let selected = { workflow: null, run: null, node: null, changes: false, add: null, test: null, make: false };
+let selected = { workflow: null, run: null, node: null, changes: false, add: null, test: null, make: false, edit: null };
 let detail = null;      // the selected run in full, with trigger and outputs
+let latestFull = null;  // the latest run of the selected workflow in full, drawn on it while no run is picked
 let shown = "";         // what the page currently shows, to tell whether anything changed
 let view = null;        // the workflow and run now drawn, for redrawing on resize and zoom
 let zoom = null;        // null fits the drawing to the window
@@ -94,6 +99,76 @@ let enteredFor = null;  // the workflow whose cards last slid in
 let afterRender = null; // something to do once the page has been drawn, such as moving the focus
 
 const $ = (id) => document.getElementById(id);
+
+// ---- theme and panel: remembered in the browser, and the page works without it ----
+
+const THEME_KEY = "flowmaker-theme";
+const PANEL_KEY = "flowmaker-panel";
+function remembered(key) {
+  try { return localStorage.getItem(key); } catch (err) { return null; }
+}
+function remember(key, value) {
+  try { localStorage.setItem(key, value); } catch (err) { /* the choice just lasts until the page is closed */ }
+}
+const systemDark = () => !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches);
+// The theme in use: the one picked with the toggle, else the system's.
+const currentTheme = () => document.documentElement.dataset.theme || (systemDark() ? "dark" : "light");
+{
+  const saved = remembered(THEME_KEY);
+  if (saved === "dark" || saved === "light") document.documentElement.dataset.theme = saved;
+}
+let themeButton = null;
+function paintTheme() {
+  if (!themeButton) return;
+  const dark = currentTheme() === "dark";
+  themeButton.replaceChildren(icon(dark ? "sun" : "moon", 19));
+  themeButton.title = dark ? "Switch to the light theme" : "Switch to the dark theme";
+  themeButton.setAttribute("aria-label", themeButton.title);
+}
+function toggleTheme() {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  remember(THEME_KEY, next);
+  paintTheme();
+}
+if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paintTheme);
+
+// The panel with the lists of workflows, components, tests and runs can be put away.
+function panelOpen() {
+  const saved = remembered(PANEL_KEY);
+  if (saved === "open" || saved === "closed") return saved === "open";
+  // The drawing comes first: the lists stay put away unless the window is wide.
+  return window.innerWidth > 1600;
+}
+let panelButton = null;
+function setPanel(open, remembering) {
+  $("app").dataset.panel = open ? "open" : "closed";
+  if (panelButton) panelButton.setAttribute("aria-pressed", open ? "true" : "false");
+  if (remembering) remember(PANEL_KEY, open ? "open" : "closed");
+}
+// showSection opens the panel and brings one of its lists into view.
+function showSection(name) {
+  setPanel(true, true);
+  const at = document.querySelector('#side [data-section="' + name + '"]');
+  if (at) at.scrollIntoView({ block: "start" });
+}
+function railButton(name, label, onclick, pressed) {
+  return el("button", { type: "button", class: "railbtn", "aria-label": label, title: label, "aria-pressed": pressed, onclick }, icon(name, 20));
+}
+// buildRail fills the rail under the logo: the sections, and the theme at the bottom.
+function buildRail() {
+  panelButton = railButton("workflow", "Workflows and runs", () => setPanel($("app").dataset.panel === "closed", true), "false");
+  themeButton = railButton("moon", "Switch theme", toggleTheme);
+  $("rail").append(
+    panelButton,
+    railButton("component", "Components", () => showSection("components")),
+    railButton("runs", "Runs", () => showSection("runs")),
+    railButton("tests", "Tests", () => showSection("tests")),
+    el("span", { class: "grow" }),
+    themeButton);
+  setPanel(panelOpen(), false);
+  paintTheme();
+}
 
 function append(node, children) {
   for (const child of children.flat(Infinity)) {
@@ -152,12 +227,12 @@ const isWebhook = (w) => (w.trigger || "").startsWith("POST ");
 // first place, "-" for the last). /t/<run> is the form that keeps a run as a
 // test, and /t/- the form for a new test from nothing. /m/1 is the form for
 // a new workflow, which belongs to no workflow: the one named stays selected
-// behind it.
+// behind it. /e/<step> is the node editor, the large dialog for one step.
 function readAddress() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   const found = {};
   for (let i = 0; i + 1 < parts.length; i += 2) found[parts[i]] = parts[i + 1];
-  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null, test: found.t || null, make: found.m === "1" };
+  selected = { workflow: found.w || null, run: found.r || null, node: found.n || null, changes: found.c === "1", add: found.a || null, test: found.t || null, make: found.m === "1", edit: found.e || null };
 }
 
 function go(change) {
@@ -170,12 +245,15 @@ function go(change) {
   if (!("test" in change)) next.test = null;
   // Nor the form for a new workflow.
   if (!("make" in change)) next.make = false;
+  // Nor the node editor.
+  if (!("edit" in change)) next.edit = null;
   let hash = "#/w/" + encodeURIComponent(next.workflow);
   if (next.run) hash += "/r/" + encodeURIComponent(next.run);
   if (next.node) hash += "/n/" + encodeURIComponent(next.node);
   if (next.add) hash += "/a/" + encodeURIComponent(next.add);
   if (next.test) hash += "/t/" + encodeURIComponent(next.test);
   if (next.make) hash += "/m/1";
+  if (next.edit) hash += "/e/" + encodeURIComponent(next.edit);
   if (next.changes) hash += "/c/1";
   if (location.hash !== hash) location.hash = hash;
 }
@@ -204,6 +282,7 @@ async function refresh() {
     } else {
       detail = null;
     }
+    await loadLatest();
     live.replaceChildren(el("span", { class: "pulse" }), "Live");
     live.title = "Last updated " + when(Date.now());
     live.className = "live";
@@ -214,6 +293,17 @@ async function refresh() {
     live.className = "live down";
   }
   render();
+}
+
+// loadLatest fetches the latest run of the selected workflow in full, which the
+// drawing shows while no run is picked. A component has no runs of its own, so
+// for it the latest is its latest test.
+async function loadLatest() {
+  const w = state.workflows.find((x) => x.name === selected.workflow);
+  const last = selected.run || !w ? null : isComp(w) ? state.runs.find((r) => r.workflow === w.name) : latestRun(w.name);
+  if (!last) { latestFull = null; return; }
+  if (latestFull && latestFull.run === last.run && latestFull.status !== "running") return;
+  latestFull = await getJSON("/api/runs/" + encodeURIComponent(last.run)).catch(() => null);
 }
 
 // progress is how far a step got in a run: its recorded status, or "pending"
@@ -252,7 +342,7 @@ const latestRun = (name) => state.runs.find((r) => r.workflow === name && r.sour
 function render() {
   if (!state.workflows.some((w) => w.name === selected.workflow)) {
     const first = state.workflows.find((x) => !x.component) || state.workflows[0];
-    selected = { workflow: first ? first.name : null, run: null, node: null, changes: false, add: null, test: null, make: false };
+    selected = { workflow: first ? first.name : null, run: null, node: null, changes: false, add: null, test: null, make: false, edit: null };
     detail = null;
   }
   // Rebuilding the page drops the reader's focus and text selection, so it is
@@ -263,7 +353,7 @@ function render() {
   // The server has no changes view for a component.
   if (selected.changes && isComp(wanted)) selected = { ...selected, changes: false };
   if (selected.changes && state.editable && wanted) ensureChanges(wanted);
-  const next = JSON.stringify([state, selected, detail, uiTick, selected.changes ? changesCache[selected.workflow] : null]);
+  const next = JSON.stringify([state, selected, detail, latestFull, uiTick, selected.changes ? changesCache[selected.workflow] : null]);
   if (next === shown) return;
   shown = next;
   const focusId = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
@@ -286,13 +376,17 @@ function render() {
     $("changes").replaceChildren();
     $("inspector").replaceChildren();
     $("canvas").replaceChildren(el("p", { class: "none" }, "No workflows are loaded."));
+    paintEditor();
     return;
   }
   const run = detail && detail.run === selected.run && detail.workflow === w.name ? detail : null;
-  view = { w, run };
+  // While no run is picked the drawing shows the latest one, if it is this workflow's.
+  const auto = !run && !w.draft && !selected.run && latestFull && latestFull.workflow === w.name ? latestFull : null;
+  view = { w, run, auto };
   renderSide(w);
   renderCanvas(moved);
   renderInspector(w, run, moved);
+  paintEditor();
   if (focusId) {
     const back = document.querySelector('[data-focus="' + CSS.escape(focusId) + '"]');
     if (back && back !== document.activeElement) back.focus({ preventScroll: true });
@@ -302,7 +396,28 @@ function render() {
 
 // ---- top bar ----
 
+// paintTabs: the views of a workflow. Editor is the drawing with no run picked,
+// Runs opens the latest run, Tests the latest test run; each with its count.
+function paintTabs(w) {
+  const tabs = $("tabs");
+  if (!w || w.draft) { tabs.replaceChildren(); return; }
+  const comp = isComp(w);
+  const mine = state.runs.filter((r) => r.workflow === w.name);
+  const runs = mine.filter((r) => !isTestRun(r)), tests = mine.filter(isTestRun);
+  const picked = selected.run ? state.runs.find((r) => r.run === selected.run) : null;
+  const mode = picked ? (isTestRun(picked) ? "tests" : "runs") : "editor";
+  const tab = (name, label, count, onclick) => el("button", {
+      type: "button", role: "tab", "aria-selected": mode === name ? "true" : "false", onclick,
+    }, label, count == null ? null : el("span", { class: "n" }, count));
+  tabs.replaceChildren(...[
+    tab("editor", "Editor", null, () => go({ run: null, node: null })),
+    comp ? null : tab("runs", "Runs", runs.length, () => (runs.length ? go({ run: runs[0].run, node: null }) : showSection("runs"))),
+    tab("tests", comp ? "Test runs" : "Tests", comp ? tests.length : typeof w.tests === "number" ? w.tests : (w.cases || []).length,
+      () => (tests.length ? go({ run: tests[0].run, node: null }) : showSection(comp ? "runs" : "tests")))].filter(Boolean));
+}
+
 function renderTop(w) {
+  paintTabs(w);
   $("commit").replaceChildren(...(state.commit ? [icon("branch", 13), el("span", {}, state.commit)] : []));
 
   $("changes").replaceChildren(...(state.editable && w && !isComp(w) && !w.draft ? [changesChip()] : []));
@@ -336,10 +451,10 @@ function renderTop(w) {
     $("latest").replaceChildren();
     return;
   }
-  $("crumb").replaceChildren(
-    el("span", { class: "sep", "aria-hidden": "true" }, "/"),
-    el("strong", {}, w.name),
-    w.trigger ? el("span", { class: "pill mono" }, w.trigger) : null);
+  $("crumb").replaceChildren(...[
+    el("button", { type: "button", class: "crumbname", title: "Show or hide the list of workflows", onclick: () => setPanel($("app").dataset.panel === "closed", true) },
+      el("span", {}, w.name), icon("chev", 14)),
+    w.trigger ? el("span", { class: "pill mono" }, w.trigger) : null].filter(Boolean));
 
   if (!last) {
     $("latest").className = "latest none";
@@ -401,13 +516,13 @@ function renderSide(w) {
   // The runs and tests are a workflow's: a workflow still being made has none.
   const own = w.draft ? [] : [
     ...testsBlock(w),
-    el("h2", {}, comp ? "Test runs" : "Runs", runs.length ? el("span", { class: "count" }, runs.length) : null),
+    el("h2", { "data-section": "runs" }, comp ? "Test runs" : "Runs", runs.length ? el("span", { class: "count" }, runs.length) : null),
     runs.length ? el("div", { class: "list runs" }, rows) : el("p", { class: "empty" }, none)];
 
   $("side").replaceChildren(...[
-    el("h2", {}, "Workflows"),
+    el("h2", { "data-section": "workflows" }, "Workflows"),
     el("div", { class: "list" }, workflows, canMake() ? newButton(!!w.draft) : null),
-    components.length ? el("h2", {}, "Components", el("span", { class: "count" }, components.length)) : null,
+    components.length ? el("h2", { "data-section": "components" }, "Components", el("span", { class: "count" }, components.length)) : null,
     components.length ? el("div", { class: "list comps" }, components) : null,
     ...own,
     el("p", { class: "note" }, state.editable
@@ -455,269 +570,245 @@ function outcome(r) {
 
 // ---- centre: the drawing ----
 
-// Each kind of node has its own silhouette, drawn from the same rounded
-// corners and the same stroke so they read as one family: a trigger is a pill,
-// a decision a hexagon with pointed ends, an AI step a card with a cut corner,
-// an HTTP step a box leaning in the direction of the flow, like the
-// input/output box of a flowchart.
-function roundedPath(points, radii) {
-  const n = points.length;
-  let d = "";
-  points.forEach((p, i) => {
-    const a = points[(i + n - 1) % n], b = points[(i + 1) % n];
-    const toward = (q) => {
-      const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
-      const t = Math.min(radii[i], len / 2) / len;
-      return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
-    };
-    const from = toward(a), to = toward(b);
-    d += (i ? "L" : "M") + from[0].toFixed(2) + " " + from[1].toFixed(2) + "Q" + p[0] + " " + p[1] + " " + to[0].toFixed(2) + " " + to[1].toFixed(2);
-  });
-  return d + "Z";
-}
-
-// silhouette gives the outline path of a box w by h, and the two ends of the
-// line that cuts the footer strip off, which follows the outline.
-function silhouette(kind, w, h) {
-  const m = 1, cut = h - FOOT;
-  if (kind === "trigger") {
-    const r = h / 2 - m, dy = cut - h / 2;
-    const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
-    return { d: `M${h / 2} ${m}H${w - h / 2}A${r} ${r} 0 0 1 ${w - h / 2} ${h - m}H${h / 2}A${r} ${r} 0 0 1 ${h / 2} ${m}Z`, sep: [inset + 2, w - inset - 2] };
-  }
-  if (kind === "response") {
-    // The way out: the trigger's rounded end on the left, a point on the right.
-    const p = h * 0.3, r = h / 2 - m, dy = cut - h / 2;
-    const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
-    const tipAt = (p - m) * ((h - m - cut) / (h / 2 - m));
-    return { d: roundedPath([[m, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [m, h - m]], [r, 9, 12, 9, r]), sep: [inset + 2, w - p + tipAt - 3] };
-  }
-  if (kind === "input") {
-    // The way into a component: a notch on the left where a value arrives, the
-    // trigger's rounded end on the right.
-    const p = h * 0.2, r = h / 2 - m, dy = cut - h / 2;
-    const inset = h / 2 - Math.sqrt(Math.max(0, (h / 2) ** 2 - dy * dy));
-    const left = m + (p - m) * ((h - m - cut) / (h / 2 - m));
-    return { d: roundedPath([[m, m], [w - m, m], [w - m, h - m], [m, h - m], [p, h / 2]], [9, r, r, 9, 6]), sep: [left + 3, w - inset - 2] };
-  }
-  if (kind === "output") {
-    // The way out of a component: the response's point on the right, square
-    // corners on the left, so that the two are never mistaken for each other.
-    const p = h * 0.3;
-    const tipAt = (p - m) * ((h - m - cut) / (h / 2 - m));
-    return { d: roundedPath([[m, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [m, h - m]], [9, 9, 12, 9, 9]), sep: [1, w - p + tipAt - 3] };
-  }
-  if (kind === "decide") {
-    const p = h / 4;
-    return { d: roundedPath([[m, h / 2], [p, m], [w - p, m], [w - m, h / 2], [w - p, h - m], [p, h - m]], [9, 10, 10, 9, 10, 10]),
-      sep: [(p * (cut - h / 2)) / (h / 2) + 1, w - (p * (cut - h / 2)) / (h / 2) - 1] };
-  }
-  if (kind === "ai") {
-    const c = h * 0.3;
-    return { d: roundedPath([[m, m], [w - c, m], [w - m, c], [w - m, h - m], [m, h - m]], [12, 5, 5, 12, 12]), sep: [1, w - 1] };
-  }
-  if (kind === "http") {
-    return { d: roundedPath([[LEAN, m], [w - m, m], [w - LEAN, h - m], [m, h - m]], [11, 11, 11, 11]),
-      sep: [(LEAN * (h - cut)) / h + 1, w - (LEAN * cut) / h - 1] };
-  }
-  if (kind === "flow") {
-    // A box with a bar down each side, the flowchart sign for "a process
-    // with steps of its own". The bars are part of the outline's family:
-    // same stroke, and they stop where the rounded corner begins.
-    const r = 12, b = Math.min(11, w * 0.19);
-    const dy = b < r ? r - Math.sqrt(r * r - (r - b) * (r - b)) : 0;
-    const y1 = m + dy + 0.5, y2 = h - m - dy - 0.5;
-    return { d: roundedPath([[m, m], [w - m, m], [w - m, h - m], [m, h - m]], [r, r, r, r]), sep: [b, w - b],
-      bars: `M${b} ${y1}V${y2}M${w - b} ${y1}V${y2}` };
-  }
-  return { d: roundedPath([[m, m], [w - m, m], [w - m, h - m], [m, h - m]], [12, 12, 12, 12]), sep: [1, w - 1] };
-}
-
-// portShift is how far the middle of a box's top or bottom edge is from the
-// middle of its bounding box, so edges and ports meet the edge, not the box.
-function portShift(kind, side) {
-  return kind === "http" ? (side === "in" ? LEAN / 2 : -LEAN / 2) : 0;
-}
-
-// shapeSVG draws a node's body: a halo for selection and failure, a ring for
-// keyboard focus, the filled outline, and the line above the footer.
-function shapeSVG(kind, w, h) {
-  const s = silhouette(kind, w, h);
-  return svg("svg", { class: "shape", width: w, height: h, viewBox: "0 0 " + w + " " + h, "aria-hidden": "true" },
-    svg("path", { class: "halo", d: s.d }),
-    svg("path", { class: "ring", d: s.d }),
-    svg("path", { class: "bg", d: s.d }),
-    s.bars ? svg("path", { class: "bars", d: s.bars }) : null,
-    svg("path", { class: "sep", d: "M" + s.sep[0] + " " + (h - FOOT) + "H" + s.sep[1] }));
-}
-
-// kindTile is a small icon tile in the silhouette of its kind.
+// kindTile is a small solid icon tile in the colour of its kind.
 function kindTile(kind, size) {
-  const s = silhouette(kind, size, size);
-  return el("span", { class: "tile kt" },
-    svg("svg", { class: "kshape", width: size, height: size, viewBox: "0 0 " + size + " " + size, "aria-hidden": "true" }, svg("path", { d: s.d }), s.bars ? svg("path", { class: "bars", d: s.bars }) : null),
-    icon(kind, Math.round(size * 0.52)));
+  return el("span", { class: "tile kt kind-" + kind, css: { width: size + "px", height: size + "px" } }, icon(kind, Math.round(size * 0.56)));
 }
 
-// layout places the trigger and the steps in rows. A step goes one row below
-// the latest thing it reads from, so steps that depend on the same earlier
-// step sit next to each other as branches.
-function layout(w, width) {
+// stepSubtitle says what a step is in a few words: its kind and the model or
+// target, or, for a step that uses a component, which one.
+function stepSubtitle(step) {
+  const word = KIND_LABEL[step.kind] || step.kind;
+  if (step.component) {
+    return step.component + " · " + (step.kind === "flow" ? plural((step.inner || []).length, "step") : word + " component");
+  }
+  return word + (step.subtitle ? " · " + step.subtitle : "");
+}
+
+// readable turns a step's condition into words, by a few plain rewrites:
+// classify.priority.value == "high" becomes priority is high. The full
+// expression stays in the label's title.
+function readable(expr) {
+  let t = String(expr).trim();
+  t = t.replace(/\b[A-Za-z_]\w*\.([A-Za-z_]\w*)\.value\b/g, "$1");
+  t = t.replace(/\s*==\s*"([^"]*)"/g, " is $1").replace(/\s*!=\s*"([^"]*)"/g, " is not $1");
+  t = t.replace(/\s+in\s+\[([^\]]*)\]/g, (all, list) => " in " + list.split(",").map((s) => s.trim().replace(/^"(.*)"$/, "$1")).join(", "));
+  t = t.replace(/&&/g, " and ").replace(/\|\|/g, " or ").replace(/!\(/g, "not (");
+  return t.replace(/\s+/g, " ").trim();
+}
+
+// layout draws the steps as a tree, left to right. A step hangs from the
+// latest earlier step it reads, or from the start if it reads none; the way
+// out hangs from the latest step it reads, or the last step. A column is one
+// depth; rows are shared out by how many ends a branch has, and a parent
+// stands in the middle of its children.
+function layout(w) {
   const comp = isComp(w);
-  const nodes = [comp
-    ? { id: IN, kind: "input", depth: 0, eyebrow: "Component input", title: "Input", subtitle: inputNames(w).join(", ") || "takes no input" }
-    : {
-      id: "trigger", kind: "trigger", depth: 0,
-      title: isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Manual",
-      subtitle: w.trigger || "started by hand",
-    }];
-  const byId = { [nodes[0].id]: nodes[0] };
+  const root = comp
+    ? { id: IN, kind: "input", title: "Input", subtitle: inputNames(w).join(", ") || "takes no input" }
+    : { id: "trigger", kind: "trigger", title: isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Manual", subtitle: w.trigger || "started by hand" };
+  Object.assign(root, { depth: 0, children: [], parent: null, w: CARD_W, h: CARD_H });
+  const nodes = [root], byId = { [root.id]: root };
   w.steps.forEach((step, i) => {
-    let parent = i === 0 ? nodes[0].id : w.steps[i - 1].id;
-    const reads = step.reads.map((name) => readNode(w, name)).filter((name) => byId[name]);
-    if (reads.length) {
-      parent = reads[0];
-      for (const name of reads) if (byId[name].depth >= byId[parent].depth) parent = name;
+    let parent = root, best = 0;
+    for (const name of step.reads || []) {
+      const from = byId[readNode(w, name)];
+      const at = from ? nodes.indexOf(from) : -1;
+      if (at >= best) { best = at; parent = from; }
     }
-    const node = { id: step.id, kind: step.kind, title: step.id, subtitle: step.subtitle, order: i + 1, parent, sources: [parent], depth: byId[parent].depth + 1, step };
+    const node = { id: step.id, kind: step.kind, title: step.id, mono: true, subtitle: stepSubtitle(step), order: i + 1, step, parent, depth: parent.depth + 1, children: [], w: CARD_W, h: CARD_H };
     nodes.push(node);
     byId[step.id] = node;
+    parent.children.push(node);
   });
-
-  nodes[0].sources = [];
-  // The way out comes after every step, in a row of its own. Its lines come
-  // from the latest steps it reads, or from the last row if it reads none. A
-  // component of one kind of work gives back what that one step puts out.
-  const out = comp ? { id: OUT, kind: "output", eyebrow: "Component output", title: "Output", subtitle: givenNames(w).join(", ") || "gives back nothing", reads: w.gives ? w.gives.reads || [] : w.steps.map((s) => s.id) }
-    : w.respond ? { id: "response", kind: "response", title: "Response", subtitle: isWebhook(w) ? "Answers " + w.trigger.slice(5) : "Answers the caller", reads: w.respond.reads || [] } : null;
-  if (out) {
-    const last = Math.max(...nodes.map((n) => n.depth));
-    const reads = out.reads.map((name) => readNode(w, name)).filter((name) => byId[name]);
-    const deepest = Math.max(...reads.map((name) => byId[name].depth));
-    const sources = reads.length ? reads.filter((name) => byId[name].depth === deepest) : nodes.filter((n) => n.depth === last).map((n) => n.id);
-    const node = { id: out.id, kind: out.kind, eyebrow: out.eyebrow, title: out.title, subtitle: out.subtitle, sources, depth: last + 1 };
+  const end = comp
+    ? { id: OUT, kind: "output", title: "Output", subtitle: givenNames(w).join(", ") || "gives back nothing", reads: w.gives ? w.gives.reads || [] : w.steps.map((s) => s.id) }
+    : w.respond ? { id: "response", kind: "response", title: "Response", subtitle: "answers " + w.respond.status, reads: w.respond.reads || [] } : null;
+  if (end) {
+    let parent = null, best = 0;
+    for (const name of end.reads) {
+      const from = byId[readNode(w, name)];
+      const at = from ? nodes.indexOf(from) : -1;
+      if (at > best) { best = at; parent = from; }
+    }
+    if (!parent) parent = nodes[nodes.length - 1];
+    const node = { id: end.id, kind: end.kind, title: end.title, subtitle: end.subtitle, parent, depth: parent.depth + 1, children: [], w: END_W, h: END_H };
     nodes.push(node);
-    byId[out.id] = node;
+    byId[end.id] = node;
+    parent.children.push(node);
   }
+  let rows = 0;
+  const place = (n) => {
+    if (!n.children.length) n.row = rows++;
+    else {
+      n.children.forEach(place);
+      n.row = (n.children[0].row + n.children[n.children.length - 1].row) / 2;
+    }
+  };
+  place(root);
+  let deepest = 0;
+  for (const n of nodes) {
+    deepest = Math.max(deepest, n.depth);
+    n.x = PAD + n.depth * COL;
+    n.cy = PAD + CARD_H / 2 + n.row * ROW;
+    n.y = n.cy - n.h / 2;
+  }
+  return {
+    nodes, byId,
+    width: PAD * 2 + deepest * COL + CARD_W + HANDLE,
+    height: PAD * 2 + (rows - 1) * ROW + CARD_H + 24,
+  };
+}
 
-  const rows = [];
-  for (const node of nodes) (rows[node.depth] = rows[node.depth] || []).push(node);
-  const widest = Math.max(...rows.map((r) => r.length));
-  const nodeW = Math.max(W_MIN, Math.min(W_MAX, Math.floor((width - PAD * 2 - (widest - 1) * GAP_X) / widest)));
-  const total = widest * nodeW + (widest - 1) * GAP_X;
-  rows.forEach((row, depth) => {
-    const rowW = row.length * nodeW + (row.length - 1) * GAP_X;
-    row.forEach((node, i) => {
-      node.x = PAD + (total - rowW) / 2 + i * (nodeW + GAP_X);
-      node.y = PAD + depth * (CARD_H + GAP_Y);
-      node.hasOut = false;
-    });
-  });
-  for (const node of nodes) for (const name of node.sources) byId[name].hasOut = true;
-  return { nodes, byId, nodeW, width: PAD * 2 + total, height: PAD * 2 + rows.length * CARD_H + (rows.length - 1) * GAP_Y };
+// resultOf is the one line under a node about the run on show: for a decision
+// the answers it picked and how sure it was, for a request what came back, for
+// the rest how long it took. It gives the pieces to draw and the plain text.
+function resultOf(node, ran, status, done) {
+  if (!ran) return null;
+  const plain = (text, tone) => ({ parts: [text], text, tone });
+  if (node.id === "trigger") return plain("started " + when(ran.started));
+  if (node.id === IN) return null;
+  if (node.id === OUT) return plain(ran.gave !== undefined ? "gave back" : ran.status === "running" ? "waiting" : "not reached");
+  if (node.id === "response") return plain(ran.response ? "answered " + ran.response.status : answerWait(ran));
+  if (status === "skipped") return plain("skipped in this run");
+  if (!done) return status === "pending" ? plain(couldNotRun(ran) ? "could not run" : ran.status === "running" ? "waiting" : "not reached") : null;
+  if (status === "failed") {
+    const brokeAt = node.step && node.kind === "flow" ? failedInside(innerRun(node.step, done, status)) : null;
+    return plain("failed" + (brokeAt ? " at " + brokeAt.s.id : done.error ? " · " + done.error : ""), "failed");
+  }
+  if (status === "running") return plain("running");
+  const took = duration(done.ms);
+  const out = done.output && typeof done.output === "object" ? done.output : null;
+  if (node.kind === "decide" && out) {
+    const parts = [], words = [];
+    for (const name of Object.keys(out)) {
+      const q = out[name];
+      if (!q || typeof q !== "object" || q.value === undefined) continue;
+      // A yes-or-no answer carries the chance of yes; the others the chance of each option.
+      const p = q.probabilities && q.probabilities[q.value] !== undefined ? q.probabilities[q.value]
+        : typeof q.probability === "number" && typeof q.value === "boolean" ? (q.value ? q.probability : 1 - q.probability) : q.confidence;
+      if (parts.length) parts.push(" · ");
+      parts.push(el("span", { class: "pick" }, String(q.value)), typeof p === "number" ? " " + Math.round(p * 100) + "%" : "");
+      words.push(q.value + (typeof p === "number" ? " " + Math.round(p * 100) + "%" : ""));
+    }
+    if (words.length) return { parts, text: words.join(" · ") };
+  }
+  if (node.kind === "http") {
+    const bits = [];
+    if (out && out.status !== undefined) bits.push(String(out.status));
+    if (done.detail) bits.push(done.detail);
+    bits.push(took);
+    return plain(bits.join(" · "));
+  }
+  return plain(took);
 }
 
 function renderCanvas(moved) {
   const canvas = $("canvas");
-  const { w, run } = view;
+  const { w, run, auto } = view;
   if (selected.changes && state.editable && !isComp(w)) return renderChanges(w);
   const edited = editedNodes(w);
   const old = canvas.querySelector(".scroller");
   const keep = old && !moved ? [old.scrollLeft, old.scrollTop] : null;
 
-  const plan = layout(w, canvas.clientWidth || 800);
-  const mid = plan.nodeW / 2;
+  // What the drawing tells about a run: the one picked, or else the latest.
+  const ran = run || auto;
+  const stat = (id) => {
+    if (!ran) return "";
+    const s = progress(ran, id) || "";
+    // The latest run may be older than the file: a step it never heard of is not said to be missed.
+    return auto && s === "pending" && ran.status === "ok" ? "" : s;
+  };
+  const plan = layout(w);
   const animate = enteredFor !== w.name;
   enteredFor = w.name;
 
-  const lines = [];
+  const lines = [], labels = [];
   for (const node of plan.nodes) {
-    const status = progress(run, node.id) || "";
-    for (const name of node.sources) {
-      const from = plan.byId[name];
-      const x1 = from.x + mid + portShift(from.kind, "out"), y1 = from.y + CARD_H, x2 = node.x + mid + portShift(node.kind, "in"), y2 = node.y;
-      const k = (y2 - y1) * 0.55;
-      lines.push(
-        svg("path", { class: "edge " + status, d: `M${x1} ${y1} C${x1} ${y1 + k}, ${x2} ${y2 - k}, ${x2} ${y2 - 8}` }),
-        svg("path", { class: "head " + status, d: `M${x2} ${y2 - 0.5} l-4.5 -8 h9 z` }));
-    }
+    if (!node.parent) continue;
+    const from = node.parent, status = stat(node.id);
+    const x1 = from.x + from.w, y1 = from.cy, x2 = node.x, y2 = node.cy;
+    const dx = Math.max(40, (x2 - x1) / 2);
+    lines.push(svg("path", { class: "edge " + status, d: `M${x1} ${y1} C${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}` }));
+    const cond = node.step && node.step.when;
+    // The condition sits where its line has levelled out before the step, so
+    // the conditions of steps that branch from one parent do not meet.
+    if (cond) labels.push(el("span", { class: "elabel " + status, title: cond, css: { left: x2 - 74 + "px", top: y2 + "px" } }, readable(cond)));
   }
 
   const adding = canAdd(w) && !run;
   const cards = plan.nodes.map((node, i) => {
-    const status = progress(run, node.id);
-    const done = run ? run.steps.find((s) => s.id === node.id) : null;
+    const status = stat(node.id);
+    const done = ran ? ran.steps.find((s) => s.id === node.id) : null;
     const cond = node.step && node.step.when;
-    let took = "";
-    if (node.id === "trigger") took = run ? when(run.started) : "";
-    else if (node.id === IN) took = "";
-    else if (node.id === OUT) took = run ? (run.gave !== undefined ? "gave back" : run.status === "running" ? "waiting" : "not reached") : "";
-    else if (node.id === "response") took = run ? (run.response ? String(run.response.status) : answerWait(run)) : String(w.respond.status);
-    else if (done && done.status === "ok") took = duration(done.ms);
-    else if (done && couldNotRun(run)) took = "could not run";
-    else if (done) took = done.status === "failed" ? "failed" : done.status;
-    else if (run) took = run.status === "running" ? "waiting" : run.status === "ok" ? "no record" : "not reached";
-    // A flow step holds steps of its own: how many, what they are, and in a run how each went.
+    const result = resultOf(node, ran, status, done);
+    // A flow step holds steps of its own: how many, and in a run where it broke.
     const inside = node.kind === "flow" && node.step ? innerRun(node.step, done, status) : null;
     const brokeAt = inside && status === "failed" ? failedInside(inside) : null;
-    const label = (node.eyebrow ? node.eyebrow + ", " : "") + node.title + ", " + KIND_LABEL[node.kind] + (inside ? ", " + plural(inside.length, "step") + " inside" : "") + (node.order ? ", step " + node.order : "") + (status ? ", " + (node.id === "response" && run.response ? "answered " + run.response.status : node.id === OUT && run.gave !== undefined ? "gave back" : (STATUS_TEXT[status] || status).toLowerCase()) : "") + (brokeAt ? ", failed at " + brokeAt.s.id : "");
+    const said = node.id === "response" && ran && ran.response ? "answered " + ran.response.status : node.id === OUT && ran && ran.gave !== undefined ? "gave back" : (STATUS_TEXT[status] || status).toLowerCase();
+    const label = node.title + ", " + KIND_LABEL[node.kind] + (node.step && node.step.component ? ", uses " + node.step.component : "") + (inside ? ", " + plural(inside.length, "step") + " inside" : "")
+      + (node.order ? ", step " + node.order : "") + (node.step && canOpen(w, node.id) ? ", Enter opens the editor" : "") + (cond ? ", runs only when " + readable(cond) : "") + (status ? ", " + said : "") + (brokeAt ? ", failed at " + brokeAt.s.id : "");
     const isEdited = edited.has(node.id);
+    const chosen = selected.node === node.id;
+    const leaf = !node.children.length;
     return el("div", {
-        class: "slot" + (animate ? " enter" : ""),
-        css: { left: node.x + "px", top: node.y + "px", width: plan.nodeW + "px", height: CARD_H + "px", animationDelay: (animate ? i * 70 : 0) + "ms" },
+        class: "slot" + (animate ? " enter" : "") + (chosen || selected.add === node.id ? " on" : ""),
+        css: { left: node.x + "px", top: node.y + "px", width: node.w + "px", height: node.h + "px", animationDelay: (animate ? i * 70 : 0) + "ms" },
       },
       el("button", {
-          class: "card shape-" + node.kind + " kind-" + node.kind + (status ? " " + status : "") + (node.sources.length ? " has-in" : "") + (node.hasOut ? " has-out" : "") + (isEdited ? " edited" : ""),
+          class: "card shape-" + node.kind + " kind-" + node.kind + (node.step && node.step.component ? " stacked" : "") + (status ? " " + status : "") + (isEdited ? " edited" : ""),
           type: "button", "data-node": node.id, "data-focus": "n:" + node.id, "data-label": label,
-          "aria-pressed": w.draft ? null : selected.node === node.id ? "true" : "false", "aria-label": label + (isEdited ? ", unsaved changes" : ""),
+          "aria-pressed": w.draft ? null : chosen ? "true" : "false", "aria-label": label + (isEdited ? ", unsaved changes" : ""),
+          title: cond ? "Runs only when " + cond : null,
           // A workflow still being made is only drawn: there is nothing to select yet.
           "aria-disabled": w.draft ? "true" : null,
-          onclick: w.draft ? null : () => go({ node: selected.node === node.id ? null : node.id }),
+          onclick: w.draft ? null : () => go({ node: chosen ? null : node.id }),
         },
-        shapeSVG(node.kind, plan.nodeW, CARD_H),
-        el("span", { class: "head" },
-          el("span", { class: "tile" }, icon(node.kind, 20), node.order ? el("i", { class: "num", title: "Runs " + ordinal(node.order) }, node.order) : null),
-          el("span", { class: "text" },
-            el("span", { class: "eyebrow" }, (node.eyebrow || KIND_LABEL[node.kind]) + (inside ? " · " + plural(inside.length, "step") : "")),
-            el("span", { class: "title" }, node.title),
-            el("span", { class: "sub mono" }, brokeAt ? "failed at " + brokeAt.s.id : node.subtitle)),
-          status && node.id !== "trigger" && node.id !== IN ? statusMark(status, 12) : null),
-        el("span", { class: "foot", title: cond || (inside ? "Steps inside: " + inside.map((r) => r.s.id).join(", ") : null) || (node.id === "trigger" && w.input ? "The body must match " + w.input : null) },
-          cond ? [el("b", {}, "IF"), el("span", { class: "cond mono" }, cond)] : inside ? pips(inside, !!run) : el("span", { class: "always" },
-            node.id === "trigger" ? (w.input ? "Body: " + w.input.split("/").pop() : "Entry point")
-              : node.id === IN ? (inputNames(w).length ? "Takes " + plural(inputNames(w).length, "value") : "Takes nothing")
-              : node.id === OUT ? "Gives back " + plural(givenNames(w).length, "field")
-              : node.id === "response" ? "Exit point" : isComp(w) && w.steps.length === 1 ? "The component's work" : "Always runs"),
-          took ? el("span", { class: "took" }, took) : null)),
+        node.parent ? el("span", { class: "port pin", "aria-hidden": "true" }) : null,
+        el("span", { class: "tile" }, icon(node.kind, node.h < CARD_H ? 18 : 24)),
+        el("span", { class: "text" },
+          el("span", { class: "title" + (node.mono ? " mono" : "") }, node.title),
+          el("span", { class: "sub" }, node.subtitle)),
+        !leaf || (adding && node.id !== "response") ? el("span", { class: "port pout", "aria-hidden": "true" }) : null,
+        badge(status)),
+      result ? el("span", { class: "result" + (result.tone ? " " + result.tone : ""), title: result.text }, result.parts) : null,
       // The place to put a step: right after this one in the file.
-      adding && node.id !== "response" ? addButton(node, plan, mid) : null);
+      adding && node.id !== "response" ? addButton(node) : null);
   });
 
   const stage = el("div", { class: "stage", css: { width: plan.width + "px", height: plan.height + "px" } },
-    svg("svg", { width: plan.width, height: plan.height }, lines), cards);
+    svg("svg", { width: plan.width, height: plan.height, "aria-hidden": "true" }, lines), labels, cards);
 
-  const scale = zoom == null ? Math.max(0.7, Math.min(1, (canvas.clientWidth - 40) / plan.width)) : zoom;
+  const avail = canvas.clientWidth - 40;
+  const scale = zoom == null ? Math.max(0.6, Math.min(1, avail / plan.width)) : zoom;
   stage.style.transform = "scale(" + scale + ")";
   const holder = el("div", { class: "fit", css: { width: Math.ceil(plan.width * scale) + 32 + "px", height: Math.ceil(plan.height * scale) + 32 + "px" } }, stage);
   const scroller = el("div", { class: "scroller" }, holder);
+  panOn(scroller);
+  const fitAll = () => {
+    zoom = Math.min(1, avail / plan.width, (canvas.clientHeight - 150) / plan.height);
+    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(zoom * 100) / 100));
+    renderCanvas(false);
+  };
 
   canvas.replaceChildren(...[
     problemBanner(w),
     run ? runBar(run) : w.draft ? el("div", { class: "hint" },
       el("span", {}, "This is the workflow as the form describes it."),
-      el("span", {}, "Nothing is written until you make it.")) : el("div", { class: "hint" },
-      el("span", {}, isComp(w) ? "A step that uses this component fills the input; the output is what it gets back." : "Steps run top to bottom in the order numbered."),
+      el("span", {}, "Nothing is written until you make it.")) : auto ? latestBar(w, auto, adding) : el("div", { class: "hint" },
+      el("span", {}, isComp(w) ? "A step that uses this component fills the input; the output is what it gets back." : "Runs left to right. A label on a line is the condition for the step it leads into."),
       el("span", {}, state.editable && !w.problem
         ? (isComp(w) ? "Select a step or the output to edit it, or a test run on the left to see what happened." : "Select a step to edit it, or a run on the left to see what happened.")
         : (isComp(w) ? "Pick a test run on the left to see what happened." : "Pick a run on the left to see what happened.")),
       adding ? el("button", { type: "button", class: "ghost addstep", "data-focus": "add-hint", onclick: () => openAdd() }, icon("plus", 13), "Add a step", el("kbd", {}, "A")) : null),
     scroller,
     el("div", { class: "tools", role: "group", "aria-label": "Zoom" },
-      tool("minus", "Zoom out", () => setZoom(scale - 0.1)),
-      el("span", { class: "zoom", "aria-live": "off" }, Math.round(scale * 100) + "%"),
       tool("plus", "Zoom in", () => setZoom(scale + 0.1)),
-      tool("fit", "Fit to window", () => { zoom = null; renderCanvas(false); })),
-    run ? el("div", { class: "key", "aria-hidden": "true" },
+      tool("minus", "Zoom out", () => setZoom(scale - 0.1)),
+      tool("fit", "Fit to window", fitAll),
+      el("span", { class: "zoom", "aria-live": "off" }, Math.round(scale * 100) + "%")),
+    canTest(w) && !w.draft && !isComp(w) ? el("div", { class: "fab" }, startButton(w, null, "Run tests", "canvas:test-all", { primary: true })) : null,
+    ran ? el("div", { class: "key", "aria-hidden": "true" },
       el("div", { class: "line" }, ["ok", "failed", "running", "skipped", "pending"].map((s) => el("span", {}, el("span", { class: "dot " + s }), s === "pending" ? "Not reached" : STATUS_TEXT[s])))) : null,
   ].filter(Boolean));
 
@@ -728,29 +819,53 @@ function renderCanvas(moved) {
   }
 }
 
-// pips are the steps inside a flow step as a row of small kind icons, in order,
-// coloured by how each went in a run. Past four they are counted.
-function pips(rows, ran) {
-  const shown = rows.slice(0, 4);
-  const out = [];
-  shown.forEach((r, i) => {
-    if (i) out.push(el("i", { class: "link" }));
-    out.push(el("span", { class: "pip " + (ran ? r.status : "") }, icon(r.s.kind, 11)));
+// badge is the round symbol on a node's corner for how its step went: a tick,
+// a dash, a cross, or a pulsing dot while it runs. A step not reached has none.
+function badge(status) {
+  if (!status || status === "pending") return null;
+  return el("span", { class: "nbadge " + status, "aria-hidden": "true" }, status === "running" ? null : icon(status, 11));
+}
+
+// latestBar sits over the drawing while no run is picked but the latest one is
+// shown on it, with a way to open it.
+function latestBar(w, last, adding) {
+  return el("div", { class: "hint latest-run" },
+    el("span", { class: "state " + last.status }, statusMark(last.status, 12), "Latest " + (isTestRun(last) ? "test " : "") + "run " + (STATUS_TEXT[last.status] || last.status).toLowerCase()),
+    el("span", { class: "mono id" }, last.run),
+    el("span", {}, when(last.started)),
+    el("button", { type: "button", class: "ghost", "data-focus": "open-latest", onclick: () => go({ run: last.run, node: null }) }, "Open run"),
+    adding ? el("button", { type: "button", class: "ghost addstep", "data-focus": "add-hint", onclick: () => openAdd() }, icon("plus", 13), "Add a step", el("kbd", {}, "A")) : null);
+}
+
+// panOn lets the drawing be dragged by its background, as well as scrolled.
+function panOn(scroller) {
+  let from = null;
+  scroller.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest("button, .elabel")) return;
+    from = { x: event.clientX, y: event.clientY, left: scroller.scrollLeft, top: scroller.scrollTop };
+    scroller.setPointerCapture(event.pointerId);
+    scroller.classList.add("panning");
   });
-  if (rows.length > shown.length) out.push(el("span", { class: "more" }, "+" + (rows.length - shown.length)));
-  return el("span", { class: "pips", "aria-hidden": "true" }, out);
+  scroller.addEventListener("pointermove", (event) => {
+    if (!from) return;
+    scroller.scrollLeft = from.left - (event.clientX - from.x);
+    scroller.scrollTop = from.top - (event.clientY - from.y);
+  });
+  const stop = () => { from = null; scroller.classList.remove("panning"); };
+  scroller.addEventListener("pointerup", stop);
+  scroller.addEventListener("pointercancel", stop);
 }
 
 // canAdd: steps can only be added to a workflow, when the server edits files and the file is sound.
 // A component's steps are fixed on this page: it never adds or removes one.
 const canAdd = (w) => !!w && state.editable && !w.problem && !w.component && !w.draft;
 
-// addButton is the round plus under a box, where a step can be put after it.
-function addButton(node, plan, mid) {
+// addButton is the plus after a node's right port, where a step can be put after it.
+function addButton(node) {
   const label = node.id === "trigger" ? "Add a step first, right after the trigger" : "Add a step after " + node.id;
   return el("button", {
-      type: "button", class: "addbtn", "data-focus": "add:" + node.id, title: label, "aria-label": label,
-      css: { left: mid + portShift(node.kind, "out") - 11 + "px", top: CARD_H + 11 + "px" },
+      type: "button", class: "addbtn" + (node.children.length ? "" : " leaf"), "data-focus": "add:" + node.id, title: label, "aria-label": label,
+      css: { left: node.w + 14 + "px", top: node.h / 2 - 13 + "px" },
       onclick: () => openAdd(node.id),
     }, icon("plus", 13));
 }
@@ -798,10 +913,11 @@ function section(title, ...children) {
   return el("section", {}, title ? el("h2", {}, title) : null, children);
 }
 
-function header(kind, iconName, title, subtitle, closable) {
+function header(kind, iconName, title, subtitle, closable, extra) {
   return el("header", { class: "kind-" + kind },
     KIND_LABEL[kind] ? kindTile(kind, 38) : el("span", { class: "tile" }, icon(iconName, 20)),
     el("div", { class: "names" }, el("h1", { class: kind === "workflow" ? null : "mono" }, title), el("div", { class: "kindname" }, subtitle)),
+    extra || null,
     closable ? el("button", { type: "button", class: "x", "aria-label": "Close details", title: "Close (Esc)", onclick: () => go({ node: null }) }, icon("close", 16)) : null);
 }
 
@@ -1196,7 +1312,8 @@ function stepDetails(w, step, run, hasForm) {
   const output = done && done.output !== undefined ? done.output : null;
   const order = w.steps.indexOf(step) + 1;
   return [
-    header(step.kind, step.kind, step.id, KIND_NAMES[step.kind] || step.kind, true),
+    header(step.kind, step.kind, step.id, KIND_NAMES[step.kind] || step.kind, true,
+      canOpen(w, step.id) ? el("button", { type: "button", class: "btn small openedit", "data-focus": "open-editor", title: "Open the editor for " + step.id + " (Enter on the node, or double-click it)", onclick: () => openEditor(step.id) }, icon("open", 13), "Open editor") : null),
     run ? section("In this run",
       statusPanel(status,
         done && done.status === "ok" ? el("div", { class: "muted" }, "took " + duration(done.ms)) : null,
@@ -1619,6 +1736,8 @@ function paintRow(c) {
   const fresh = uiOf(c.workflow).conflicts[c.key];
   c.conflict.hidden = !(edited && fresh !== undefined);
   if (!c.conflict.hidden) c.conflict.replaceChildren("The file now says: ", el("span", { class: "mono" }, fresh.length > 240 ? fresh.slice(0, 240) + "…" : fresh));
+  // The node editor lays some fields out in its own way and repaints them here.
+  if (c.after) c.after(c);
 }
 
 function buildForm(w, nodeId, fields, key) {
@@ -1676,10 +1795,11 @@ function showForm(w, nodeId, fields) {
 
 // syncForm brings the controls up to date with the data and the drafts without
 // touching a control whose text already matches.
-function syncForm(w) {
-  if (!form || form.workflow !== w.name) return;
-  form.controls.forEach((c, i) => {
-    c.field = form.fields[i];
+function syncForm(w, other) {
+  const f = other || form;
+  if (!f || f.workflow !== w.name) return;
+  f.controls.forEach((c, i) => {
+    c.field = f.fields[i];
     if (c.kind === "prompt") return syncPrompt(c, w);
     c.base = c.field.value;
     const d = draftOf(c);
@@ -1733,6 +1853,7 @@ function loadPrompt(w, step, force) {
 
 // draftChanged refreshes what shows unsaved changes, other than the form.
 function draftChanged(name, force) {
+  syncEditorValues();
   const w = workflowByName(name);
   if (!w || !view || view.w.name !== name) { updateBar(); return; }
   updateBar();
@@ -1819,6 +1940,7 @@ function disarm(name) {
 }
 
 function updateBar() {
+  paintFoot();
   const b = insp.bar;
   if (!b || !view) return;
   if (view.w.draft) return paintMakeBar(b);
@@ -2602,7 +2724,7 @@ function makerBase(m) {
 function draftWorkflow() {
   const m = makeOf(), w = makerBase(m), comp = settleMaker(m, makerComps());
   if (comp) {
-    w.steps = [{ id: m.step.id.trim() || "step", kind: comp.kind, subtitle: comp.name, when: m.step.when.trim(), reads: [], outputs: [], inner: comp.inner || undefined }];
+    w.steps = [{ id: m.step.id.trim() || "step", kind: comp.kind, subtitle: comp.name, component: comp.name, when: m.step.when.trim(), reads: [], outputs: [], inner: comp.inner || undefined }];
   }
   return w;
 }
@@ -3058,12 +3180,12 @@ function testsBlock(w) {
   if (!state.editable || !cases.length) return [];
   const v = roundView(w.name);
   return [
-    el("h2", {}, "Tests", el("span", { class: "count" }, cases.length)),
+    el("h2", { "data-section": "tests" }, "Tests", el("span", { class: "count" }, cases.length)),
     el("div", { class: "testbox" },
       unsavedNote(w),
       testErrorNotice(w),
       v ? roundBox(w, v) : canTest(w)
-        ? el("div", { class: "idle" }, startButton(w, null, "Run all tests", "side:test-all", { block: true }),
+        ? el("div", { class: "idle" }, startButton(w, null, "Run all tests", "side:test-all", { block: true, primary: true }),
             el("p", { class: "tnote" }, "Calls the models for real. Sends no requests."))
         : el("p", { class: "tnote" }, "Tests cannot run while the file has a problem.")),
   ];
@@ -3875,24 +3997,870 @@ function renderChanges(w) {
   ].filter(Boolean));
 }
 
+// ---- the node editor ----
+//
+// A large dialog over the dimmed drawing, for one step: what the step can read
+// on the left, its fields laid out by meaning in the middle, what it put out on
+// the right. It is the address /e/<step>. It keeps no copy of the file: what is
+// typed goes into `drafts` through the same controls as the details column
+// (makeControl), so the two always agree, and its footer is the save bar of the
+// page in another place. Only a step of a workflow opens it, on a server that
+// edits files; a component's own steps do not.
+
+const WHOLE_REF = /^\$\{\s*([^{}]+?)\s*\}$/;
+const SOURCE_WORD = { trigger: "the request", decide: "decided", ai: "wrote", http: "sent", flow: "ran" };
+
+let ed = null;          // the editor now on the page, if any
+let dragRef = null;     // the key being dragged: { path, source }
+const stepTests = {};   // "workflow|step" -> { state: running | done | error, run, at, rev, unsaved, result, error }
+
+const canOpen = (w, id) => !!w && !!state.editable && !w.problem && !w.draft && !isComp(w) && w.steps.some((s) => s.id === id);
+function openEditor(id) { if (view && canOpen(view.w, id)) go({ node: id, edit: id }); }
+function closeEditor() { go({ edit: null }); }
+
+const curOf = () => {
+  const w = ed ? workflowByName(ed.workflow) : null;
+  return { w, step: w ? w.steps.find((s) => s.id === ed.step) || null : null };
+};
+// The run the editor shows: the one picked, else the latest of the workflow.
+const runShown = () => (view ? view.run || view.auto : null);
+const testKey = () => ed.workflow + "|" + ed.step;
+
+function aboutStep(step) {
+  if (step.kind === "decide") return "Asks a decision model typed questions and gets probabilities back";
+  if (step.kind === "ai") return "Asks a model to write structured output";
+  if (step.kind === "flow") return "Runs the " + (step.component || "") + " component, made of " + plural((step.inner || []).length, "step");
+  if (step.kind === "http") return step.component ? "Sends a request, as the " + step.component + " component describes" : "Sends an HTTP request";
+  return KIND_NAMES[step.kind] || step.kind;
+}
+
+function ago(at) {
+  const s = Math.round((Date.now() - at) / 1000);
+  return s < 10 ? "just now" : s < 60 ? s + " s ago" : when(at);
+}
+
+const sourceKind = (w, id) => (id === "trigger" ? "trigger" : id === "env" ? "env" : (w.steps.find((s) => s.id === id) || {}).kind || "env");
+
+function seg(label, items, current, pick) {
+  return el("div", { class: "seg", role: "group", "aria-label": label }, items.map(([value, text]) => {
+    const b = el("button", { type: "button", "aria-pressed": current === value ? "true" : "false" }, text);
+    b.addEventListener("click", () => pick(value));
+    return b;
+  }));
+}
+
+function focusables(root) {
+  return [...root.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")]
+    .filter((n) => !n.disabled && n.getAttribute("tabindex") !== "-1" && !n.closest("[hidden]") && n.getClientRects().length > 0);
+}
+
+function sideColumn(which, title) {
+  const c = { which };
+  c.meta = el("span", { class: "ned-meta" });
+  c.seg = el("span", { class: "ned-seg" });
+  c.body = el("div", { class: "ned-colbody" });
+  c.note = el("div", { class: "ned-note", role: "status" });
+  c.fold = el("button", { type: "button", class: "ned-fold", "aria-expanded": "true" }, icon("chev", 13), title);
+  c.fold.addEventListener("click", () => {
+    ed.fold[which] = !ed.fold[which];
+    c.root.classList.toggle("folded", ed.fold[which]);
+    c.fold.setAttribute("aria-expanded", ed.fold[which] ? "false" : "true");
+  });
+  c.root = el("div", { class: "ned-col ned-" + which },
+    el("div", { class: "ned-colhead" }, el("span", { class: "ned-cap" }, title), c.fold, c.meta, el("span", { class: "grow" }), c.seg),
+    el("div", { class: "ned-colfold" }, c.body, c.note));
+  const folded = !!ed.fold[which];
+  c.root.classList.toggle("folded", folded);
+  c.fold.setAttribute("aria-expanded", folded ? "false" : "true");
+  return c;
+}
+
+function showEditor(w, step) {
+  hideEditor(true);
+  const narrow = window.innerWidth <= 900;
+  ed = { workflow: w.name, step: step.id, tab: "params", inMode: "schema", outMode: "fields", outSource: null, target: null, form: null, formKey: "", sig: "", diff: false, more: {}, fold: { in: narrow, out: narrow }, shownNotice: null };
+
+  ed.testBtn = el("button", { type: "button", class: "btn primary ned-testbtn", "data-test": "1" }, icon("run", 13), "Test step");
+  ed.testBtn.addEventListener("click", () => testStep());
+  const close = el("button", { type: "button", class: "ned-x", "aria-label": "Close the editor", title: "Close (Esc)" }, icon("close", 16));
+  close.addEventListener("click", () => closeEditor());
+  ed.line = el("span", { class: "ned-line" });
+  const head = el("header", { class: "ned-head kind-" + step.kind },
+    kindTile(step.kind, 42),
+    el("div", { class: "ned-names" },
+      el("div", { class: "ned-title" }, el("h1", { class: "mono ned-id" }, step.id), el("span", { class: "ned-badge" }, KIND_LABEL[step.kind] || step.kind)),
+      ed.line),
+    el("span", { class: "grow" }), ed.testBtn, close);
+
+  ed.inCol = sideColumn("in", "Input");
+  ed.outCol = sideColumn("out", "Output");
+
+  ed.tabBtns = {};
+  const tabs = el("div", { class: "ned-tabs", role: "tablist", "aria-label": "Editing " + step.id });
+  for (const [name, label] of [["params", "Parameters"], ["settings", "Settings"]]) {
+    const b = el("button", { type: "button", role: "tab", id: "nedtab-" + name, "aria-controls": "nedpanel-" + name }, label);
+    b.addEventListener("click", () => setTab(name, true));
+    b.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      e.preventDefault();
+      setTab(name === "params" ? "settings" : "params", true);
+    });
+    ed.tabBtns[name] = b;
+    tabs.append(b);
+  }
+  ed.panels = {
+    params: el("div", { class: "ned-panel", id: "nedpanel-params", role: "tabpanel", "aria-labelledby": "nedtab-params" }),
+    settings: el("div", { class: "ned-panel", id: "nedpanel-settings", role: "tabpanel", "aria-labelledby": "nedtab-settings" }),
+  };
+  ed.midBody = el("div", { class: "ned-midbody" }, ed.panels.params, ed.panels.settings);
+  ed.midBody.addEventListener("focusin", (e) => {
+    const c = ed.form && ed.form.controls.find((x) => x.refable && x.row.contains(e.target));
+    if (c) ed.target = c;
+  });
+  const mid = el("div", { class: "ned-col ned-mid" }, tabs, ed.midBody);
+
+  ed.foot = buildFoot();
+  ed.dlg = el("section", { class: "nodeed", role: "dialog", "aria-modal": "true", "aria-label": "Editing " + step.id, tabindex: "-1" },
+    head, el("div", { class: "ned-cols" }, ed.inCol.root, mid, ed.outCol.root), ed.foot.root);
+  ed.dlg.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+    const items = focusables(ed.dlg);
+    if (!items.length) { e.preventDefault(); return; }
+    const first = items[0], last = items[items.length - 1];
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === ed.dlg)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  // A text box is as tall as its text, which depends on how wide the column is.
+  ed.watch = new ResizeObserver(() => { if (ed && ed.form) ed.form.controls.forEach((c) => { if (c.input.getClientRects().length) autosize(c.input); }); });
+  ed.watch.observe(ed.midBody);
+  ed.root = el("div", { class: "nedback" }, ed.dlg);
+  ed.root.addEventListener("pointerdown", (e) => { if (e.target === ed.root) closeEditor(); });
+  document.body.append(ed.root);
+  document.body.classList.add("ned-open");
+  $("app").setAttribute("inert", "");
+  setTab("params", false);
+  ed.dlg.focus({ preventScroll: true });
+}
+
+function hideEditor(keepFocus) {
+  if (!ed) return;
+  const id = ed.step;
+  ed.watch.disconnect();
+  ed.root.remove();
+  document.body.classList.remove("ned-open");
+  $("app").removeAttribute("inert");
+  ed = null;
+  dragRef = null;
+  if (!keepFocus) {
+    const card = document.querySelector('#canvas .card[data-node="' + CSS.escape(id) + '"]');
+    if (card) card.focus({ preventScroll: true });
+  }
+}
+
+// paintEditor is called by render(): it opens, updates or closes the editor to match the address.
+function paintEditor() {
+  const w = view && view.w;
+  const step = w && selected.edit ? w.steps.find((s) => s.id === selected.edit) : null;
+  if (!step || !canOpen(w, step.id)) {
+    hideEditor();
+    // An address that names a step that cannot be edited here goes back to the drawing.
+    if (selected.edit && state.workflows.length) go({ edit: null });
+    return;
+  }
+  if (!ed || ed.workflow !== w.name || ed.step !== step.id) showEditor(w, step);
+  syncEditor(w, step);
+}
+
+function setTab(name, focus) {
+  ed.tab = name;
+  for (const [n, b] of Object.entries(ed.tabBtns)) {
+    b.setAttribute("aria-selected", n === name ? "true" : "false");
+    b.tabIndex = n === name ? 0 : -1;
+    ed.panels[n].hidden = n !== name;
+  }
+  if (ed.form) ed.form.controls.forEach((c) => autosize(c.input));
+  if (focus) ed.tabBtns[name].focus();
+}
+
+function formKeyOf(w, step) {
+  return [w.name, step.id, step.edit.map((f) => [pathKey(f.path), f.kind, f.label, f.group || "", f.hint || "", (f.options || []).join(","), WHOLE_REF.test(f.value) ? "r" : ""].join("~")).join("|")].join("##");
+}
+
+function syncEditor(w, step) {
+  const key = formKeyOf(w, step);
+  if (key !== ed.formKey) rebuildForm(w, step, key);
+  else { ed.form.fields = step.edit; syncForm(w, ed.form); }
+  paintHead();
+  // What it reads and what it gave only change when the run or the file does.
+  const ran = runShown();
+  const sig = JSON.stringify([ran ? [ran.run, ran.status, ran.ms, (ran.steps || []).length] : null, step, w.rev]);
+  if (sig !== ed.sig) { ed.sig = sig; paintInput(); paintOutput(); }
+  paintFoot();
+}
+
+// syncEditorValues brings the editor's controls up to date with the drafts after something else changed them.
+function syncEditorValues() {
+  if (!ed || !ed.form) return;
+  const w = workflowByName(ed.workflow);
+  if (w) syncForm(w, ed.form);
+  paintHead();
+}
+
+function rebuildForm(w, step, key) {
+  let back = null;
+  if (ed.form && ed.midBody.contains(document.activeElement)) {
+    const i = ed.form.controls.findIndex((c) => c.input === document.activeElement);
+    if (i >= 0) { try { back = [i, document.activeElement.selectionStart, document.activeElement.selectionEnd]; } catch (err) { back = [i, null, null]; } }
+  }
+  ed.formKey = key;
+  ed.target = null;
+  ed.form = buildEditorForm(w, step, key);
+  ed.panels.params.replaceChildren(...ed.form.params);
+  ed.panels.settings.replaceChildren(...ed.form.settings);
+  syncForm(w, ed.form);
+  if (back && ed.form.controls[back[0]]) {
+    const box = ed.form.controls[back[0]].input;
+    box.focus({ preventScroll: true });
+    if (back[1] != null) { try { box.setSelectionRange(back[1], back[2]); } catch (err) { /* not a text box */ } }
+  }
+}
+
+// ---- the middle: the fields by meaning ----
+
+const curValue = (c) => { const d = draftOf(c); return d ? d.value : c.base; };
+
+function relabel(c, text) {
+  const label = c.row.querySelector("label");
+  if (label) label.textContent = text;
+}
+
+// setField puts a text in a field as if it was typed.
+function setField(c, text) {
+  setValue(c.input, text);
+  c.input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+// A field that takes keys: the key dropped or clicked goes in at the caret, or
+// takes the place of an empty value, or of the one key already there.
+function putRef(c, ref) {
+  const text = c.kind === "expression" ? ref.path : "${" + ref.path + "}";
+  const box = c.input;
+  if (box.hidden || box.value.trim() === "") setField(c, text);
+  else {
+    const live = document.activeElement === box;
+    const from = live ? box.selectionStart : c.caret ? c.caret[0] : box.value.length;
+    const to = live ? box.selectionEnd : c.caret ? c.caret[1] : from;
+    box.setRangeText(text, from, to, "end");
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  c.row.classList.add("flash");
+  setTimeout(() => c.row.classList.remove("flash"), 900);
+  announce("Put " + text + " in " + c.field.label);
+}
+
+function wireDrop(c) {
+  const row = c.row;
+  const accepts = () => !!dragRef && !!ed && dragRef.source !== ed.step;
+  row.addEventListener("dragover", (e) => {
+    if (!accepts()) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    row.classList.add("drop");
+  });
+  row.addEventListener("dragleave", (e) => { if (!row.contains(e.relatedTarget)) row.classList.remove("drop"); });
+  row.addEventListener("drop", (e) => {
+    row.classList.remove("drop");
+    if (!accepts()) return;
+    e.preventDefault();
+    putRef(c, dragRef);
+    dragRef = null;
+  });
+  c.input.addEventListener("blur", () => { try { c.caret = [c.input.selectionStart, c.input.selectionEnd]; } catch (err) { c.caret = null; } });
+}
+
+// dataField gives a field that holds a key the Fixed / From data choice: a
+// whole ${...} shows as a coloured pill, and Fixed shows the text itself.
+function dataField(c) {
+  c.data = true;
+  const holder = el("div", { class: "ned-val" });
+  c.pillbox = el("div", { class: "ned-slot", tabindex: "0", role: "group", "aria-label": c.field.label + ", from data" });
+  c.input.replaceWith(holder);
+  holder.append(c.input, c.pillbox);
+  const pick = (mode) => {
+    c.forced = mode;
+    paintData(c);
+    if (mode === "fixed") c.input.focus(); else c.pillbox.focus();
+  };
+  c.fixedBtn = el("button", { type: "button" }, "Fixed");
+  c.dataBtn = el("button", { type: "button" }, "From data");
+  c.fixedBtn.addEventListener("click", () => pick("fixed"));
+  c.dataBtn.addEventListener("click", () => pick("data"));
+  c.toggle = el("div", { class: "seg ned-kindseg", role: "group", "aria-label": c.field.label + " is" }, c.fixedBtn, c.dataBtn);
+  c.row.querySelector(".lab").insertBefore(c.toggle, c.revert);
+  c.after = paintData;
+}
+
+function paintData(c) {
+  const v = curValue(c), m = WHOLE_REF.exec(v);
+  const mode = c.forced || (m ? "data" : "fixed");
+  c.row.classList.toggle("is-data", mode === "data");
+  c.input.hidden = mode === "data";
+  c.pillbox.hidden = mode !== "data";
+  if (mode === "fixed") autosize(c.input);
+  c.fixedBtn.setAttribute("aria-pressed", mode === "fixed" ? "true" : "false");
+  c.dataBtn.setAttribute("aria-pressed", mode === "data" ? "true" : "false");
+  if (mode !== "data") return;
+  const w = workflowByName(c.workflow);
+  if (m) {
+    const path = m[1], kind = w ? sourceKind(w, path.split(".")[0]) : "env";
+    const clear = el("button", { type: "button", class: "ned-unpill", "aria-label": "Remove " + path }, icon("close", 11));
+    clear.addEventListener("click", () => { setField(c, ""); c.pillbox.focus(); });
+    c.pillbox.replaceChildren(el("span", { class: "ref static kind-" + kind }, el("span", { class: "ned-brace", "aria-hidden": "true" }, "{ }"), path, clear));
+    c.pillbox.setAttribute("aria-label", c.field.label + ", from data: " + path);
+  } else {
+    c.pillbox.replaceChildren(el("span", { class: "ned-empty" }, "Drop a key here, or click one on the left"),
+      v.trim() ? el("span", { class: "ned-still" }, "Still the fixed text ", el("span", { class: "mono" }, clip(v, 40)), " until you do.") : null);
+    c.pillbox.setAttribute("aria-label", c.field.label + ", from data, no key yet");
+  }
+}
+
+function questionKind(q) {
+  return q.answers.startsWith("score") ? "A score" : q.options && q.options.length ? "One of a list" : "Yes or no";
+}
+
+function questionCard(q, ask, meanings) {
+  const scored = q.answers.startsWith("score");
+  const rows = meanings.map((m) => {
+    const c = m.c;
+    c.row = el("div", { class: "ned-arow k-text" },
+      el("label", { for: c.id, class: "mono ned-aname" }, m.name),
+      c.input, c.revert, c.conflict);
+    return c.row;
+  });
+  return el("div", { class: "ned-q" },
+    el("div", { class: "ned-qhead" }, el("span", { class: "mono ned-qname" }, q.name), el("span", { class: "ned-qtype" }, questionKind(q))),
+    ask ? ask.row : el("p", { class: "ned-plain" }, q.ask),
+    rows.length ? el("div", { class: "ned-answers" },
+      el("div", { class: "ned-ahead" }, el("span", {}, "Answer"), el("span", {}, scored ? "Means, lowest to highest" : "Means")),
+      rows) : null);
+}
+
+// buildEditorForm makes one control per editable field of the step, in the
+// order of step.edit (syncForm pairs them by position), and lays them out.
+function buildEditorForm(w, step, key) {
+  const f = { key, workflow: w.name, node: step.id, fields: step.edit, controls: [], root: ed.midBody };
+  const cs = step.edit.map((field) => {
+    const c = makeControl(f, field);
+    c.refable = field.kind === "text" || field.kind === "expression";
+    f.controls.push(c);
+    return c;
+  });
+  const role = {}, qs = {}, rest = [];
+  for (const c of cs) {
+    const p = c.field.path, last = p[p.length - 1];
+    if (p.length === 3 && last === "when") role.when = c;
+    else if ((step.kind === "decide" || step.kind === "ai") && p.length === 4 && p[2] === step.kind && ["model", "input", "prompt", "output"].includes(last)) role[last] = c;
+    else if (step.kind === "decide" && p[3] === "questions" && p.length >= 6) {
+      const q = qs[p[4]] || (qs[p[4]] = { ask: null, meanings: [] });
+      if (last === "ask") q.ask = c;
+      else if (last === "yes_if" || last === "no_if") q.meanings.push({ c, name: last === "yes_if" ? "yes" : "no" });
+      else q.meanings.push({ c, name: c.field.label });
+    } else rest.push(c);
+  }
+  // Which fields hold keys: they get the Fixed / From data choice.
+  const meaning = new Set(Object.values(qs).flatMap((q) => q.meanings.map((m) => m.c)));
+  for (const c of cs) {
+    if (!c.refable || c === role.when || meaning.has(c)) continue;
+    const isInput = !c.field.group ? c.field.label === "Input" : c.field.group === "Input";
+    if (isInput || WHOLE_REF.test(c.field.value)) dataField(c);
+  }
+
+  const params = [];
+  if (role.model) { relabel(role.model, "Model"); params.push(role.model.row); }
+  if (role.input) { relabel(role.input, step.kind === "decide" ? "What it reads" : "Input"); params.push(role.input.row); }
+  if (role.prompt) params.push(role.prompt.row);
+  if (role.output) {
+    relabel(role.output, "Output schema");
+    const fields = step.outputs || [];
+    params.push(el("div", { class: "ned-schema" }, role.output.row,
+      el("p", { class: "ned-plain" }, fields.length ? "The model answers with " : "The fields come from the schema file.", fields.map((n) => el("span", { class: "ned-fieldchip mono" }, n)),
+        fields.length ? " and no others. They are set in the schema file." : "")));
+  }
+  if (step.kind === "decide" && step.questions && step.questions.length) {
+    params.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Questions"), el("span", { class: "ned-count" }, String(step.questions.length))));
+    for (const q of step.questions) {
+      const part = qs[q.name] || { ask: null, meanings: [] };
+      if (part.ask) relabel(part.ask, "Ask");
+      params.push(questionCard(q, part.ask, part.meanings));
+    }
+  }
+  // Whatever else the step lets the page change keeps the order of the file, grouped as the details column does.
+  let group = null, groupName = null;
+  for (const c of rest) {
+    if (c.field.group) {
+      if (groupName !== c.field.group) {
+        groupName = c.field.group;
+        group = el("fieldset", { class: "group" }, el("legend", {}, c.field.group));
+        params.push(group);
+      }
+      group.append(c.row);
+    } else { groupName = null; params.push(c.row); }
+  }
+  if (!params.length) params.push(el("p", { class: "ned-plain" }, "This step has nothing the page can change. What it does is set in its component."));
+
+  const settings = [];
+  if (role.when) {
+    relabel(role.when, "Run only when");
+    const words = el("p", { class: "ned-words", "aria-live": "polite" });
+    const paintWords = (c) => {
+      const v = curValue(c).trim();
+      put(words, v ? ["In words: ", el("strong", {}, readable(v))] : "Without a condition the step runs every time, once the steps before it have finished.");
+    };
+    role.when.after = paintWords;
+    settings.push(role.when.row, words);
+  } else settings.push(el("p", { class: "ned-plain" }, "This step has no settings the page can change."));
+  settings.push(el("p", { class: "ned-plain" }, "Step " + (w.steps.indexOf(step) + 1) + " of " + w.steps.length + " in file order."));
+  // Every field that takes text takes a key dropped on it, once the rows are laid out.
+  for (const c of cs) if (c.refable) wireDrop(c);
+  f.params = params;
+  f.settings = settings;
+  return f;
+}
+
+function paintHead() {
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const c = ed.form && ed.form.controls.find((x) => x.field.path.length === 3 && x.field.path[2] === "when");
+  const cond = c ? curValue(c).trim() : (step.when || "").trim();
+  if (cond) {
+    const more = el("button", { type: "button", class: "linkbtn" }, "set in Settings");
+    more.addEventListener("click", () => setTab("settings", true));
+    ed.line.replaceChildren("Runs only when ", el("span", { class: "mono ned-cond", title: cond }, readable(cond)), " · ", more);
+  } else ed.line.replaceChildren(aboutStep(step));
+  const t = stepTests[testKey()];
+  const running = !!t && t.state === "running";
+  ed.testBtn.setAttribute("aria-disabled", running ? "true" : "false");
+  ed.testBtn.replaceChildren(icon("run", 13), running ? "Testing…" : "Test step");
+}
+
+// ---- the left: what the step can read ----
+
+function walkPath(value, path) {
+  let v = value;
+  for (const part of path.split(".")) {
+    if (v == null || typeof v !== "object" || !(part in v)) return undefined;
+    v = v[part];
+  }
+  return v;
+}
+
+function previewOf(v) {
+  if (v === undefined) return null;
+  if (typeof v === "string") return v;
+  if (v !== null && typeof v === "object") return Array.isArray(v) ? plural(v.length, "item") : JSON.stringify(v);
+  return String(v);
+}
+
+function typeTag(v) {
+  if (typeof v === "string") return "Aa";
+  if (typeof v === "number") return "#";
+  if (typeof v === "boolean") return "t/f";
+  if (Array.isArray(v)) return "[ ]";
+  if (v && typeof v === "object") return "{ }";
+  return "·";
+}
+
+function flattenBody(prefix, value, depth, out) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  for (const k of Object.keys(value)) {
+    if (out.length >= 60) return;
+    const v = value[k], path = prefix + "." + k;
+    if (v && typeof v === "object" && !Array.isArray(v) && depth < 2 && Object.keys(v).length) flattenBody(path, v, depth + 1, out);
+    else out.push({ path, short: path.slice("trigger.body.".length), value: v });
+  }
+}
+
+// inputSources lists what a step can read, by where it comes from: the request,
+// each earlier step (with what it gives, as the run had it) and the environment.
+// The ones the step reads come first.
+function inputSources(w, step, ran) {
+  const idx = w.steps.indexOf(step), reads = new Set(step.reads || []);
+  const out = [];
+  const trig = { id: "trigger", kind: "trigger", rows: [], read: reads.has("trigger"), note: null };
+  if (ran && ran.trigger && typeof ran.trigger === "object") {
+    for (const [k, v] of Object.entries(ran.trigger)) {
+      if (k === "body") {
+        trig.rows.push({ path: "trigger.body", short: "body", value: v });
+        flattenBody("trigger.body", v, 0, trig.rows);
+      } else trig.rows.push({ path: "trigger." + k, short: k, value: v });
+    }
+  } else if (isWebhook(w) || !w.trigger) {
+    trig.rows.push({ path: "trigger.body", short: "body", value: undefined });
+    const sample = w.sample && typeof w.sample === "object" && !Array.isArray(w.sample) ? Object.keys(w.sample) : [];
+    for (const k of sample) trig.rows.push({ path: "trigger.body." + k, short: k, value: undefined });
+  } else trig.rows.push({ path: "trigger.time", short: "time", value: undefined });
+  out.push(trig);
+  w.steps.slice(0, idx).forEach((s) => {
+    const rec = ran ? ran.steps.find((x) => x.id === s.id) : null;
+    const names = s.outputs && s.outputs.length ? s.outputs : (s.questions || []).map((q) => q.name + ".value");
+    const src = { id: s.id, kind: s.kind, rows: [], read: reads.has(s.id), note: null };
+    if (ran && !rec) src.note = "not in this run";
+    else if (rec && rec.status === "skipped") src.note = "skipped in this run";
+    else if (rec && rec.status === "failed") src.note = "failed in this run";
+    for (const n of names) src.rows.push({ path: s.id + "." + n, short: n, value: rec && rec.output !== undefined ? walkPath(rec.output, n) : undefined });
+    out.push(src);
+  });
+  const env = new Set();
+  for (const [, fields] of editSets(w)) for (const f of fields) for (const m of String(f.value).matchAll(/\$\{\s*env\.([A-Za-z_]\w*)/g)) env.add(m[1]);
+  if (env.size) out.push({ id: "env", kind: "env", rows: [...env].sort().map((n) => ({ path: "env." + n, short: n, value: undefined })), read: false, note: null, env: true });
+  return out;
+}
+
+// refPill is a key: coloured by the step it comes from, and dragged into a field.
+function refPill(path, source, kind, text, tip) {
+  const p = el("span", { class: "ref kind-" + kind, role: "button", tabindex: "0", draggable: "true", "data-path": path, title: tip || "Drag it onto a field, or press Enter to put ${" + path + "} in the field you were editing" }, text || path);
+  p.addEventListener("dragstart", (e) => {
+    dragRef = { path, source };
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData("text/plain", "${" + path + "}");
+    p.classList.add("dragging");
+  });
+  p.addEventListener("dragend", () => { dragRef = null; p.classList.remove("dragging"); });
+  return p;
+}
+
+// put replaces what a node holds with children, which may be nested lists.
+function put(node, ...children) {
+  node.replaceChildren();
+  return append(node, children);
+}
+
+function setNote(col, text) { col.note.textContent = text; }
+const INPUT_NOTE = "Drag a key onto a field in Parameters, or click one to put it in the field you last used. Its colour says which step it comes from.";
+
+function useRef(path, source) {
+  const c = ed.target && ed.target.row.isConnected && !ed.target.row.closest("[hidden]") ? ed.target : null;
+  if (!c) { setNote(ed.inCol, "Click a field in Parameters first, then click a key to put it there."); return; }
+  if (source === ed.step) { setNote(ed.inCol, "A step cannot read its own output."); return; }
+  putRef(c, { path, source });
+  setNote(ed.inCol, "Put " + (c.kind === "expression" ? path : "${" + path + "}") + " in " + c.field.label + ".");
+}
+
+function paintInput() {
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const ran = runShown();
+  put(ed.inCol.meta, ran ? ["run ", el("span", { class: "mono" }, ran.run)] : "no run yet");
+  ed.inCol.seg.replaceChildren(seg("Show input as", [["schema", "Schema"], ["json", "JSON"]], ed.inMode, (v) => { ed.inMode = v; paintInput(); }));
+  const sources = inputSources(w, step, ran);
+  const body = [];
+  if (ed.inMode === "json") {
+    const all = {};
+    for (const s of sources) {
+      if (s.env) continue;
+      if (s.id === "trigger") { if (ran && ran.trigger !== undefined) all.trigger = ran.trigger; continue; }
+      const rec = ran ? ran.steps.find((x) => x.id === s.id) : null;
+      if (rec && rec.output !== undefined) all[s.id] = rec.output;
+    }
+    body.push(Object.keys(all).length ? jsonView(all) : el("p", { class: "ned-plain" }, "No data yet: the workflow has not run."));
+    ed.inCol.body.replaceChildren(...body);
+    setNote(ed.inCol, "This is the data as the run had it. Switch to Schema to drag keys.");
+    return;
+  }
+  let divided = false;
+  for (const s of sources) {
+    if (!s.read && !divided && s.id !== "trigger" && !s.env) { divided = true; body.push(el("div", { class: "ned-divide" }, "Not read by this step yet")); }
+    if (s.env && !divided) body.push(el("div", { class: "ned-divide" }, "From the environment"));
+    body.push(el("div", { class: "ned-src kind-" + s.kind + (s.read || s.id === "trigger" ? "" : " unread") },
+      el("div", { class: "ned-srchead" },
+        s.env ? el("span", { class: "ned-stile" }, "$") : el("span", { class: "ned-stile kind-" + s.kind }, icon(s.kind, 12)),
+        el("span", { class: "mono ned-sid" }, s.id),
+        el("span", { class: "ned-word" }, s.env ? "names used here" : s.note ? s.note : SOURCE_WORD[s.kind] || ""),
+        s.read ? el("span", { class: "ned-reads" }, "read here") : null),
+      s.rows.length ? s.rows.map((r) => {
+        const shown = previewOf(r.value);
+        return el("div", { class: "ned-row" + (r.path.split(".").length > 3 && s.id === "trigger" ? " deep" : "") },
+          el("span", { class: "ned-type", "aria-hidden": "true" }, shown === null ? "·" : typeTag(r.value)),
+          (() => { const p = refPill(r.path, s.id, s.kind, r.short); p.addEventListener("click", () => useRef(r.path, s.id)); p.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); useRef(r.path, s.id); } }); return p; })(),
+          el("span", { class: "ned-val-text" + (shown === null ? " none" : ""), title: shown === null ? null : shown }, shown === null ? (ran ? "—" : "") : shown));
+      }) : el("p", { class: "ned-plain" }, "No fields are known for it.")));
+    if (s.env) divided = true;
+  }
+  if (!ran) body.push(el("p", { class: "ned-plain" }, "No run yet, so only the names are shown. Run the workflow and the values appear here."));
+  ed.inCol.body.replaceChildren(...body);
+  setNote(ed.inCol, INPUT_NOTE);
+}
+
+// ---- the right: what it put out ----
+
+function answerView(q, a) {
+  const yesNo = !(q.options && q.options.length);
+  let probs = a.probabilities && typeof a.probabilities === "object" ? a.probabilities : null;
+  if (!probs && typeof a.probability === "number" && yesNo) probs = { yes: a.probability, no: 1 - a.probability };
+  const picked = typeof a.value === "boolean" ? (a.value ? "yes" : "no") : String(a.value);
+  const names = probs ? Object.keys(probs).sort((x, y) => probs[y] - probs[x]) : [];
+  const close = names.length >= 2 && probs[names[0]] - probs[names[1]] < 0.15;
+  const more = !!ed.more[q.name];
+  const shown = names.length > 5 && !more ? names.slice(0, 4) : names;
+  const toggle = names.length > 5 ? el("button", { type: "button", class: "linkbtn" }, more ? "Show fewer" : "Show " + (names.length - 4) + " more: " + names.slice(4).join(", ")) : null;
+  if (toggle) toggle.addEventListener("click", () => { ed.more[q.name] = !more; paintOutput(); });
+  return el("div", { class: "ned-ans-out" },
+    el("div", { class: "ned-qrow" },
+      el("span", { class: "mono ned-qn" }, q.name),
+      el("span", { class: "grow" }),
+      el("span", { class: "ref static kind-decide" }, picked),
+      names.length ? el("span", { class: "ned-sure " + (close ? "close" : "clear") }, el("span", { class: "ned-sdot", "aria-hidden": "true" }), close ? "close call" : "clear") : null,
+      typeof a.score === "number" ? el("span", { class: "ned-faint" }, "score " + a.score.toFixed(2)) : null),
+    shown.map((n) => el("div", { class: "ned-bar" + (n === picked ? " top" : "") },
+      el("span", { class: "mono ned-bn" }, n),
+      el("span", { class: "ned-track" }, el("span", { class: "ned-fill", css: { width: Math.max(1, Math.round(probs[n] * 100)) + "%" } })),
+      el("span", { class: "mono ned-bp" }, Math.round(probs[n] * 100) + "%"))),
+    toggle);
+}
+
+function outputBody(step, rec, tested) {
+  const parts = [];
+  if (tested && tested.wouldRun === false) parts.push(el("p", { class: "ned-warn" }, "Its condition is false for this data, so a run would have skipped it; it was tried anyway."));
+  if (rec.status === "skipped") parts.push(el("p", { class: "ned-plain" }, "Skipped in this run: its condition was false for that data."));
+  if (rec.error || rec.status === "failed") parts.push(el("p", { class: "ned-bad" }, tested ? "Test step failed" : "The step failed in this run"), el("pre", { class: "error" }, rec.error || "No reason was recorded."));
+  const out = rec.output;
+  if (ed.outMode === "json") {
+    parts.push(out !== undefined ? jsonView(out) : el("p", { class: "ned-plain" }, "It has no output."));
+  } else if (step.kind === "decide" && out && typeof out === "object" && (step.questions || []).length) {
+    for (const q of step.questions) if (out[q.name] && typeof out[q.name] === "object") parts.push(answerView(q, out[q.name]));
+  } else if (step.kind === "ai" && out && typeof out === "object" && !Array.isArray(out)) {
+    for (const k of Object.keys(out)) {
+      const v = out[k];
+      parts.push(el("div", { class: "ned-field" },
+        el("div", { class: "ned-qrow" }, el("span", { class: "ned-type", "aria-hidden": "true" }, typeTag(v)), el("span", { class: "mono ned-qn" }, k)),
+        typeof v === "string" ? el("p", { class: "ned-text" }, v) : jsonView(v)));
+    }
+  } else if (step.kind === "http") {
+    if (out && typeof out === "object" && out.status !== undefined) parts.push(el("div", { class: "ned-qrow" }, el("span", { class: "ned-type", "aria-hidden": "true" }, "#"), el("span", { class: "mono ned-qn" }, "status"), el("span", { class: "ref static kind-http" }, String(out.status))));
+    if (out && typeof out === "object" && Object.keys(out).some((k) => k !== "status")) {
+      const { status, ...others } = out;
+      parts.push(jsonView(others));
+    }
+  } else if (out !== undefined) parts.push(jsonView(out));
+  if (rec.detail) parts.push(el("p", { class: "ned-detail mono" }, rec.detail));
+  return parts;
+}
+
+function paintOutput() {
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const ran = runShown();
+  const t = stepTests[testKey()] || null;
+  const source = t && ed.outSource !== "run" ? "test" : "run";
+  const ctl = [];
+  if (t) ctl.push(seg("Show", [["run", "Last run"], ["test", "Test step"]], source, (v) => { ed.outSource = v; paintOutput(); }));
+  ctl.push(seg("Show output as", [["fields", step.kind === "decide" ? "Answers" : "Fields"], ["json", "JSON"]], ed.outMode, (v) => { ed.outMode = v; paintOutput(); }));
+  ed.outCol.seg.replaceChildren(...ctl);
+
+  const body = [];
+  if (source === "test") {
+    ed.outCol.meta.replaceChildren(t.state === "running" ? "Test step · running…" : "Test step · " + ago(t.at) + (t.state === "done" && t.result.step ? " · " + duration(t.result.step.ms || 0) : ""));
+    if (t.state === "running") body.push(el("p", { class: "ned-plain", role: "status" }, "Trying the step with the data of run ", el("span", { class: "mono" }, t.run), ". A model may be called."));
+    else if (t.state === "error") body.push(el("p", { class: "ned-bad" }, "Test step did not run"), el("pre", { class: "error" }, t.error));
+    else {
+      body.push(el("p", { class: "ned-plain" }, "With the data of run ", el("span", { class: "mono" }, t.run), ": the request and the earlier steps' outputs came from it."));
+      if (t.unsaved) body.push(el("p", { class: "ned-warn" }, "Tried as saved: your " + plural(t.unsaved, "unsaved change") + " " + (t.unsaved === 1 ? "was" : "were") + " not used."));
+      if (t.rev !== w.rev) body.push(el("p", { class: "ned-warn" }, "The workflow was saved after this test. Test again to try the new version."));
+      body.push(...outputBody(step, t.result.step || {}, t.result));
+    }
+  } else {
+    const rec = ran ? ran.steps.find((x) => x.id === step.id) : null;
+    if (!ran) {
+      ed.outCol.meta.replaceChildren("no run yet");
+      body.push(el("p", { class: "ned-plain" }, "Nothing has run yet, so there is no output to show. Run the workflow, or send it a request with the curl command under Trigger, then come back."));
+    } else if (!rec) {
+      ed.outCol.meta.replaceChildren("run ", el("span", { class: "mono" }, ran.run));
+      body.push(el("p", { class: "ned-plain" }, "This run has no record of the step: " + (ran.status === "failed" ? "an earlier step failed first." : ran.status === "running" ? "it has not got this far." : "it was recorded before the step was added.")));
+    } else {
+      ed.outCol.meta.replaceChildren((view.run ? "this run" : "last run") + (rec.status === "ok" || rec.ms ? " · " + duration(rec.ms || 0) : "") + (rec.status === "failed" ? " · failed" : ""));
+      body.push(...outputBody(step, rec, null));
+    }
+  }
+  const outs = step.outputs || [];
+  body.push(el("div", { class: "ned-later" },
+    el("span", { class: "ned-h" }, "Later steps can use"),
+    outs.length ? el("div", { class: "ned-pills" }, outs.map((n) => {
+      const p = refPill(step.id + "." + n, step.id, step.kind, n, "Click to copy ${" + step.id + "." + n + "}");
+      const copy = () => {
+        const text = "${" + step.id + "." + n + "}";
+        if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => setNote(ed.outCol, "Copied " + text + ". Paste it into a field of a later step."), () => setNote(ed.outCol, "Press Ctrl+C on " + text));
+        else setNote(ed.outCol, text + " is what a later step writes to use it.");
+      };
+      p.addEventListener("click", copy);
+      p.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); copy(); } });
+      return p;
+    })) : el("p", { class: "ned-plain" }, "It gives later steps nothing to read."),
+    ));
+  ed.outCol.body.replaceChildren(...body);
+  if (!ed.outCol.note.textContent) setNote(ed.outCol, "A key keeps this step's colour wherever it is used. Click one to copy it, then paste it into a later step.");
+}
+
+async function testStep() {
+  if (!ed) return;
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const key = testKey(), prev = stepTests[key];
+  if (prev && prev.state === "running") return;
+  const ran = runShown();
+  if (!ran) {
+    // The endpoint is not called: there is nothing to take data from.
+    stepTests[key] = { state: "error", run: "", at: Date.now(), rev: w.rev, unsaved: 0, error: "There is no run to take data from. Run the workflow first, or send it a request with the curl command under Trigger, then test the step." };
+    ed.outSource = "test";
+    paintHead();
+    paintOutput();
+    return;
+  }
+  const mine = ed;
+  stepTests[key] = { state: "running", run: ran.run, at: Date.now(), rev: w.rev, unsaved: draftCountFor(w.name, step.id) };
+  ed.outSource = "test";
+  setNote(ed.outCol, "");
+  paintHead();
+  paintOutput();
+  let r = null;
+  try { r = await request("POST", "/api/steps/test", { workflow: w.name, step: step.id, run: ran.run }); } catch (err) { r = null; }
+  const t = stepTests[key];
+  t.at = Date.now();
+  if (!r) { t.state = "error"; t.error = "The server cannot be reached."; }
+  else if (!r.ok) { t.state = "error"; t.error = r.body.error || "The server answered " + r.status + "."; }
+  else if (!r.body.step) { t.state = "error"; t.error = "The server's answer had no step in it."; }
+  else { t.state = "done"; t.result = r.body; if (r.body.from) t.run = r.body.from; }
+  if (ed === mine) {
+    paintHead();
+    paintOutput();
+    announce(t.state === "done" ? "Test step finished: " + (r.body.step.status || "") : "Test step did not run: " + t.error);
+  }
+}
+
+// ---- the footer: the page's save bar, here ----
+
+const wordsFor = (e, step) => {
+  if (e.group && e.group !== "Input") return step.kind === "decide" ? "the " + e.group + " question" : e.label.toLowerCase() + " of " + e.group;
+  if (e.group) return "the " + e.label + " input";
+  return { "Run only when": "the condition", Model: "the model", Input: "the input" }[e.label] || "the " + e.label.toLowerCase();
+};
+
+function buildFoot() {
+  const b = {};
+  b.slot = el("div", { class: "ned-noticeslot" });
+  b.diff = el("pre", { class: "diff ned-diff", tabindex: "0", "aria-label": "What saving would change", hidden: true });
+  b.dot = el("span", { class: "ned-dot", "aria-hidden": "true" });
+  b.count = el("span", { class: "ned-count2" });
+  b.what = el("span", { class: "ned-what" });
+  b.writes = el("span", { class: "ned-writes" });
+  b.link = el("button", { type: "button", class: "linkbtn ned-difflink", "aria-expanded": "false" }, "See the diff");
+  b.link.addEventListener("click", () => { ed.diff = !ed.diff; paintFoot(); });
+  b.discard = el("button", { type: "button", class: "btn ned-btn" }, "Discard");
+  b.save = el("button", { type: "button", class: "btn primary ned-btn" }, "Save", el("kbd", {}, isMac ? "⌘S" : "Ctrl+S"));
+  b.close = el("button", { type: "button", class: "btn ned-btn" }, "Close");
+  b.discard.addEventListener("click", () => discardCurrent());
+  b.discard.addEventListener("blur", () => { if (ed) disarm(ed.workflow); });
+  b.save.addEventListener("click", () => saveCurrent());
+  b.close.addEventListener("click", () => closeEditor());
+  b.row = el("div", { class: "ned-footrow" }, b.dot, b.count, b.what, b.writes, b.link, el("span", { class: "grow" }), b.close, b.discard, b.save);
+  b.root = el("footer", { class: "ned-foot" }, b.slot, b.diff, b.row);
+  return b;
+}
+
+function diffOf(w, step) {
+  const out = [];
+  const index = fieldIndex(w), d = draftsOf(w.name);
+  for (const [k, e] of Object.entries(d.fields)) {
+    const was = index.get(k);
+    out.push(["hunk", "@@ " + nodeName(e.node) + " · " + (e.group ? e.group + " · " : "") + e.label + " @@"]);
+    out.push(["del", "- " + (was ? was.field.value : "")], ["add", "+ " + e.value]);
+  }
+  for (const [stepId, text] of Object.entries(d.prompts)) {
+    const p = promptCache[w.name + "|" + stepId];
+    const lines = (s) => plural(s.split("\n").length, "line");
+    out.push(["hunk", "@@ " + stepId + " · prompt @@"]);
+    if (p && p.state === "ready") out.push(["del", "- " + lines(p.text) + " in " + p.file]);
+    out.push(["add", "+ " + lines(text) + (p && p.file ? " in " + p.file : "")]);
+  }
+  return out;
+}
+
+function paintFoot() {
+  if (!ed || !ed.foot) return;
+  const { w, step } = curOf();
+  if (!w || !step) return;
+  const b = ed.foot, st = uiOf(w.name), d = draftsOf(w.name);
+  const n = dirtyCount(w.name), nf = Object.keys(d.fields).length, np = Object.keys(d.prompts).length;
+  b.root.classList.toggle("dirty", n > 0);
+  if (b.shownNotice !== st.notice) {
+    b.shownNotice = st.notice;
+    b.slot.replaceChildren(...(st.notice ? [noticeView(st.notice, w)] : []));
+  }
+  if (n === 0 && !st.saving) {
+    b.dot.hidden = true;
+    b.count.textContent = "Nothing changed";
+    b.what.textContent = "";
+    b.writes.textContent = "";
+    b.link.hidden = true;
+    ed.diff = false;
+  } else {
+    const here = [...new Set([
+      ...Object.values(d.fields).filter((e) => e.node === step.id).map((e) => wordsFor(e, step)),
+      ...(d.prompts[step.id] !== undefined ? ["the prompt"] : [])])];
+    const elsewhere = n - draftCountFor(w.name, step.id);
+    b.dot.hidden = false;
+    b.count.textContent = st.saving ? "Saving…" : plural(n, "change");
+    b.what.textContent = [here.slice(0, 3).join(", ") + (here.length > 3 ? " and " + (here.length - 3) + " more" : ""), elsewhere ? plural(elsewhere, "change") + " in other steps" : ""].filter(Boolean).join(" and ");
+    const file = (w.path || "workflow.yaml").split("/").pop();
+    put(b.writes, "Saving writes ", [nf ? plural(nf, "line") + " of " : null, nf ? el("span", { class: "mono" }, file) : null, nf && np ? " and " : null, np ? plural(np, "prompt file") : null], " and puts it live.");
+    b.link.hidden = false;
+  }
+  b.link.setAttribute("aria-expanded", ed.diff ? "true" : "false");
+  b.link.textContent = ed.diff ? "Hide the diff" : "See the diff";
+  b.diff.hidden = !(ed.diff && n > 0);
+  if (!b.diff.hidden) b.diff.replaceChildren(...diffOf(w, step).map(([kind, line]) => el("span", { class: "dl " + kind }, line + "\n")));
+  b.close.hidden = n > 0;
+  b.discard.hidden = n === 0;
+  b.save.hidden = n === 0;
+  b.save.setAttribute("aria-disabled", st.saving || n === 0 ? "true" : "false");
+  b.discard.setAttribute("aria-disabled", st.saving || n === 0 ? "true" : "false");
+  b.discard.classList.toggle("armed", st.armed);
+  b.discard.textContent = st.armed ? "Discard " + plural(n, "change") + "?" : "Discard";
+}
+
+// A double-click on a node, or Enter on a focused one, opens its editor. A single click still selects.
+$("canvas").addEventListener("dblclick", (event) => {
+  const card = event.target.closest && event.target.closest(".card[data-node]");
+  if (card) openEditor(card.dataset.node);
+});
+$("canvas").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.repeat) return;
+  const card = event.target.closest && event.target.closest(".card[data-node]");
+  if (!card || !view || !canOpen(view.w, card.dataset.node)) return;
+  // Enter would also click the node, and so select or unselect it.
+  event.preventDefault();
+  openEditor(card.dataset.node);
+});
+
 window.addEventListener("hashchange", () => {
   readAddress();
   if (!selected.run) detail = null;
   refresh();
 });
 window.addEventListener("keydown", (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && event.target.closest && event.target.closest(".editform")) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && event.target.closest && event.target.closest(".editform, .nodeed")) {
     event.preventDefault();
     saveCurrent();
     return;
   }
   const typing = event.target.closest && event.target.closest("input, textarea, select, [contenteditable]");
-  if ((event.key === "a" || event.key === "A") && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && view && canAdd(view.w) && !selected.add && !selected.test && !selected.changes) {
+  if ((event.key === "a" || event.key === "A") && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && view && canAdd(view.w) && !selected.add && !selected.test && !selected.changes && !selected.edit) {
     event.preventDefault();
     openAdd();
     return;
   }
   if (event.key !== "Escape") return;
+  // The node editor is on top of everything else: Escape closes it, and what was typed stays as a draft.
+  if (selected.edit) { event.preventDefault(); closeEditor(); return; }
   // In a form field Escape only leaves the field.
   if (event.target.closest && event.target.closest(".editform")) { event.target.blur(); return; }
   if (selected.make) go({ make: false });
@@ -3922,6 +4890,7 @@ new ResizeObserver(() => {
   if (form) form.controls.forEach((c) => autosize(c.input));
 }).observe($("inspector"));
 
+buildRail();
 readAddress();
 refresh();
 setInterval(refresh, REFRESH_MS);
