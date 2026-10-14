@@ -21,7 +21,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # The newest patch release, which has the standard library's fixes.
+          go-version: "1.26.x"
+          check-latest: true
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l .)
@@ -32,6 +34,8 @@ jobs:
           fi
       - run: go vet ./...
       - run: go test ./...
+      - name: Look for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   workflows:
     name: Example workflows
@@ -44,7 +48,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # The newest patch release, which has the standard library's fixes.
+          go-version: "1.26.x"
+          check-latest: true
       - name: Build flowmaker
         run: go build -o "$RUNNER_TEMP/flowmaker" ./cmd/flowmaker
       - name: Validate workflows
