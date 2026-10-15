@@ -715,6 +715,10 @@ func TestBrowsersAskingForAnIconAreNotRefused(t *testing.T) {
 	if rec := get(f.srv, "/favicon.ico"); rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d", rec.Code)
 	}
+	rec := get(f.srv, "/favicon.svg")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/svg+xml" || !strings.HasPrefix(rec.Body.String(), "<svg") {
+		t.Errorf("favicon.svg: status = %d, type %q, body %.40s", rec.Code, rec.Header().Get("Content-Type"), rec.Body)
+	}
 	for _, line := range *f.logs {
 		if strings.HasPrefix(line, "refused") {
 			t.Errorf("logged %q", line)
