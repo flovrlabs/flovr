@@ -1,4 +1,9 @@
-# Flovr
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-dark.png">
+    <img src="docs/brand/logo-light.png" alt="Flovr" width="220">
+  </picture>
+</h1>
 
 Flovr (say *flow-ver*: flows, versioned) runs workflows that are written as YAML files and kept in git. A workflow is a list of steps: ask a model for structured output, ask a decision model typed questions, send an HTTP request, or use a component that someone wrote once for all workflows. The same file holds the workflow's tests, which call the models for real.
 

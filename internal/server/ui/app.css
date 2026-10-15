@@ -228,9 +228,8 @@ kbd {
   border-right: 1px solid var(--border);
 }
 .logo { display: block; margin-bottom: 10px; flex: none; }
-.lg-bg { fill: var(--brand); }
-.lg-ink { fill: var(--brand-ink); }
-.lg-line { fill: none; stroke: var(--brand-ink); stroke-width: 1.8; stroke-linecap: round; }
+.lg-bg { fill: var(--brand-btn); }
+.lg-line { fill: none; stroke: var(--brand-ink); stroke-width: 2.1; stroke-linecap: round; }
 .railbtn {
   display: grid;
   place-items: center;

@@ -374,9 +374,17 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 		return
 	case "/favicon.ico":
-		// Browsers ask for it on their own, without the page's key, and the
-		// page has none.
+		// Browsers ask for it on their own, without the page's key. The
+		// page names its icon below instead.
 		rw.WriteHeader(http.StatusNoContent)
+		return
+	case "/favicon.svg":
+		// The icon is the same for everyone, so it needs no key either.
+		h := rw.Header()
+		h.Set("Content-Security-Policy", "default-src 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cache-Control", "max-age=86400")
+		s.file(rw, "ui/favicon.svg", "image/svg+xml")
 		return
 	}
 	// Without a token, nothing but the address protects the server. Checking
