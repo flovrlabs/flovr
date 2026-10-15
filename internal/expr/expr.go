@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -114,9 +116,11 @@ func (e *Env) walk(v any, vars map[string]any, eval bool) (any, error) {
 	case string:
 		return e.template(v, vars, eval)
 	case map[string]any:
+		// Keys in order, so that the first of several problems is always
+		// the same one.
 		out := make(map[string]any, len(v))
-		for k, item := range v {
-			r, err := e.walk(item, vars, eval)
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			r, err := e.walk(v[k], vars, eval)
 			if err != nil {
 				return nil, err
 			}
@@ -252,8 +256,8 @@ func Placeholders(v any) []string {
 			}
 		}
 	case map[string]any:
-		for _, item := range v {
-			exprs = append(exprs, Placeholders(item)...)
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			exprs = append(exprs, Placeholders(v[k])...)
 		}
 	case []any:
 		for _, item := range v {

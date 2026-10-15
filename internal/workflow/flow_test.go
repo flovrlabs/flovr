@@ -130,7 +130,7 @@ func TestFlowProblems(t *testing.T) {
 		}},
 		{"no steps", "steps:\n  - id: draft\n    ai: {model: anthropic/m, prompt: prompt.md, input: \"${input.ticket}\", output: schema.json}\n  - id: send\n    when: draft.summary != \"\"\n    use: ../notify\n    with:\n      url: ${input.url}\n      text: ${draft.summary}\n      urgent: false\n", "steps: []\n", []string{
 			`6: component "reply": steps needs at least one step`,
-			`7: component "reply": output: ${draft.summary}: undeclared reference to 'draft'`,
+			`7: component "reply": output: ${send != null}: undeclared reference to 'send'`,
 			`14: test "sends what it drafts": expect.send: undeclared reference to 'send'`,
 			`15: test "sends what it drafts": expect.draft.summary != "": undeclared reference to 'draft'`,
 		}},
