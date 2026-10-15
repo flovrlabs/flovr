@@ -173,3 +173,21 @@ func TestAddressPrintedIsOneABrowserCanOpen(t *testing.T) {
 		}
 	}
 }
+
+// The answers recorded for the examples must be those their files ask for now,
+// so that the examples can be tried without a key.
+func TestExamplesPassWithRecordedAnswers(t *testing.T) {
+	examples, _ := filepath.Glob(filepath.Join("..", "..", "examples", "*", "workflow.yaml"))
+	components, _ := filepath.Glob(filepath.Join("..", "..", "examples", "*", "components", "*", "component.yaml"))
+	if len(examples) == 0 || len(components) == 0 {
+		t.Fatal("no examples found")
+	}
+	for _, target := range append(examples, components...) {
+		cmd := testCmd()
+		cmd.SilenceUsage = true
+		cmd.SetArgs([]string{"--replay", target})
+		if err := cmd.Execute(); err != nil {
+			t.Errorf("%s: %v", target, err)
+		}
+	}
+}

@@ -73,6 +73,17 @@ jobs:
             "$RUNNER_TEMP/flowmaker" test "$file" || failed=1
           done
           exit $failed
-      - name: Report skipped tests
+      # Without the key the tests get the answers recorded in answers.jsonl,
+      # which checks the workflows but not what the models answer.
+      - name: Test workflows with recorded answers
         if: env.OPENROUTER_API_KEY == ''
-        run: echo "::notice::Workflow tests were skipped because the OPENROUTER_API_KEY secret is not available to this run."
+        run: |
+          echo "::notice::The OPENROUTER_API_KEY secret is not available to this run, so the workflow tests replay recorded answers."
+          failed=0
+          for dir in examples/*/; do
+            "$RUNNER_TEMP/flowmaker" test --replay "$dir" || failed=1
+          done
+          for file in $(find examples -name component.yaml); do
+            "$RUNNER_TEMP/flowmaker" test --replay "$file" || failed=1
+          done
+          exit $failed

@@ -19,7 +19,27 @@ Flowmaker is new. This is its first release, and the file format may still chang
 
 ## Install
 
-Download the archive for your system from [Releases](https://github.com/simonyosb/flowmaker/releases) and put `flowmaker` somewhere on your PATH. Or build it with Go 1.26 or later:
+On Linux or macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/simonyosb/flowmaker/main/install.sh | sh
+```
+
+[install.sh](install.sh) downloads the archive of the latest release for your system, checks it against the release's checksums, and puts `flowmaker` in `~/.local/bin`. `FLOWMAKER_VERSION=v0.1.0` installs another release, and `FLOWMAKER_INSTALL_DIR` puts it in another folder.
+
+With Homebrew:
+
+```bash
+brew install simonyosb/tap/flowmaker
+```
+
+With Docker, where the examples come with the image and run without a key:
+
+```bash
+docker run --rm ghcr.io/simonyosb/flowmaker test /examples/triage-ticket --replay
+```
+
+Or download the archive for your system from [Releases](https://github.com/simonyosb/flowmaker/releases), the zip on Windows, and put `flowmaker` somewhere on your PATH. Or build it with Go 1.26 or later:
 
 ```bash
 go install github.com/simonyosb/flowmaker/cmd/flowmaker@latest
@@ -27,13 +47,31 @@ go install github.com/simonyosb/flowmaker/cmd/flowmaker@latest
 
 ## Try it
 
-The examples are in this repository, and they need an [OpenRouter](https://openrouter.ai) key.
+The examples are in this repository.
 
 ```bash
 git clone https://github.com/simonyosb/flowmaker && cd flowmaker
 ```
 
-Put the key in a file named `.env` in the folder you run flowmaker from. The file is ignored by git. A `.env` file cannot say where keys are sent: it sets `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` only if it gives that provider's key too, and never a proxy.
+### Without a key
+
+Each example keeps, in `answers.jsonl` next to its workflow, what the models answered when its tests were last recorded. With `--replay`, flowmaker gives the steps those answers and calls no model, so nothing is needed but the binary, and nothing is paid.
+
+```bash
+flowmaker test examples/triage-ticket --replay
+```
+
+Serve both examples and open the page address the server prints, which ends with `?key=`. Run their tests from the page, or open a step to see what it read and gave. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
+
+```bash
+PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flowmaker serve examples --edit --replay
+```
+
+An answer is replayed only for exactly the request it was given for. Change a prompt, an input or a fixture, and that step has no answer until the tests are recorded again, which takes a key.
+
+### With a key
+
+The models are called for real with an [OpenRouter](https://openrouter.ai) key. Put the key in a file named `.env` in the folder you run flowmaker from. The file is ignored by git. A `.env` file cannot say where keys are sent: it sets `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` only if it gives that provider's key too, and never a proxy.
 
 ```
 OPENROUTER_API_KEY=...
@@ -49,7 +87,7 @@ flowmaker validate examples/triage-ticket
 flowmaker test examples/triage-ticket
 ```
 
-Serve both examples and open the page address the server prints, which ends with `?key=`. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
+Serve both examples as above, without `--replay`, and the page's tests call the models too.
 
 ```bash
 PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flowmaker serve examples --edit
@@ -167,6 +205,8 @@ tests:
 A key under `expect` is either a step's id, expecting it to be `called` or `skipped`, or an expression whose value is compared with what is written, as in `classify.priority.probabilities.high < 0.3: true`. A workflow with `respond` can expect things of its answer as `response.status` and `response.body`.
 
 In a test, `ai` and `decide` steps call their models for real, because what the model answers is the thing being tested. `http` steps are not sent, and environment variables they would need do not have to be set.
+
+`flowmaker test --record` keeps what the models answered in `answers.jsonl` next to the workflow, if every test passed. `flowmaker test --replay` then runs the tests with those answers instead of calling the models. A replayed test checks the workflow, its expressions, which steps run and what it answers, but not the models; it needs no key and costs nothing. Commit the file with the workflow, so that others and CI can run the tests without a key. Answers are recorded only from tests, never from the runs of a server.
 
 ## Components
 
@@ -334,9 +374,17 @@ FLOWMAKER_TOKEN=... flowmaker serve workflows --addr 0.0.0.0:8080
 - Every run records the git commit of the workflow files it ran.
 - `/healthz` answers 200 while the server is up.
 
+The image serves the folder mounted at `/work` on port 8080:
+
+```bash
+docker run -p 8080:8080 -v "$PWD/workflows:/work" -e FLOWMAKER_TOKEN -e FLOWMAKER_PAGE_KEY -e OPENROUTER_API_KEY ghcr.io/simonyosb/flowmaker
+```
+
+It runs as a user of its own, uid 10001, and writes its runs to `/work/.flowmaker`, so that user must be able to write there; `--user "$(id -u):$(id -g)"` runs it as you instead. Give `FLOWMAKER_PAGE_KEY`, since a key the server made itself is lost with the container.
+
 ## In CI
 
-[.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. The same two commands work for your own workflows:
+[.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. Without the secret, as in pull requests from forks, it runs them with `--replay`. The same commands work for your own workflows:
 
 ```bash
 flowmaker validate path/to/workflow

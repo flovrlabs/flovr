@@ -31,3 +31,29 @@ checksum:
 changelog:
   use: github
   sort: asc
+
+# brew install simonyosb/tap/flowmaker. The cask is written to the
+# simonyosb/homebrew-tap repository, with a token that may write to it in the
+# HOMEBREW_TAP_GITHUB_TOKEN secret; without that secret it is not published.
+homebrew_casks:
+  - name: flowmaker
+    binaries: [flowmaker]
+    homepage: https://github.com/simonyosb/flowmaker
+    description: AI workflows as YAML files in git, with tests that call the models
+    license: Apache-2.0
+    repository:
+      owner: simonyosb
+      name: homebrew-tap
+      token: '{{ envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}'
+    commit_author:
+      name: flowmaker releases
+      email: noreply@github.com
+    skip_upload: '{{ if envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}false{{ else }}true{{ end }}'
+    # The binary is not signed by Apple, so macOS would refuse to open it
+    # once Homebrew has downloaded it.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/flowmaker"]
+          end

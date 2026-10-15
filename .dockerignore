@@ -1,0 +1,14 @@
+# Only what the image is built from goes to the builder, so that keys in .env
+# and the runs in .flowmaker never reach an image.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!examples/
+!LICENSE
+**/.env
+**/.flowmaker
+**/.DS_Store
+**/*_test.go
+**/testdata
