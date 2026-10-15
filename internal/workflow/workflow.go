@@ -18,8 +18,8 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"go.yaml.in/yaml/v3"
 
-	"github.com/simonyosb/flowmaker/internal/ai"
-	"github.com/simonyosb/flowmaker/internal/expr"
+	"github.com/flovrlabs/flovr/internal/ai"
+	"github.com/flovrlabs/flovr/internal/expr"
 )
 
 // What a test can expect of a whole step, as in `escalate: skipped`.

@@ -1,48 +1,48 @@
-# Flowmaker
+# Flovr
 
-Flowmaker runs workflows that are written as YAML files and kept in git. A workflow is a list of steps: ask a model for structured output, ask a decision model typed questions, send an HTTP request, or use a component that someone wrote once for all workflows. The same file holds the workflow's tests, which call the models for real.
+Flovr (say *flow-ver*: flows, versioned) runs workflows that are written as YAML files and kept in git. A workflow is a list of steps: ask a model for structured output, ask a decision model typed questions, send an HTTP request, or use a component that someone wrote once for all workflows. The same file holds the workflow's tests, which call the models for real.
 
-Flowmaker is in beta: the format of the files may still change before 1.0. [ROADMAP.md](ROADMAP.md) says what is done, what is being built and what comes next.
+Flovr is in beta: the format of the files may still change before 1.0. [ROADMAP.md](ROADMAP.md) says what is done, what is being built and what comes next.
 
 One binary does everything:
 
 | Command | What it does |
 |---|---|
-| `flowmaker validate` | Checks a workflow without running it |
-| `flowmaker test` | Runs the tests in the workflow file |
-| `flowmaker run` | Runs the workflow once, for real |
-| `flowmaker serve` | Stays running, runs workflows when a request or a schedule starts them, and serves a page that shows them |
+| `flovr validate` | Checks a workflow without running it |
+| `flovr test` | Runs the tests in the workflow file |
+| `flovr run` | Runs the workflow once, for real |
+| `flovr serve` | Stays running, runs workflows when a request or a schedule starts them, and serves a page that shows them |
 
-With `flowmaker serve --edit` the page can also change the workflow files. Every change it makes is a small diff in the same YAML file.
+With `flovr serve --edit` the page can also change the workflow files. Every change it makes is a small diff in the same YAML file.
 
-Flowmaker is new. This is its first release, and the file format may still change before 1.0.
+Flovr is new. This is its first release, and the file format may still change before 1.0.
 
 ## Install
 
 On Linux or macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/simonyosb/flowmaker/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/flovrlabs/flovr/main/install.sh | sh
 ```
 
-[install.sh](install.sh) downloads the archive of the latest release for your system, checks it against the release's checksums, and puts `flowmaker` in `~/.local/bin`. `FLOWMAKER_VERSION=v0.1.0` installs another release, and `FLOWMAKER_INSTALL_DIR` puts it in another folder.
+[install.sh](install.sh) downloads the archive of the latest release for your system, checks it against the release's checksums, and puts `flovr` in `~/.local/bin`. `FLOVR_VERSION=v0.1.0` installs another release, and `FLOVR_INSTALL_DIR` puts it in another folder.
 
 With Homebrew:
 
 ```bash
-brew install simonyosb/tap/flowmaker
+brew install flovrlabs/tap/flovr
 ```
 
 With Docker, where the examples come with the image and run without a key:
 
 ```bash
-docker run --rm ghcr.io/simonyosb/flowmaker test /examples/triage-ticket --replay
+docker run --rm ghcr.io/flovrlabs/flovr test /examples/triage-ticket --replay
 ```
 
-Or download the archive for your system from [Releases](https://github.com/simonyosb/flowmaker/releases), the zip on Windows, and put `flowmaker` somewhere on your PATH. Or build it with Go 1.26 or later:
+Or download the archive for your system from [Releases](https://github.com/flovrlabs/flovr/releases), the zip on Windows, and put `flovr` somewhere on your PATH. Or build it with Go 1.26 or later:
 
 ```bash
-go install github.com/simonyosb/flowmaker/cmd/flowmaker@latest
+go install github.com/flovrlabs/flovr/cmd/flovr@latest
 ```
 
 ## Try it
@@ -50,28 +50,28 @@ go install github.com/simonyosb/flowmaker/cmd/flowmaker@latest
 The examples are in this repository.
 
 ```bash
-git clone https://github.com/simonyosb/flowmaker && cd flowmaker
+git clone https://github.com/flovrlabs/flovr && cd flovr
 ```
 
 ### Without a key
 
-Each example keeps, in `answers.jsonl` next to its workflow, what the models answered when its tests were last recorded. With `--replay`, flowmaker gives the steps those answers and calls no model, so nothing is needed but the binary, and nothing is paid.
+Each example keeps, in `answers.jsonl` next to its workflow, what the models answered when its tests were last recorded. With `--replay`, flovr gives the steps those answers and calls no model, so nothing is needed but the binary, and nothing is paid.
 
 ```bash
-flowmaker test examples/triage-ticket --replay
+flovr test examples/triage-ticket --replay
 ```
 
 Serve both examples and open the page address the server prints, which ends with `?key=`. Run their tests from the page, or open a step to see what it read and gave. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
 
 ```bash
-PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flowmaker serve examples --edit --replay
+PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flovr serve examples --edit --replay
 ```
 
 An answer is replayed only for exactly the request it was given for. Change a prompt, an input or a fixture, and that step has no answer until the tests are recorded again, which takes a key.
 
 ### With a key
 
-The models are called for real with an [OpenRouter](https://openrouter.ai) key. Put the key in a file named `.env` in the folder you run flowmaker from. The file is ignored by git. A `.env` file cannot say where keys are sent: it sets `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` only if it gives that provider's key too, and never a proxy.
+The models are called for real with an [OpenRouter](https://openrouter.ai) key. Put the key in a file named `.env` in the folder you run flovr from. The file is ignored by git. A `.env` file cannot say where keys are sent: it sets `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` only if it gives that provider's key too, and never a proxy.
 
 ```
 OPENROUTER_API_KEY=...
@@ -80,17 +80,17 @@ OPENROUTER_API_KEY=...
 Check an example, then run its tests. The tests call the models, which costs a little; they send none of the workflow's HTTP requests.
 
 ```bash
-flowmaker validate examples/triage-ticket
+flovr validate examples/triage-ticket
 ```
 
 ```bash
-flowmaker test examples/triage-ticket
+flovr test examples/triage-ticket
 ```
 
 Serve both examples as above, without `--replay`, and the page's tests call the models too.
 
 ```bash
-PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flowmaker serve examples --edit
+PAGER_URL=http://127.0.0.1:9/pager BILLING_URL=http://127.0.0.1:9/billing flovr serve examples --edit
 ```
 
 ## A workflow
@@ -143,7 +143,7 @@ Paths in the file, such as `schemas/comment.json`, are relative to the workflow'
 |---|---|---|
 | `webhook: /path` | a POST request with a JSON body arrives at that path | `trigger.body` |
 | `cron: "0 3 * * *"` | the schedule fires (five fields: minute, hour, day, month, weekday) | `trigger.time` |
-| `manual: true` | you run it with `flowmaker run` | what the fixture holds |
+| `manual: true` | you run it with `flovr run` | what the fixture holds |
 
 A webhook trigger can name a JSON Schema as `input`. A request whose body does not match it is answered with status 400 and a list of what is wrong, and nothing runs.
 
@@ -206,7 +206,7 @@ A key under `expect` is either a step's id, expecting it to be `called` or `skip
 
 In a test, `ai` and `decide` steps call their models for real, because what the model answers is the thing being tested. `http` steps are not sent, and environment variables they would need do not have to be set.
 
-`flowmaker test --record` keeps what the models answered in `answers.jsonl` next to the workflow, if every test passed. `flowmaker test --replay` then runs the tests with those answers instead of calling the models. A replayed test checks the workflow, its expressions, which steps run and what it answers, but not the models; it needs no key and costs nothing. Commit the file with the workflow, so that others and CI can run the tests without a key. Answers are recorded only from tests, never from the runs of a server.
+`flovr test --record` keeps what the models answered in `answers.jsonl` next to the workflow, if every test passed. `flovr test --replay` then runs the tests with those answers instead of calling the models. A replayed test checks the workflow, its expressions, which steps run and what it answers, but not the models; it needs no key and costs nothing. Commit the file with the workflow, so that others and CI can run the tests without a key. Answers are recorded only from tests, never from the runs of a server.
 
 ## Components
 
@@ -272,7 +272,7 @@ output:
 A component can carry tests of its own. Each gives it `input`, written out or as the path of a JSON file, and expects things of `output`. For a component made of steps, a test can also expect a step to be `called` or `skipped`.
 
 ```bash
-flowmaker test examples/triage-ticket/components/reply
+flovr test examples/triage-ticket/components/reply
 ```
 
 ### Components from git
@@ -281,19 +281,19 @@ A step can use a component kept in a git repository, named by host, owner and re
 
 ```yaml
 - id: tell
-  use: github.com/acme/flowmaker-services/slack-notify@v1.2
+  use: github.com/acme/flovr-services/slack-notify@v1.2
   with:
     webhook: ${env.SLACK_WEBHOOK}
     text: ${summarize.text}
 ```
 
-`flowmaker get` fetches what the workflows in a folder take from git, and writes the commit each tag or branch is at in `flowmaker.lock` in that folder:
+`flovr get` fetches what the workflows in a folder take from git, and writes the commit each tag or branch is at in `flovr.lock` in that folder:
 
 ```bash
-flowmaker get workflows
+flovr get workflows
 ```
 
-Keep `flowmaker.lock` in git with the workflows. Running, testing and serving never go to the network: they take each component at the commit the lock file pins, from a cache on the machine (`FLOWMAKER_CACHE` sets where), and say to run `flowmaker get` when it is not there. A tag that moves on is not followed until `flowmaker get -u`. A deploy runs `flowmaker get` before it serves.
+Keep `flovr.lock` in git with the workflows. Running, testing and serving never go to the network: they take each component at the commit the lock file pins, from a cache on the machine (`FLOVR_CACHE` sets where), and say to run `flovr get` when it is not there. A tag that moves on is not followed until `flovr get -u`. A deploy runs `flovr get` before it serves.
 
 What comes from git is held to more than what you write yourself:
 
@@ -306,13 +306,13 @@ It can still send what it is given to the URLs it names, and the models it asks 
 
 ### The market
 
-The market is a list of components in git that anyone may use. The page lists them beside your own, and adding a step from one takes it from git and pins it in `flowmaker.lock`, as `flowmaker get` does. The list is one JSON file, kept anywhere it can be read over https, or a file on the machine; `flowmaker serve --edit --market <address>` says where, and [market/index.json](market/index.json) in this repository is the one read unless told otherwise:
+The market is a list of components in git that anyone may use. The page lists them beside your own, and adding a step from one takes it from git and pins it in `flovr.lock`, as `flovr get` does. The list is one JSON file, kept anywhere it can be read over https, or a file on the machine; `flovr serve --edit --market <address>` says where, and [market/index.json](market/index.json) in this repository is the one read unless told otherwise:
 
 ```json
 {"services": [{
   "name": "notify",
   "description": "Tells a team about an urgent ticket by sending it a summary.",
-  "use": "github.com/simonyosb/flowmaker/examples/triage-ticket/components/notify@main",
+  "use": "github.com/flovrlabs/flovr/examples/triage-ticket/components/notify@main",
   "kind": "http",
   "inputs": [{"name": "url", "type": "string"}, {"name": "summary", "type": "string"}, {"name": "category", "type": "string"}],
   "tags": ["alert", "webhook"]
@@ -323,7 +323,7 @@ What the list says is only what it offers: a component is what its repository ho
 
 ## What validate catches
 
-`flowmaker validate` reads the workflow, the components it uses and the files they name, and reports each problem with its line. Among them:
+`flovr validate` reads the workflow, the components it uses and the files they name, and reports each problem with its line. Among them:
 
 - a field that does not exist, a step without work, an id used twice
 - a prompt, schema or fixture file that is missing, or a schema that is not valid
@@ -333,11 +333,11 @@ What the list says is only what it offers: a component is what its repository ho
 - a component that would end up using itself
 - a test fixture that the trigger's `input` schema would refuse
 
-`flowmaker serve` checks the same things before it starts, and also that every environment variable the workflows read is set.
+`flovr serve` checks the same things before it starts, and also that every environment variable the workflows read is set.
 
 ## The page
 
-`flowmaker serve` serves a page and prints its address, which carries the page's key as `?key=...`. The browser keeps the key once the page has been opened with it, and nothing reaches the page or its API without it, not even another program on the same machine. The key is kept for you outside the project, so it stays the same across restarts; `FLOWMAKER_PAGE_KEY` sets it instead.
+`flovr serve` serves a page and prints its address, which carries the page's key as `?key=...`. The browser keeps the key once the page has been opened with it, and nothing reaches the page or its API without it, not even another program on the same machine. The key is kept for you outside the project, so it stays the same across restarts; `FLOVR_PAGE_KEY` sets it instead.
 
 The page opens on a list of the workflows and one of the services, the components that workflows use. A workflow is drawn from left to right, with one shape and colour per kind of step, and has its runs and its tests. Picking a run colours the drawing by what each step did; a step opens to show what it read and put out, or why it failed.
 
@@ -349,7 +349,7 @@ With `--edit` the page becomes a place to work on the workflows:
 - Add a step that asks a model to write or to decide, sends an HTTP request, or uses a component; or remove a step. The components on offer are those in the folders the server was started with, so a workflow can use a component that lives in another workflow's folder.
 - Open a component, which is drawn like a workflow with what it takes at the top and what it gives back at the bottom, and change its values the same way. The change is refused if it would break a workflow that uses the component.
 - Make a new service: a name, what it takes, and one piece of work. It is written as `components/<name>/component.yaml` in the folder the server was started with, and every workflow can use it at once.
-- Browse the market and add a step from one of its services: it is taken from git and pinned in `flowmaker.lock`.
+- Browse the market and add a step from one of its services: it is taken from git and pinned in `flovr.lock`.
 - Run the tests of a workflow or of a component and see, for each, which expectations were met.
 - Keep a run that went right as a test. Its request becomes the fixture, saved as a new file in the workflow's folder, and what the run did becomes what to expect: which steps ran, and what a model decided. Text a model wrote is left out unless you ask for it, since it reads differently each time. A test can also be written from nothing, or removed.
 - See under **Changes** what git says has changed since the last commit.
@@ -361,37 +361,37 @@ Nothing is written unless the result is a workflow the server can go on serving;
 ## Serving for real
 
 ```bash
-FLOWMAKER_TOKEN=... flowmaker serve workflows --addr 0.0.0.0:8080
+FLOVR_TOKEN=... flovr serve workflows --addr 0.0.0.0:8080
 ```
 
-- Without `FLOWMAKER_TOKEN` the server listens only on this machine. With it, every webhook request must carry `Authorization: Bearer <token>`. The token must be at least 32 characters; `openssl rand -hex 32` makes one.
-- The token is for whatever sends the webhooks, so it starts workflows and does nothing else. The page needs its own key, as above; set `FLOWMAKER_PAGE_KEY` on a server so you know it.
+- Without `FLOVR_TOKEN` the server listens only on this machine. With it, every webhook request must carry `Authorization: Bearer <token>`. The token must be at least 32 characters; `openssl rand -hex 32` makes one.
+- The token is for whatever sends the webhooks, so it starts workflows and does nothing else. The page needs its own key, as above; set `FLOVR_PAGE_KEY` on a server so you know it.
 - Serve over TLS with `--tls-cert` and `--tls-key`, or behind a proxy that adds it, so that the token and the key do not travel in the clear.
 - A webhook request must be sent with `Content-Type: application/json`. Its body can be up to 1 MB.
 - At most 16 runs started by webhooks go at once, and a request beyond that is answered 429; `--max-runs` changes the number. A run that takes longer than five minutes is stopped.
 - An `http` step follows a redirect only to the same host, and never from https to http, so a key in a header does not reach another server. It can reach any address the server can, so do not build its URL from what a request or a model says.
-- Finished runs are appended to `.flowmaker/runs.jsonl`, readable by its owner only, and read back on start. They hold request bodies and step outputs; the folder gets a `.gitignore` that keeps them out of git. `--history` puts the file elsewhere.
+- Finished runs are appended to `.flovr/runs.jsonl`, readable by its owner only, and read back on start. They hold request bodies and step outputs; the folder gets a `.gitignore` that keeps them out of git. `--history` puts the file elsewhere.
 - Every run records the git commit of the workflow files it ran.
 - `/healthz` answers 200 while the server is up.
 
 The image serves the folder mounted at `/work` on port 8080:
 
 ```bash
-docker run -p 8080:8080 -v "$PWD/workflows:/work" -e FLOWMAKER_TOKEN -e FLOWMAKER_PAGE_KEY -e OPENROUTER_API_KEY ghcr.io/simonyosb/flowmaker
+docker run -p 8080:8080 -v "$PWD/workflows:/work" -e FLOVR_TOKEN -e FLOVR_PAGE_KEY -e OPENROUTER_API_KEY ghcr.io/flovrlabs/flovr
 ```
 
-It runs as a user of its own, uid 10001, and writes its runs to `/work/.flowmaker`, so that user must be able to write there; `--user "$(id -u):$(id -g)"` runs it as you instead. Give `FLOWMAKER_PAGE_KEY`, since a key the server made itself is lost with the container.
+It runs as a user of its own, uid 10001, and writes its runs to `/work/.flovr`, so that user must be able to write there; `--user "$(id -u):$(id -g)"` runs it as you instead. Give `FLOVR_PAGE_KEY`, since a key the server made itself is lost with the container.
 
 ## In CI
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. Without the secret, as in pull requests from forks, it runs them with `--replay`. The same commands work for your own workflows:
 
 ```bash
-flowmaker validate path/to/workflow
+flovr validate path/to/workflow
 ```
 
 ```bash
-flowmaker test path/to/workflow
+flovr test path/to/workflow
 ```
 
 Both exit with a status other than 0 when something is wrong, and print what.

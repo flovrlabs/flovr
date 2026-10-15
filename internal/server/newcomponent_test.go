@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 func TestServiceIsMadeFromThePage(t *testing.T) {

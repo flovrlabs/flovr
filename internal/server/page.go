@@ -10,8 +10,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/simonyosb/flowmaker/internal/ai"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/ai"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 //go:embed ui
@@ -51,10 +51,10 @@ func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
 			h.Set("Content-Type", "text/plain; charset=utf-8")
 			h.Set("Cache-Control", "no-store")
 			rw.WriteHeader(http.StatusUnauthorized)
-			io.WriteString(rw, "This page needs its key. Open the address flowmaker printed when it started: it ends with ?key=\n")
+			io.WriteString(rw, "This page needs its key. Open the address flovr printed when it started: it ends with ?key=\n")
 			return
 		}
-		reply(rw, http.StatusUnauthorized, map[string]string{"error": "missing or wrong page key: open the address flowmaker printed when it started"})
+		reply(rw, http.StatusUnauthorized, map[string]string{"error": "missing or wrong page key: open the address flovr printed when it started"})
 		return
 	}
 	// Run records show text from outside: tickets, model answers. The page
@@ -94,7 +94,7 @@ func (s *Server) page(rw http.ResponseWriter, r *http.Request) {
 }
 
 // keyCookie is the cookie a browser keeps the page key in.
-const keyCookie = "flowmaker_key"
+const keyCookie = "flovr_key"
 
 // mayView reports whether the request may see the page and use its API: it
 // carries the page key, as the cookie or as a bearer token.

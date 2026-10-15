@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/simonyosb/flowmaker/internal/expr"
+	"github.com/flovrlabs/flovr/internal/expr"
 )
 
 // shape is what is known of the fields of a value that expressions read. A

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simonyosb/flowmaker/internal/fetch"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/fetch"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 func TestMarketIsReadAndChecked(t *testing.T) {
@@ -73,7 +73,7 @@ func marketRepo(t *testing.T) string {
 	fetch.RepoURL = func(workflow.Remote) string { return repo }
 	fetch.AllowFile = true
 	t.Cleanup(func() { fetch.RepoURL = func(r workflow.Remote) string { return r.URL() }; fetch.AllowFile = false })
-	t.Setenv("FLOWMAKER_CACHE", t.TempDir())
+	t.Setenv("FLOVR_CACHE", t.TempDir())
 	return repo
 }
 
@@ -133,7 +133,7 @@ func TestOwnMarketIsValid(t *testing.T) {
 	}
 	for _, e := range view.Services {
 		r, _ := workflow.ParseRemote(e.Use)
-		if _, err := os.Stat(filepath.Join("../..", filepath.FromSlash(r.Dir), workflow.ComponentFile)); r.Repo == "flowmaker" && err != nil {
+		if _, err := os.Stat(filepath.Join("../..", filepath.FromSlash(r.Dir), workflow.ComponentFile)); r.Repo == "flovr" && err != nil {
 			t.Errorf("%s names a component this repository does not hold: %v", e.Use, err)
 		}
 	}

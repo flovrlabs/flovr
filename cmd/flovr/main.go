@@ -1,4 +1,4 @@
-// Command flowmaker validates and runs AI workflows defined as YAML files.
+// Command flovr validates and runs AI workflows defined as YAML files.
 package main
 
 import (
@@ -25,15 +25,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/simonyosb/flowmaker/internal/ai"
-	"github.com/simonyosb/flowmaker/internal/engine"
-	"github.com/simonyosb/flowmaker/internal/server"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/ai"
+	"github.com/flovrlabs/flovr/internal/engine"
+	"github.com/flovrlabs/flovr/internal/server"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 func main() {
 	root := &cobra.Command{
-		Use:   "flowmaker",
+		Use:   "flovr",
 		Short: "Validate and run AI workflows defined as YAML files",
 		Long: "Validate and run AI workflows defined as YAML files.\n\n" +
 			"Model API keys come from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY or\n" +
@@ -73,10 +73,10 @@ func currentVersion() string {
 func versionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print the version of flowmaker",
+		Short: "Print the version of flovr",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("flowmaker " + currentVersion())
+			fmt.Println("flovr " + currentVersion())
 		},
 	}
 }
@@ -163,14 +163,14 @@ func httpClient() *http.Client {
 	}
 }
 
-// pageKey is the key the page and its API need: FLOWMAKER_PAGE_KEY if it is
+// pageKey is the key the page and its API need: FLOVR_PAGE_KEY if it is
 // set, else one kept for this user outside any project, so that a browser
 // that has it keeps working across restarts. told says whether the key
 // came from the environment, in which case it is not printed.
 func pageKey() (key string, told bool, err error) {
-	if key := os.Getenv("FLOWMAKER_PAGE_KEY"); key != "" {
+	if key := os.Getenv("FLOVR_PAGE_KEY"); key != "" {
 		if len(key) < minSecret {
-			return "", false, fmt.Errorf("FLOWMAKER_PAGE_KEY must be at least %d characters; make one with: openssl rand -hex 32", minSecret)
+			return "", false, fmt.Errorf("FLOVR_PAGE_KEY must be at least %d characters; make one with: openssl rand -hex 32", minSecret)
 		}
 		return key, true, nil
 	}
@@ -180,7 +180,7 @@ func pageKey() (key string, told bool, err error) {
 		// Nowhere to keep it, so the key lasts as long as the server.
 		return fresh(), false, nil
 	}
-	path := filepath.Join(dir, "flowmaker", "page-key")
+	path := filepath.Join(dir, "flovr", "page-key")
 	if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) >= minSecret {
 		return strings.TrimSpace(string(data)), false, nil
 	}
@@ -256,14 +256,14 @@ func runCmd() *cobra.Command {
 		Short: "Run a workflow once",
 		Long: "Run a workflow once, for real: ai steps call the model and http steps send\n" +
 			"their requests. With --replay, ai and decide steps get the answers that\n" +
-			"flowmaker test --record kept instead, and no model is called.\n\n" +
+			"flovr test --record kept instead, and no model is called.\n\n" +
 			"The argument is a workflow file or a directory containing workflow.yaml\n" +
 			"(default: the current directory).",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if workflow.IsComponent(target(args)) {
 				return errors.New("run takes a workflow. A component runs as part of the workflows that use it; " +
-					"to try it on its own, give it tests and use: flowmaker test " + target(args))
+					"to try it on its own, give it tests and use: flovr test " + target(args))
 			}
 			w, err := workflow.Load(target(args))
 			if err != nil {
@@ -298,7 +298,7 @@ func runCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&fixture, "fixture", "", "JSON file to use as the trigger event; "+
 		"looked up from the current directory, then from the workflow's")
-	cmd.Flags().BoolVar(&replay, "replay", false, "answer ai and decide steps with the answers recorded by flowmaker test --record; no key is needed")
+	cmd.Flags().BoolVar(&replay, "replay", false, "answer ai and decide steps with the answers recorded by flovr test --record; no key is needed")
 	return cmd
 }
 
@@ -441,20 +441,20 @@ func serveCmd() *cobra.Command {
 			"input, a body that does not match it is refused with 400 and nothing runs.\n\n" +
 			"Opening the address it prints, which carries the page's key, in a browser shows\n" +
 			"the workflows and their recent runs. The key is kept for you outside the project,\n" +
-			"so a browser that has opened it once keeps working; FLOWMAKER_PAGE_KEY sets it.\n\n" +
+			"so a browser that has opened it once keeps working; FLOVR_PAGE_KEY sets it.\n\n" +
 			"With --edit, that page can also change the workflows: it writes each change to\n" +
 			"the workflow file, touching only the lines that change, so git shows exactly\n" +
 			"what was edited. It can make a new workflow in a directory given as a path. The\n" +
 			"server then follows the files too, taking up what an editor or git changes in\n" +
 			"them. This is for working on workflows on your own machine, so it needs an\n" +
 			"address that only this machine can reach.\n\n" +
-			"If FLOWMAKER_TOKEN is set, every webhook request must carry it as a bearer token.\n" +
+			"If FLOVR_TOKEN is set, every webhook request must carry it as a bearer token.\n" +
 			"The server only listens beyond this machine when that token is set. The token\n" +
 			"starts workflows and nothing else: it does not open the page, and ?wait=true then\n" +
 			"answers with how the run went but not what its steps put out. Give --tls-cert and\n" +
 			"--tls-key, or put the server behind a proxy that does, so the token is not sent in\n" +
 			"the clear.\n\n" +
-			"With --replay, ai and decide steps get the answers that flowmaker test --record\n" +
+			"With --replay, ai and decide steps get the answers that flovr test --record\n" +
 			"kept in " + ai.AnswersFile + " files in the paths, and no model is called: a way to try\n" +
 			"the page without a key. A step asked something that was not recorded fails, and\n" +
 			"http steps are still sent.",
@@ -466,13 +466,13 @@ func serveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			token := os.Getenv("FLOWMAKER_TOKEN")
+			token := os.Getenv("FLOVR_TOKEN")
 			if token == "" && !loopback(addr) {
-				return fmt.Errorf("refusing to listen on %s without FLOWMAKER_TOKEN: anyone who can reach it could run these workflows.\n"+
-					"Set FLOWMAKER_TOKEN, or listen on 127.0.0.1", addr)
+				return fmt.Errorf("refusing to listen on %s without FLOVR_TOKEN: anyone who can reach it could run these workflows.\n"+
+					"Set FLOVR_TOKEN, or listen on 127.0.0.1", addr)
 			}
 			if token != "" && len(token) < minSecret {
-				return fmt.Errorf("FLOWMAKER_TOKEN must be at least %d characters; make one with: openssl rand -hex 32", minSecret)
+				return fmt.Errorf("FLOVR_TOKEN must be at least %d characters; make one with: openssl rand -hex 32", minSecret)
 			}
 			if (tlsCert == "") != (tlsKey == "") {
 				return errors.New("give both --tls-cert and --tls-key, or neither")
@@ -530,12 +530,12 @@ func serveCmd() *cobra.Command {
 				scheme = "https"
 			}
 			at := reachable(listener.Addr())
-			fmt.Printf("flowmaker is serving on %s://%s\n", scheme, at)
+			fmt.Printf("flovr is serving on %s://%s\n", scheme, at)
 			if at != listener.Addr().String() {
 				fmt.Printf("  listening on every address of this machine, port %d\n", listener.Addr().(*net.TCPAddr).Port)
 			}
 			if keyFromEnv {
-				fmt.Printf("  page: %s://%s/?key= followed by FLOWMAKER_PAGE_KEY\n", scheme, at)
+				fmt.Printf("  page: %s://%s/?key= followed by FLOVR_PAGE_KEY\n", scheme, at)
 			} else {
 				fmt.Printf("  page: %s://%s/?key=%s\n", scheme, at, key)
 			}
@@ -543,7 +543,7 @@ func serveCmd() *cobra.Command {
 				fmt.Println("  " + route)
 			}
 			if token == "" {
-				fmt.Println("  no FLOWMAKER_TOKEN set: webhook requests from this machine are accepted without one")
+				fmt.Println("  no FLOVR_TOKEN set: webhook requests from this machine are accepted without one")
 			} else if tlsCert == "" {
 				fmt.Println("  no --tls-cert: the token travels in the clear unless a proxy in front adds TLS")
 			}
@@ -586,10 +586,10 @@ func serveCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "address to listen on")
-	cmd.Flags().StringVar(&history, "history", filepath.Join(".flowmaker", "runs.jsonl"),
+	cmd.Flags().StringVar(&history, "history", filepath.Join(".flovr", "runs.jsonl"),
 		"file that finished runs are saved to, with their trigger payloads and step outputs; empty keeps them in memory only")
 	cmd.Flags().BoolVar(&edit, "edit", false, "let the web page change the workflow files, and pick up changes made to them")
-	cmd.Flags().BoolVar(&replay, "replay", false, "answer ai and decide steps with the answers recorded by flowmaker test --record; no key is needed")
+	cmd.Flags().BoolVar(&replay, "replay", false, "answer ai and decide steps with the answers recorded by flovr test --record; no key is needed")
 	cmd.Flags().IntVar(&maxRuns, "max-runs", 16, "how many runs webhooks may have going at once; more are answered 429")
 	cmd.Flags().StringVar(&market, "market", defaultMarket, "with --edit, the list of components in git that the page offers: an https address or a file; empty offers none")
 	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "certificate file, to serve https")
@@ -598,7 +598,7 @@ func serveCmd() *cobra.Command {
 }
 
 // defaultMarket is the list of components the page offers unless told otherwise.
-const defaultMarket = "https://raw.githubusercontent.com/simonyosb/flowmaker/main/market/index.json"
+const defaultMarket = "https://raw.githubusercontent.com/flovrlabs/flovr/main/market/index.json"
 
 // gitCommit identifies the version of the files in the current directory: the
 // short commit hash, marked if there are uncommitted changes. It is empty

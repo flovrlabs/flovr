@@ -16,15 +16,15 @@ import (
 
 // A step can use a component kept in a git repository, as
 //
-//	use: github.com/acme/flowmaker-services/notify@v1.2
+//	use: github.com/acme/flovr-services/notify@v1.2
 //
 // that is the host, the owner and the repository, then the component's
 // folder in it unless it is at the top, and after @ the tag, branch or
 // commit to take.
 //
-// Loading never goes to the network. flowmaker get fetches each repository
+// Loading never goes to the network. flovr get fetches each repository
 // at the commit its ref names into a cache on the machine, and writes that
-// commit in a lock file, flowmaker.lock, which loading reads. The same files
+// commit in a lock file, flovr.lock, which loading reads. The same files
 // so give the same workflow on every machine, until the lock file changes.
 //
 // What comes from git is held to more than what is written by hand: it reads
@@ -35,7 +35,7 @@ import (
 // LockFile is the file that pins each repository components are taken from
 // to a commit. It holds for the workflows in its folder and the folders
 // below.
-const LockFile = "flowmaker.lock"
+const LockFile = "flovr.lock"
 
 // Remote is a reference to a component in a git repository.
 type Remote struct {
@@ -102,16 +102,16 @@ func (r Remote) File(commit string) string {
 	return filepath.Join(r.Checkout(commit), filepath.FromSlash(r.Dir), ComponentFile)
 }
 
-// CacheDir is the folder fetched repositories are kept in: $FLOWMAKER_CACHE,
-// or flowmaker/services in the user's cache folder.
+// CacheDir is the folder fetched repositories are kept in: $FLOVR_CACHE,
+// or flovr/services in the user's cache folder.
 func CacheDir() string {
-	if dir := os.Getenv("FLOWMAKER_CACHE"); dir != "" {
+	if dir := os.Getenv("FLOVR_CACHE"); dir != "" {
 		return dir
 	}
 	if dir, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(dir, "flowmaker", "services")
+		return filepath.Join(dir, "flovr", "services")
 	}
-	return filepath.Join(os.TempDir(), "flowmaker-services")
+	return filepath.Join(os.TempDir(), "flovr-services")
 }
 
 // IsCommit reports whether ref is a full commit hash, which needs no lock.
@@ -151,7 +151,7 @@ func ReadLock(path string) (Lock, error) {
 func (l Lock) Write(path string) error {
 	var b strings.Builder
 	b.WriteString("# The commit each repository that components are taken from is pinned to.\n")
-	b.WriteString("# Written by flowmaker get; keep it in git with the workflows.\n")
+	b.WriteString("# Written by flovr get; keep it in git with the workflows.\n")
 	for _, key := range slices.Sorted(maps.Keys(l)) {
 		b.WriteString(key + " " + l[key] + "\n")
 	}
@@ -197,18 +197,18 @@ func remoteFile(file, use string) (string, error) {
 	if !IsCommit(commit) {
 		path, found := FindLock(file)
 		if !found {
-			return "", fmt.Errorf("%s has not been fetched: run flowmaker get, which fetches it and writes %s", use, LockFile)
+			return "", fmt.Errorf("%s has not been fetched: run flovr get, which fetches it and writes %s", use, LockFile)
 		}
 		lock, err := ReadLock(path)
 		if err != nil {
 			return "", err
 		}
 		if commit = lock[r.Key()]; commit == "" {
-			return "", fmt.Errorf("%s is not in %s: run flowmaker get", use, path)
+			return "", fmt.Errorf("%s is not in %s: run flovr get", use, path)
 		}
 	}
 	if _, err := os.Stat(r.Checkout(commit)); errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("%s is pinned to commit %.7s, which is not on this machine: run flowmaker get", use, commit)
+		return "", fmt.Errorf("%s is pinned to commit %.7s, which is not on this machine: run flovr get", use, commit)
 	}
 	return r.File(commit), nil
 }

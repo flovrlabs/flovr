@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 var endpointProject = map[string]string{
@@ -78,14 +78,14 @@ func allowed(yes bool) *fakeModel {
 var comment = map[string]any{"body": map[string]any{"text": "Nice work.", "author": "dana"}}
 
 func TestRunWorksOutTheResponse(t *testing.T) {
-	eng := &Engine{Model: allowed(true), Env: map[string]string{"NAME": "flowmaker", "REPORT_URL": "http://unused"}}
+	eng := &Engine{Model: allowed(true), Env: map[string]string{"NAME": "flovr", "REPORT_URL": "http://unused"}}
 	resp, err := eng.Run(context.Background(), loadEndpoint(t), comment)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := &Response{
 		Status:  201,
-		Headers: map[string]string{"X-Checked-By": "flowmaker for dana"},
+		Headers: map[string]string{"X-Checked-By": "flovr for dana"},
 		Body:    map[string]any{"allowed": true, "reported": false},
 	}
 	if !reflect.DeepEqual(resp, want) {
@@ -110,7 +110,7 @@ func TestRunWorksOutTheResponse(t *testing.T) {
 func TestRunFailsIfTheResponseCannotBeWorkedOut(t *testing.T) {
 	// report is skipped, so it has no status to read.
 	w := loadEndpoint(t, "reported: ${report != null}", "reported: ${report.status}")
-	eng := &Engine{Model: allowed(true), Env: map[string]string{"NAME": "flowmaker", "REPORT_URL": "http://unused"}}
+	eng := &Engine{Model: allowed(true), Env: map[string]string{"NAME": "flovr", "REPORT_URL": "http://unused"}}
 	resp, err := eng.Run(context.Background(), w, comment)
 	if resp != nil || err == nil || !strings.HasPrefix(err.Error(), "respond: body: ${report.status}: ") {
 		t.Errorf("response %+v, error %v", resp, err)
@@ -120,7 +120,7 @@ func TestRunFailsIfTheResponseCannotBeWorkedOut(t *testing.T) {
 func TestRunRefusesABodyTheWorkflowDoesNotTake(t *testing.T) {
 	model := allowed(true)
 	var ran []StepResult
-	eng := &Engine{Model: model, Env: map[string]string{"NAME": "flowmaker"}, OnStep: func(r StepResult) { ran = append(ran, r) }}
+	eng := &Engine{Model: model, Env: map[string]string{"NAME": "flovr"}, OnStep: func(r StepResult) { ran = append(ran, r) }}
 	_, err := eng.Run(context.Background(), loadEndpoint(t), map[string]any{"body": map[string]any{"text": 5}})
 	var input *workflow.InputError
 	if !errors.As(err, &input) || len(ran) != 0 || model.gotDecide.Questions != nil {

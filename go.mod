@@ -1,4 +1,4 @@
-module github.com/simonyosb/flowmaker
+module github.com/flovrlabs/flovr
 
 go 1.26.0
 

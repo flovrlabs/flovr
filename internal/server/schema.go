@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // schemaField is one field of the answer an ai step must give, as the page

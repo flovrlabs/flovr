@@ -32,10 +32,10 @@ func TestResponseBodyFieldsAreAddedAndTakenOut(t *testing.T) {
 	srv, root, _ := editFolder(t)
 	file := filepath.Join(root, "moderate-comment", "workflow.yaml")
 
-	if rec := bodyEdit(t, srv, "checked_by", "flowmaker", false); rec.Code != http.StatusOK {
+	if rec := bodyEdit(t, srv, "checked_by", "flovr", false); rec.Code != http.StatusOK {
 		t.Fatalf("add: status = %d, body %s", rec.Code, rec.Body)
 	}
-	if text := readFile(t, file); !strings.Contains(text, "    reason: ${check.reason.value}\n    checked_by: flowmaker\n") {
+	if text := readFile(t, file); !strings.Contains(text, "    reason: ${check.reason.value}\n    checked_by: flovr\n") {
 		t.Errorf("the new field is not last in the body:\n%s", text)
 	}
 	if rec := bodyEdit(t, srv, "checked_by", "", true); rec.Code != http.StatusOK {

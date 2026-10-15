@@ -15,14 +15,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/simonyosb/flowmaker/internal/fetch"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/fetch"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // The market is a list of components kept in git that anyone may use, read
 // from where Options.Market says: an https address, or a file on this
 // machine. The page lists them beside the project's own, and a step added
-// from one takes it from git and pins it in the lock file, as flowmaker get
+// from one takes it from git and pins it in the lock file, as flovr get
 // does. What it lists is only offered: what a component is, is what its
 // repository holds, and that is checked when it is taken.
 
@@ -157,7 +157,7 @@ func checkEntry(e *marketEntry) bool {
 }
 
 // lockFor is the lock file that holds for w: the one there is, or else the
-// one flowmaker get would write when run in the folder the server was
+// one flovr get would write when run in the folder the server was
 // started with, unless the top of a git repository comes first.
 func (s *Server) lockFor(w *workflow.Workflow) string {
 	if path, found := workflow.FindLock(w.Path); found {

@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // For tests: where a repository is fetched from, and whether git may read a
@@ -103,7 +103,7 @@ func Get(ctx context.Context, r workflow.Remote, commit string) (bool, error) {
 		return false, err
 	}
 	if got != commit {
-		return false, fmt.Errorf("%s is at %.7s now, not at the pinned %.7s: run flowmaker get -u to take it again", r.Ref, got, commit)
+		return false, fmt.Errorf("%s is at %.7s now, not at the pinned %.7s: run flovr get -u to take it again", r.Ref, got, commit)
 	}
 	if _, err := gitIn(ctx, tmp, "checkout", "-q", "--detach", "FETCH_HEAD"); err != nil {
 		return false, err

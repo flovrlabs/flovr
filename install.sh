@@ -1,22 +1,22 @@
 #!/bin/sh
-# Installs the flowmaker binary of a release, for Linux or macOS:
+# Installs the flovr binary of a release, for Linux or macOS:
 #
-#   curl -fsSL https://raw.githubusercontent.com/simonyosb/flowmaker/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/flovrlabs/flovr/main/install.sh | sh
 #
 # It downloads the archive for this system from the GitHub release, checks it
-# against the release's checksums.txt, and puts flowmaker in ~/.local/bin.
+# against the release's checksums.txt, and puts flovr in ~/.local/bin.
 # Nothing else is changed, and nothing needs sudo.
 #
-#   FLOWMAKER_VERSION      the release to install, such as v0.1.0 (default: the latest)
-#   FLOWMAKER_INSTALL_DIR  where to put the binary (default: ~/.local/bin)
-#   FLOWMAKER_REPO_URL     where the releases are (default: the GitHub repository)
+#   FLOVR_VERSION      the release to install, such as v0.1.0 (default: the latest)
+#   FLOVR_INSTALL_DIR  where to put the binary (default: ~/.local/bin)
+#   FLOVR_REPO_URL     where the releases are (default: the GitHub repository)
 
 set -eu
 
-repo="${FLOWMAKER_REPO_URL:-https://github.com/simonyosb/flowmaker}"
+repo="${FLOVR_REPO_URL:-https://github.com/flovrlabs/flovr}"
 
 say() { printf '%s\n' "$*"; }
-fail() { printf 'flowmaker install: %s\n' "$*" >&2; exit 1; }
+fail() { printf 'flovr install: %s\n' "$*" >&2; exit 1; }
 
 # fetch writes what is at the URL $1 to the file $2.
 fetch() {
@@ -38,7 +38,7 @@ latest() {
 	fi
 	case "$url" in
 		*/releases/tag/*) printf '%s\n' "${url##*/}" ;;
-		*) fail "could not tell the latest release of $repo; set FLOWMAKER_VERSION, such as v0.1.0" ;;
+		*) fail "could not tell the latest release of $repo; set FLOVR_VERSION, such as v0.1.0" ;;
 	esac
 }
 
@@ -57,19 +57,19 @@ main() {
 		Linux) os=linux ;;
 		Darwin) os=darwin ;;
 		MINGW* | MSYS* | CYGWIN*) fail "on Windows, download the zip archive from $repo/releases" ;;
-		*) fail "there is no release for $(uname -s); build it with Go: go install github.com/simonyosb/flowmaker/cmd/flowmaker@latest" ;;
+		*) fail "there is no release for $(uname -s); build it with Go: go install github.com/flovrlabs/flovr/cmd/flovr@latest" ;;
 	esac
 	case "$(uname -m)" in
 		x86_64 | amd64) arch=amd64 ;;
 		arm64 | aarch64) arch=arm64 ;;
-		*) fail "there is no release for $(uname -m); build it with Go: go install github.com/simonyosb/flowmaker/cmd/flowmaker@latest" ;;
+		*) fail "there is no release for $(uname -m); build it with Go: go install github.com/flovrlabs/flovr/cmd/flovr@latest" ;;
 	esac
 	# A shell under Rosetta says x86_64 on a Mac that can run arm64.
 	if [ "$os" = darwin ] && [ "$arch" = amd64 ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
 		arch=arm64
 	fi
 
-	tag="${FLOWMAKER_VERSION:-}"
+	tag="${FLOVR_VERSION:-}"
 	if [ -z "$tag" ]; then
 		tag=$(latest)
 	fi
@@ -77,14 +77,14 @@ main() {
 		v*) ;;
 		*) tag="v$tag" ;;
 	esac
-	archive="flowmaker_${tag#v}_${os}_${arch}.tar.gz"
-	dir="${FLOWMAKER_INSTALL_DIR:-$HOME/.local/bin}"
+	archive="flovr_${tag#v}_${os}_${arch}.tar.gz"
+	dir="${FLOVR_INSTALL_DIR:-$HOME/.local/bin}"
 
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
 	trap 'exit 1' INT TERM
 
-	say "Downloading flowmaker $tag for $os/$arch"
+	say "Downloading flovr $tag for $os/$arch"
 	fetch "$repo/releases/download/$tag/$archive" "$tmp/$archive" || fail "could not download $archive of release $tag"
 	fetch "$repo/releases/download/$tag/checksums.txt" "$tmp/checksums.txt" || fail "could not download the checksums of release $tag"
 
@@ -92,15 +92,15 @@ main() {
 	[ -n "$want" ] || fail "checksums.txt of release $tag does not list $archive"
 	[ "$(sha256 "$tmp/$archive")" = "$want" ] || fail "$archive does not match its checksum; nothing was installed"
 
-	tar -xzf "$tmp/$archive" -C "$tmp" flowmaker
+	tar -xzf "$tmp/$archive" -C "$tmp" flovr
 	mkdir -p "$dir"
-	# Moved into place in one step, so a flowmaker that is running is not
+	# Moved into place in one step, so a flovr that is running is not
 	# changed under it.
-	cp "$tmp/flowmaker" "$dir/.flowmaker.new"
-	chmod 755 "$dir/.flowmaker.new"
-	mv -f "$dir/.flowmaker.new" "$dir/flowmaker"
+	cp "$tmp/flovr" "$dir/.flovr.new"
+	chmod 755 "$dir/.flovr.new"
+	mv -f "$dir/.flovr.new" "$dir/flovr"
 
-	say "Installed $("$dir/flowmaker" version) in $dir"
+	say "Installed $("$dir/flovr" version) in $dir"
 	case ":$PATH:" in
 		*":$dir:"*) ;;
 		*)
@@ -113,8 +113,8 @@ main() {
 	say ""
 	say "Try it without a key, on the examples:"
 	say ""
-	say "  git clone https://github.com/simonyosb/flowmaker && cd flowmaker"
-	say "  flowmaker test examples/triage-ticket --replay"
+	say "  git clone https://github.com/flovrlabs/flovr && cd flovr"
+	say "  flovr test examples/triage-ticket --replay"
 }
 
 # Everything runs from here, so a download cut short runs nothing.

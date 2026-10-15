@@ -7,9 +7,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/simonyosb/flowmaker/internal/ai"
-	"github.com/simonyosb/flowmaker/internal/engine"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/ai"
+	"github.com/flovrlabs/flovr/internal/engine"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // testRequest starts tests of a workflow.

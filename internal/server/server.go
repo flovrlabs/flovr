@@ -24,8 +24,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/simonyosb/flowmaker/internal/engine"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/engine"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 const (
@@ -383,7 +383,7 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	// the Host header keeps a web page on another site from reaching it by
 	// pointing its own domain name at this machine.
 	if s.opts.Token == "" && !localName(r.Host) {
-		reply(rw, http.StatusForbidden, map[string]string{"error": "without FLOWMAKER_TOKEN this server only answers requests addressed to localhost"})
+		reply(rw, http.StatusForbidden, map[string]string{"error": "without FLOVR_TOKEN this server only answers requests addressed to localhost"})
 		return
 	}
 	if w, ok := s.live.Load().webhooks[r.URL.Path]; ok {

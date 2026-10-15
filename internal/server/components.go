@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/simonyosb/flowmaker/internal/engine"
-	"github.com/simonyosb/flowmaker/internal/workflow"
-	"github.com/simonyosb/flowmaker/internal/yamledit"
+	"github.com/flovrlabs/flovr/internal/engine"
+	"github.com/flovrlabs/flovr/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/yamledit"
 )
 
 // components returns every component the page shows, by the name the page
@@ -207,7 +207,7 @@ func (s *Server) editComponent(c *workflow.Component, req editRequest) (int, any
 }
 
 // fromGit is the refusal of a change to a component taken from git.
-const fromGit = "%s comes from git: change it at its source, then take the new commit with flowmaker get -u."
+const fromGit = "%s comes from git: change it at its source, then take the new commit with flovr get -u."
 
 // invalid is the answer to a change that would leave a file not valid.
 func invalid(message string, err error) failure {

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/simonyosb/flowmaker/internal/yamledit"
+	"github.com/flovrlabs/flovr/internal/yamledit"
 )
 
 // triggerRequest has a workflow start another way: on a request to a path,
