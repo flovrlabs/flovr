@@ -7,6 +7,8 @@
 
 Flovr (say *flow-ver*: flows, versioned) runs workflows that are written as YAML files and kept in git. A workflow is a list of steps: ask a model for structured output, ask a decision model typed questions, send an HTTP request, or use a component that someone wrote once for all workflows. The same file holds the workflow's tests, which call the models for real.
 
+![On the page: a workflow opened, a step looked into, a field added to the response and seen as a one-line git diff, then the tests run and pass](docs/media/demo.gif)
+
 Flovr is in beta: the format of the files may still change before 1.0. [ROADMAP.md](ROADMAP.md) says what is done, what is being built and what comes next.
 
 One binary does everything:
@@ -65,6 +67,8 @@ Each example keeps, in `answers.jsonl` next to its workflow, what the models ans
 ```bash
 flovr test examples/triage-ticket --replay
 ```
+
+![flovr validate and flovr test --replay in a terminal, with no model key: three tests pass](docs/media/terminal.gif)
 
 Serve both examples and open the page address the server prints, which ends with `?key=`. Run their tests from the page, or open a step to see what it read and gave. The two URLs are where `triage-ticket` would send its notifications; any address will do for looking around.
 
@@ -345,6 +349,10 @@ What the list says is only what it offers: a component is what its repository ho
 `flovr serve` serves a page and prints its address, which carries the page's key as `?key=...`. The browser keeps the key once the page has been opened with it, and nothing reaches the page or its API without it, not even another program on the same machine. The key is kept for you outside the project, so it stays the same across restarts; `FLOVR_PAGE_KEY` sets it instead.
 
 The page opens on a list of the workflows and one of the services, the components that workflows use. A workflow is drawn from left to right, with one shape and colour per kind of step, and has its runs and its tests. Picking a run colours the drawing by what each step did; a step opens to show what it read and put out, or why it failed.
+
+![triage-ticket drawn on the page, coloured by its last run: the ticket was classified as an urgent refund, summarized, and sent to billing, while paging on-call was skipped](docs/media/canvas.png)
+
+![The editor of the summarize step: on the left what it can read, in the middle its model, input and prompt, on the right the summary it gave](docs/media/editor.png)
 
 With `--edit` the page becomes a place to work on the workflows:
 
