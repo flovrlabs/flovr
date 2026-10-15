@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // servedFromGit serves a folder whose workflow takes notify from git, as
@@ -17,7 +17,7 @@ import (
 func servedFromGit(t *testing.T) (*Server, string) {
 	t.Helper()
 	commit := strings.Repeat("a", 40)
-	t.Setenv("FLOWMAKER_CACHE", t.TempDir())
+	t.Setenv("FLOVR_CACHE", t.TempDir())
 	repo := workflow.Remote{Host: "github.com", Owner: "acme", Repo: "services"}
 	file := filepath.Join(repo.Checkout(commit), "notify", workflow.ComponentFile)
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {

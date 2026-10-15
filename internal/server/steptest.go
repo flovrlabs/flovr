@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/simonyosb/flowmaker/internal/engine"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/engine"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // stepTestRequest tries one step of a workflow on its own.

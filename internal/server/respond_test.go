@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simonyosb/flowmaker/internal/ai"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/ai"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // moderator answers the questions of the moderate-comment example, or fails.

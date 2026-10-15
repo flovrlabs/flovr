@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/simonyosb/flowmaker/internal/ai"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/ai"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // fakeModel decides that every ticket has the given priority.
@@ -349,7 +349,7 @@ func TestOnlyLocalNamesAreAnsweredWithoutAToken(t *testing.T) {
 	withToken := serveExample(t, "low", "secret-token")
 	withToken.srv.opts.PageKey = "page-key"
 	req := request(http.MethodGet, "/api/state", "")
-	req.Host = "flowmaker.example.com"
+	req.Host = "flovr.example.com"
 	req.Header.Set("Authorization", "Bearer page-key")
 	if rec := do(withToken.srv, req); rec.Code != http.StatusOK {
 		t.Errorf("with a token and a public host name: status = %d", rec.Code)

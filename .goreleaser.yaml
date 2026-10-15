@@ -1,11 +1,11 @@
 # Builds the release archives when a version tag is pushed; see
 # .github/workflows/release.yml.
 version: 2
-project_name: flowmaker
+project_name: flovr
 
 builds:
-  - main: ./cmd/flowmaker
-    binary: flowmaker
+  - main: ./cmd/flovr
+    binary: flovr
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]
@@ -32,21 +32,21 @@ changelog:
   use: github
   sort: asc
 
-# brew install simonyosb/tap/flowmaker. The cask is written to the
-# simonyosb/homebrew-tap repository, with a token that may write to it in the
+# brew install flovrlabs/tap/flovr. The cask is written to the
+# flovrlabs/homebrew-tap repository, with a token that may write to it in the
 # HOMEBREW_TAP_GITHUB_TOKEN secret; without that secret it is not published.
 homebrew_casks:
-  - name: flowmaker
-    binaries: [flowmaker]
-    homepage: https://github.com/simonyosb/flowmaker
+  - name: flovr
+    binaries: [flovr]
+    homepage: https://github.com/flovrlabs/flovr
     description: AI workflows as YAML files in git, with tests that call the models
     license: Apache-2.0
     repository:
-      owner: simonyosb
+      owner: flovrlabs
       name: homebrew-tap
       token: '{{ envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}'
     commit_author:
-      name: flowmaker releases
+      name: flovr releases
       email: noreply@github.com
     skip_upload: '{{ if envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}false{{ else }}true{{ end }}'
     # The binary is not signed by Apple, so macOS would refuse to open it
@@ -55,5 +55,5 @@ homebrew_casks:
       post:
         install: |
           if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/flowmaker"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/flovr"]
           end

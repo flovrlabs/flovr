@@ -18,9 +18,9 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/simonyosb/flowmaker/internal/ai"
-	"github.com/simonyosb/flowmaker/internal/expr"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/ai"
+	"github.com/flovrlabs/flovr/internal/expr"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 type Status string

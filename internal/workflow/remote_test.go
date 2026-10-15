@@ -54,7 +54,7 @@ const commit = "0123456789abcdef0123456789abcdef01234567"
 func fetched(t *testing.T, comp string, extra map[string]string) string {
 	t.Helper()
 	cache := t.TempDir()
-	t.Setenv("FLOWMAKER_CACHE", cache)
+	t.Setenv("FLOVR_CACHE", cache)
 	repo := filepath.Join(cache, "github.com", "acme", "services@"+commit)
 	files := map[string]string{"notify/component.yaml": comp}
 	for k, v := range extra {
@@ -125,8 +125,8 @@ func TestComponentFromGitMustBeFetched(t *testing.T) {
 	project := filepath.Dir(dir)
 
 	// Not on this machine.
-	t.Setenv("FLOWMAKER_CACHE", t.TempDir())
-	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "not on this machine: run flowmaker get") {
+	t.Setenv("FLOVR_CACHE", t.TempDir())
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "not on this machine: run flovr get") {
 		t.Errorf("err = %v", err)
 	}
 	// Not in the lock file.
@@ -138,7 +138,7 @@ func TestComponentFromGitMustBeFetched(t *testing.T) {
 	}
 	// No lock file, up to the top of the repository.
 	os.Remove(filepath.Join(project, LockFile))
-	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "has not been fetched: run flowmaker get") {
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "has not been fetched: run flovr get") {
 		t.Errorf("err = %v", err)
 	}
 }

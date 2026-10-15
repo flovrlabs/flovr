@@ -9,7 +9,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/simonyosb/flowmaker/internal/expr"
+	"github.com/flovrlabs/flovr/internal/expr"
 )
 
 // Respond is what the caller of a workflow's webhook gets back once the

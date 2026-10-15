@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // editExample serves a copy of the triage-ticket example that the page may

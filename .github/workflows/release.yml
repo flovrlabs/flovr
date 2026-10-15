@@ -1,8 +1,8 @@
 name: Release
 
-# A tag such as v0.1.0 builds flowmaker for Linux, macOS and Windows,
+# A tag such as v0.1.0 builds flovr for Linux, macOS and Windows,
 # publishes the archives as a GitHub release, the Homebrew cask if the tap's
-# token is set, and the image as ghcr.io/simonyosb/flowmaker. A pull request
+# token is set, and the image as ghcr.io/flovrlabs/flovr. A pull request
 # that changes how releases are built or installed makes the same archives and
 # image without publishing them, and installs from them.
 on:
@@ -43,12 +43,12 @@ jobs:
           version=$(jq -r .version dist/metadata.json)
           mkdir -p "$RUNNER_TEMP/releases/download/v$version"
           cp dist/*.tar.gz dist/checksums.txt "$RUNNER_TEMP/releases/download/v$version/"
-          FLOWMAKER_REPO_URL="file://$RUNNER_TEMP" FLOWMAKER_VERSION="v$version" FLOWMAKER_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
-          "$RUNNER_TEMP/bin/flowmaker" version
+          FLOVR_REPO_URL="file://$RUNNER_TEMP" FLOVR_VERSION="v$version" FLOVR_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
+          "$RUNNER_TEMP/bin/flovr" version
       - name: Build the image
-        run: docker build --build-arg VERSION=snapshot -t flowmaker:snapshot .
+        run: docker build --build-arg VERSION=snapshot -t flovr:snapshot .
       - name: Try the examples in the image, without a key or a network
-        run: docker run --rm --network none flowmaker:snapshot test /examples/triage-ticket --replay
+        run: docker run --rm --network none flovr:snapshot test /examples/triage-ticket --replay
 
   release:
     name: Publish the release

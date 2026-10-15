@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // describer describes the values of one file, a workflow's or a component's,

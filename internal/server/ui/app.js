@@ -106,7 +106,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---- theme: remembered in the browser, and the page works without it ----
 
-const THEME_KEY = "flowmaker-theme";
+const THEME_KEY = "flovr-theme";
 function remembered(key) {
   try { return localStorage.getItem(key); } catch (err) { return null; }
 }
@@ -290,7 +290,7 @@ async function refresh() {
     live.title = "Last updated " + when(Date.now());
   } catch (err) {
     // The server is there but does not know this browser: its key is gone.
-    offline = err.status === 401 ? "Needs the page's key: open the address flowmaker printed" : "Cannot reach the server";
+    offline = err.status === 401 ? "Needs the page's key: open the address flovr printed" : "Cannot reach the server";
   }
   paintLive();
   render();
@@ -306,7 +306,7 @@ function paintLive() {
   const replay = !offline && state.replay ? " · recorded answers" : "";
   $("live").replaceChildren(el("span", { class: "pulse" }), (offline || on) + replay);
   $("live").className = offline ? "live down" : "live";
-  $("live").title = replay ? "Started with --replay: ai and decide steps get the answers flowmaker test --record kept, and no model is called" : "";
+  $("live").title = replay ? "Started with --replay: ai and decide steps get the answers flovr test --record kept, and no model is called" : "";
 }
 
 // loadLatest fetches the latest run of the selected workflow in full, which the
@@ -440,7 +440,7 @@ function renderTop(w, home) {
   $("changes").replaceChildren(...(state.editable && w && !home && !isComp(w) && !w.draft ? [changesChip(w)] : []));
 
   const anyFailed = state.runs.some((r) => r.status === "failed" && latestRun(r.workflow) === r);
-  document.title = anyFailed ? "flowmaker (a run failed)" : "flowmaker";
+  document.title = anyFailed ? "flovr (a run failed)" : "flovr";
   // The way back to the list it is in, then its name.
   const back = (to, label) => [el("a", { href: "#/" + to, class: "crumbback", "data-focus": "back:" + to }, label), icon("chevron", 14)];
   if (home === "new-service") {
@@ -449,7 +449,7 @@ function renderTop(w, home) {
   }
   if (home === "market") {
     $("crumb").replaceChildren(...back("services", "Services"), el("strong", {}, "Market"),
-      el("span", { class: "lede" }, "Services kept in git that anyone may use. Adding one pins it in flowmaker.lock."));
+      el("span", { class: "lede" }, "Services kept in git that anyone may use. Adding one pins it in flovr.lock."));
     return;
   }
   if (home) {
@@ -576,7 +576,7 @@ function paintMarket() {
     return homeUi.rows.replaceChildren(el("div", { class: "notice bad", role: "alert" },
       el("div", { class: "nhead" }, el("strong", {}, "The market could not be read")),
       el("p", {}, market.error),
-      market.source ? el("p", {}, "It is read from ", mono(market.source), ". flowmaker serve --market sets another.") : null));
+      market.source ? el("p", {}, "It is read from ", mono(market.source), ". flovr serve --market sets another.") : null));
   }
   const q = homeUi.query.trim().toLowerCase();
   const found = market.services.filter((e) => !q || [e.name, e.description, e.use, ...(e.tags || [])].some((t) => (t || "").toLowerCase().includes(q)));
@@ -655,7 +655,7 @@ function workflowRow(x) {
   const ok = recent.filter((r) => r.status === "ok").length;
   return homeRow(href, [
     el("td", { class: "hmain" }, el("a", { href, class: "hname", "data-focus": "h:" + x.name }, x.name), flagFor(x), el("div", { class: "hpath mono" }, folderOf(x.path))),
-    el("td", {}, x.trigger ? el("span", { class: "hpill mono" }, icon(isWebhook(x) ? "trigger" : "clock", 12), x.trigger) : hnone("No trigger · flowmaker run")),
+    el("td", {}, x.trigger ? el("span", { class: "hpill mono" }, icon(isWebhook(x) ? "trigger" : "clock", 12), x.trigger) : hnone("No trigger · flovr run")),
     el("td", {}, stepTiles(x.steps)),
     el("td", {}, last
       ? [hstat(last.status, last.status === "failed" ? outcome(last) : last.status === "running" ? "Running" : "Succeeded in " + duration(last.ms)), el("div", { class: "hwhen" }, when(last.started))]
@@ -675,7 +675,7 @@ function serviceRow(x) {
   return homeRow(href, [
     el("td", { class: "hmain" }, el("div", { class: "hsvc" }, kindTile(compKind(x), 34),
       el("div", {}, el("a", { href, class: "hname", "data-focus": "h:" + x.name, title: x.name }, compTitle(x)), flagFor(x),
-        x.source ? el("span", { class: "hgit", title: "Taken from git and pinned in flowmaker.lock. It is changed at its source." }, "git") : null,
+        x.source ? el("span", { class: "hgit", title: "Taken from git and pinned in flovr.lock. It is changed at its source." }, "git") : null,
         x.description ? el("div", { class: "hdesc" }, x.description) : null,
         x.source ? el("div", { class: "hpath mono" }, x.source) : null))),
     el("td", {}, x.gives ? stepTiles(x.steps, plural(x.steps.length, "step")) : hnone(compKindWord(x))),
@@ -1312,7 +1312,7 @@ function example(w) {
     "curl -X POST '" + location.origin + path + (w.respond ? "" : "?wait=true") + "' \\",
     "  -H 'Content-Type: application/json' \\",
   ];
-  if (state.protected) lines.push("  -H \"Authorization: Bearer $FLOWMAKER_TOKEN\" \\");
+  if (state.protected) lines.push("  -H \"Authorization: Bearer $FLOVR_TOKEN\" \\");
   // The body of the workflow's first test is one it is known to take.
   const body = w.sample !== undefined ? JSON.stringify(w.sample) : "{\"subject\": \"Hello\", \"message\": \"...\"}";
   lines.push("  -d '" + body.replace(/'/g, "'\\''") + "'");
@@ -1417,7 +1417,7 @@ function testsDetails(w) {
   return [
     header("workflow", "tests", "Tests", w.name, true),
     v ? section("", roundBox(w, v)) : null,
-    state.editable ? testsSection(w, "") : section("", el("p", { class: "muted" }, plural(w.tests || 0, "test") + " in " + w.path + ". Run them with flowmaker test.")),
+    state.editable ? testsSection(w, "") : section("", el("p", { class: "muted" }, plural(w.tests || 0, "test") + " in " + w.path + ". Run them with flovr test.")),
   ];
 }
 
@@ -1427,7 +1427,7 @@ function runsDetails(w) {
   const comp = isComp(w);
   const runs = state.runs.filter((r) => r.workflow === w.name && (comp ? isTestRun(r) : !isTestRun(r)));
   const none = comp
-    ? (state.editable ? "None yet. Run its tests and each one appears here." : "None. Tests of a component run with flowmaker test.")
+    ? (state.editable ? "None yet. Run its tests and each one appears here." : "None. Tests of a component run with flovr test.")
     : w.trigger ? "None yet. A run appears here each time the trigger fires." : "The server does not run this workflow: it has no webhook or cron trigger.";
   return [
     header("workflow", "runs", comp ? "Test runs" : "Runs", comp ? compTitle(w) : w.name, true),
@@ -1510,11 +1510,11 @@ function componentDetails(w) {
     header(kind, kind, compTitle(w), "Component · " + compKindWord(w)),
     w.description ? section("", el("p", { class: "lede" }, w.description)) : null,
     w.source ? section("From git", el("p", {}, mono(w.source)),
-      el("p", { class: "muted small" }, "Pinned to a commit in flowmaker.lock, so it is the same on every machine. It is changed at its source; flowmaker get -u takes the new commit.")) : null,
+      el("p", { class: "muted small" }, "Pinned to a commit in flovr.lock, so it is the same on every machine. It is changed at its source; flovr get -u takes the new commit.")) : null,
     section("Definition", pairs([
       w.source ? null : ["File", mono(w.path)],
       ["Made of", w.gives ? plural(w.steps.length, "step") + " of its own" : "One piece of work: " + (KIND_NAMES[kind] || kind).toLowerCase()],
-      ["Tests", w.tests + (w.tests && !state.editable ? ", run with flowmaker test" : "")],
+      ["Tests", w.tests + (w.tests && !state.editable ? ", run with flovr test" : "")],
       state.commit ? ["Version", mono(state.commit)] : null,
     ])),
     section("Takes", inputsView(w), el("p", { class: "muted small" }, "A step that uses this component fills each in. ", inn)),
@@ -1624,7 +1624,7 @@ function runDetails(w, run) {
 }
 
 function triggerDetails(w, run) {
-  let how = "This workflow has no trigger, so the server does not run it. Run it with flowmaker run.";
+  let how = "This workflow has no trigger, so the server does not run it. Run it with flovr run.";
   if (isWebhook(w)) {
     how = "A POST request to " + w.trigger.slice(5) + " with a JSON body starts the workflow. Steps read the body as trigger.body.";
     if (w.input) how += " The body must match " + w.input + ": a request whose body does not is refused with status 400, and nothing runs.";
@@ -2941,7 +2941,7 @@ const componentsOf = (w) => {
 //
 // The server reads the list of components in git that anyone may take, from
 // where it was told to, and the page asks for it once. A step added from one
-// has the server take it from git and pin it in flowmaker.lock.
+// has the server take it from git and pin it in flovr.lock.
 
 const market = { state: "idle", services: [], error: null, source: "" };
 const marketList = () => (market.state === "ready" ? market.services : []);
@@ -4111,7 +4111,7 @@ function testRunDetails(w, run) {
       unsavedNote(w),
       // A test that could not run called no model, and one still running has not finished calling them.
       v === "unrun" ? null : el("p", { class: "muted small" },
-        state.replay ? "The answers are those recorded with flowmaker test --record. HTTP steps " + (v === "running" ? "are" : "were") + " not sent."
+        state.replay ? "The answers are those recorded with flovr test --record. HTTP steps " + (v === "running" ? "are" : "were") + " not sent."
           : v === "running" ? "The models are called for real. HTTP steps are not sent." : "The models were called for real. HTTP steps were not sent.")),
     checks.length ? section("Expectations" + (checks.length ? " (" + checks.length + ")" : ""), checkList(w, checks, true),
       el("p", { class: "muted small" }, "Select Show to see the step a check is about.")) : null,
@@ -4167,7 +4167,7 @@ function testsSection(w, title = "Tests") {
   const v = roundView(w.name);
   return section(title,
     el("p", { class: "muted" }, state.replay
-      ? "Tests get the answers recorded with flowmaker test --record, so they check the workflow but not the models, and cost nothing. No HTTP request is sent. They run the saved file."
+      ? "Tests get the answers recorded with flovr test --record, so they check the workflow but not the models, and cost nothing. No HTTP request is sent. They run the saved file."
       : "Tests call the AI models for real, so they check what the model actually answers. No HTTP request is sent. They run the saved file."),
     canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) ? startButton(w, null, "Run all tests", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null)
       : el("p", { class: "muted small" }, "Tests cannot run while the file has a problem."),
@@ -5040,7 +5040,7 @@ function paintTriggerInput(w, ran) {
   if (isWebhook(w)) {
     body.push(el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "Try it")), example(w),
       el("p", { class: "ned-words" }, w.respond ? "The request waits for the answer." : "With ?wait=true the answer is the finished run. Without it, the run's id comes back at once."));
-  } else if (w.trigger) body.push(el("p", { class: "ned-words" }, "It runs on its schedule. flowmaker run runs it now."));
+  } else if (w.trigger) body.push(el("p", { class: "ned-words" }, "It runs on its schedule. flovr run runs it now."));
   ed.inCol.body.replaceChildren(...body);
   setNote(ed.inCol, "");
 }

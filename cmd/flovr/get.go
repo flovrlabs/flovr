@@ -15,18 +15,18 @@ import (
 	"github.com/spf13/cobra"
 	"go.yaml.in/yaml/v3"
 
-	"github.com/simonyosb/flowmaker/internal/fetch"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/fetch"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 func getCmd() *cobra.Command {
 	var update bool
 	cmd := &cobra.Command{
 		Use:   "get [folder]",
-		Short: "Fetch the components workflows take from git, and pin them in flowmaker.lock",
+		Short: "Fetch the components workflows take from git, and pin them in flovr.lock",
 		Long: "Fetch the components that the workflows in a folder take from git, as in\n" +
 			"use: github.com/acme/services/notify@v1.2, and write the commit each tag or\n" +
-			"branch is at in flowmaker.lock in that folder. Keep flowmaker.lock in git with the\n" +
+			"branch is at in flovr.lock in that folder. Keep flovr.lock in git with the\n" +
 			"workflows: on every machine get then takes the same commits, until -u takes each\n" +
 			"tag or branch again. Running and serving workflows never fetches anything.\n\n" +
 			"A component from git reads only its input, never env, names only files in its own\n" +

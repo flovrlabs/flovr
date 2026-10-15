@@ -77,7 +77,7 @@ func TestRecordedAnswersAreReplayed(t *testing.T) {
 		}
 	}
 	decide.Questions = map[string]Question{"urgent": {Ask: "Is it very urgent?", Kind: YesNo}}
-	if _, err := replay.Decide(ctx, decide); err == nil || !strings.Contains(err.Error(), "flowmaker test --record") {
+	if _, err := replay.Decide(ctx, decide); err == nil || !strings.Contains(err.Error(), "flovr test --record") {
 		t.Errorf("error = %v", err)
 	}
 }

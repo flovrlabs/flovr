@@ -13,30 +13,30 @@ import (
 func TestLoadDotEnv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	content := `# keys for local runs
-FLOWMAKER_TEST_PLAIN=abc=def
+FLOVR_TEST_PLAIN=abc=def
 
-export FLOWMAKER_TEST_EXPORTED = "quoted value"
-FLOWMAKER_TEST_SINGLE='single'
-FLOWMAKER_TEST_ALREADY_SET=from file
-FLOWMAKER_TEST_EMPTY=
+export FLOVR_TEST_EXPORTED = "quoted value"
+FLOVR_TEST_SINGLE='single'
+FLOVR_TEST_ALREADY_SET=from file
+FLOVR_TEST_EMPTY=
 `
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"FLOWMAKER_TEST_PLAIN", "FLOWMAKER_TEST_EXPORTED", "FLOWMAKER_TEST_SINGLE", "FLOWMAKER_TEST_EMPTY"} {
+	for _, name := range []string{"FLOVR_TEST_PLAIN", "FLOVR_TEST_EXPORTED", "FLOVR_TEST_SINGLE", "FLOVR_TEST_EMPTY"} {
 		t.Setenv(name, "")
 	}
-	t.Setenv("FLOWMAKER_TEST_ALREADY_SET", "from environment")
+	t.Setenv("FLOVR_TEST_ALREADY_SET", "from environment")
 
 	if err := loadDotEnv(path); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{
-		"FLOWMAKER_TEST_PLAIN":       "abc=def",
-		"FLOWMAKER_TEST_EXPORTED":    "quoted value",
-		"FLOWMAKER_TEST_SINGLE":      "single",
-		"FLOWMAKER_TEST_ALREADY_SET": "from environment",
-		"FLOWMAKER_TEST_EMPTY":       "",
+		"FLOVR_TEST_PLAIN":       "abc=def",
+		"FLOVR_TEST_EXPORTED":    "quoted value",
+		"FLOVR_TEST_SINGLE":      "single",
+		"FLOVR_TEST_ALREADY_SET": "from environment",
+		"FLOVR_TEST_EMPTY":       "",
 	} {
 		if got := os.Getenv(name); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
@@ -138,7 +138,7 @@ func TestPageKeyIsKeptForTheUser(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("AppData", filepath.Join(home, "AppData"))
-	t.Setenv("FLOWMAKER_PAGE_KEY", "")
+	t.Setenv("FLOVR_PAGE_KEY", "")
 	first, fromEnv, err := pageKey()
 	if err != nil || fromEnv || len(first) < minSecret {
 		t.Fatalf("key = %q, from the environment %v, error %v", first, fromEnv, err)
@@ -147,11 +147,11 @@ func TestPageKeyIsKeptForTheUser(t *testing.T) {
 		t.Errorf("the key changed between starts: %q, then %q", first, again)
 	}
 
-	t.Setenv("FLOWMAKER_PAGE_KEY", "short")
+	t.Setenv("FLOVR_PAGE_KEY", "short")
 	if _, _, err := pageKey(); err == nil {
-		t.Error("a short FLOWMAKER_PAGE_KEY was accepted")
+		t.Error("a short FLOVR_PAGE_KEY was accepted")
 	}
-	t.Setenv("FLOWMAKER_PAGE_KEY", strings.Repeat("k", minSecret))
+	t.Setenv("FLOVR_PAGE_KEY", strings.Repeat("k", minSecret))
 	if key, fromEnv, err := pageKey(); err != nil || !fromEnv || key != strings.Repeat("k", minSecret) {
 		t.Errorf("key = %q, from the environment %v, error %v", key, fromEnv, err)
 	}

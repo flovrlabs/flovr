@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/simonyosb/flowmaker/internal/workflow"
-	"github.com/simonyosb/flowmaker/internal/yamledit"
+	"github.com/flovrlabs/flovr/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/yamledit"
 )
 
 // source is what the server knows of a workflow file the page may change.
@@ -906,7 +906,7 @@ func writeFile(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".flowmaker-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".flovr-*")
 	if err != nil {
 		return err
 	}

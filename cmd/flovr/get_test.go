@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simonyosb/flowmaker/internal/fetch"
-	"github.com/simonyosb/flowmaker/internal/workflow"
+	"github.com/flovrlabs/flovr/internal/fetch"
+	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
 // gitRepo makes a repository that holds a notify component, tagged v1, and
@@ -49,7 +49,7 @@ http:
 	fetch.RepoURL = func(workflow.Remote) string { return repo }
 	fetch.AllowFile = true
 	t.Cleanup(func() { fetch.RepoURL = func(r workflow.Remote) string { return r.URL() }; fetch.AllowFile = false })
-	t.Setenv("FLOWMAKER_CACHE", t.TempDir())
+	t.Setenv("FLOVR_CACHE", t.TempDir())
 	return repo, run
 }
 

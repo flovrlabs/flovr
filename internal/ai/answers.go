@@ -20,7 +20,7 @@ import (
 )
 
 // AnswersFile is the file, in the folder of a workflow or a component, that
-// holds what the models answered in its tests, one answer to a line. flowmaker
+// holds what the models answered in its tests, one answer to a line. flovr
 // test --record writes it, and --replay answers from it without calling a
 // model, so the tests and the page can be tried without a key.
 const AnswersFile = "answers.jsonl"
@@ -208,7 +208,7 @@ func (r *Replay) read(path string) error {
 		}
 		var a Answer
 		if err := json.Unmarshal(lines.Bytes(), &a); err != nil || a.Key == "" || len(a.Answer) == 0 {
-			return fmt.Errorf("%s:%d: not an answer as flowmaker test --record writes them", path, n)
+			return fmt.Errorf("%s:%d: not an answer as flovr test --record writes them", path, n)
 		}
 		r.answers[a.Key] = a
 	}
@@ -220,7 +220,7 @@ func (r *Replay) Len() int { return len(r.answers) }
 
 func notRecorded(model string) error {
 	return &UnavailableError{fmt.Errorf("no answer of %s to this request was recorded: a prompt, an input or a schema may have changed since. "+
-		"Record the answers again with flowmaker test --record, which calls the model", model)}
+		"Record the answers again with flovr test --record, which calls the model", model)}
 }
 
 func (r *Replay) Generate(_ context.Context, req Request) (Response, error) {
