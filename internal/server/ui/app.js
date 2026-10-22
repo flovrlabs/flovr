@@ -2282,7 +2282,7 @@ function changesChip(w) {
       onclick: () => { if (saved) st.notice = null; go({ changes: !selected.changes }); },
     },
     uncommitted ? el("span", { class: "dot edit", title: "There are uncommitted changes" }) : null,
-    saved ? (uncommitted ? "Saved · not committed" : "Saved") : "Changes");
+    saved ? (w.trigger ? "Live" : "Saved") + (uncommitted ? " · not committed" : "") : "Changes");
 }
 
 function problemBanner(w) {
@@ -2391,7 +2391,8 @@ function updateBar() {
   const where = names.length > 3 ? names.slice(0, 3).join(", ") + " and " + (names.length - 3) + " more" : names.join(", ");
   b.status.replaceChildren(...(st.saving ? ["Saving…"]
     : n ? [plural(n, "unsaved change"), " in ", el("span", { class: "mono" }, where)]
-    : ["Saves to ", el("span", { class: "mono" }, w.path)]));
+    : ["Saves to ", el("span", { class: "mono" }, w.path), isComp(w) || !w.trigger ? "" : ", which the server runs at once"]));
+  b.status.title = n && !st.saving ? "Only on this page until saved: the server runs the file as it is saved." : "";
   b.status.classList.toggle("dirty", n > 0 && !st.saving);
   b.save.setAttribute("aria-disabled", st.saving || n === 0 ? "true" : "false");
   b.discard.setAttribute("aria-disabled", st.saving || n === 0 ? "true" : "false");
@@ -2410,6 +2411,15 @@ function dismissNotice(name) {
   render();
 }
 
+// liveNow says what a save changed for the server, which runs saved files at
+// once: the next request or scheduled run uses them.
+function liveNow(w) {
+  if (isComp(w)) return "The server uses it from now on. ";
+  if (isWebhook(w)) return ["The server runs this version from now on: the next request to ", el("span", { class: "mono" }, w.trigger.slice(5)), " uses it. "];
+  if (w.trigger) return "The server runs this version from now on, the next time its schedule fires. ";
+  return "";
+}
+
 // noticeView says in plain words what happened to a save, near the form.
 function noticeView(n, w) {
   const tone = { saved: "ok", invalid: "bad", error: "bad", network: "bad", conflict: "warn", external: "warn" }[n.kind];
@@ -2420,14 +2430,15 @@ function noticeView(n, w) {
   const isMake = n.did === "make";
   const isAdd = n.did === "add" || isTest || isMake, isRemove = n.did === "remove" || isUntest;
   if (n.kind === "saved") {
-    title = n.title || "Saved";
+    // In --edit the server runs what is saved at once: saved is live.
+    title = n.title || (!isComp(w) && w.trigger ? "Saved and live" : "Saved");
     // A component has no changes view of its own: its file is part of the workflow that uses it.
     const home = changesHome(w);
     text.push(el("p", {}, "Written to ", n.files.map((f, i) => [i ? ", " : "", el("span", { class: "mono" }, f)])), el("p", {},
-      "These changes are saved in the file but not committed. ",
+      liveNow(w), "Not committed yet: commit it with git to keep it in the history. ",
       !isComp(w) ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ changes: true }) }, "See what changed")
         : home ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ workflow: home.name, run: null, node: null, changes: true }) }, "See what changed in " + home.name) : null),
-      isComp(w) && usesOf(w) ? el("p", {}, "It now applies to ", plural(usesOf(w), "step"), " that use" + (usesOf(w) === 1 ? "s" : ""), " ", compTitle(w), ".") : null,
+      isComp(w) && usesOf(w) ? el("p", {}, "It applies at once to ", plural(usesOf(w), "step"), " that use" + (usesOf(w) === 1 ? "s" : ""), " ", compTitle(w), ".") : null,
       isUntest ? el("p", {}, "Its fixture file ", mono(n.fixture), " was left in the folder. Delete it yourself if nothing else uses it.") : null,
       isTest ? testNext(n, w) : null,
       droppedView(n));
@@ -4779,11 +4790,11 @@ function renderChanges(w) {
   } else if (c.data.git === false) {
     content = [el("p", { class: "empty" }, "This folder is not in a git repository, so there is no diff to show. Edits are still written to the file.")];
   } else if (!c.data.files || !c.data.files.length) {
-    content = [el("p", { class: "empty" }, "No uncommitted changes in this workflow's files. What the page shows is what the last commit says.")];
+    content = [el("p", { class: "empty" }, "No uncommitted changes in this workflow's files. What the page shows, and the server runs, is what the last commit says.")];
   } else {
     const lines = diffLines(c.data.diff || "");
     const added = lines.filter((l) => l[0] === "add").length, removed = lines.filter((l) => l[0] === "del").length;
-    lede = el("p", { class: "lede" }, "These changes are saved in the file but not committed. Commit them with git when you are happy with them.");
+    lede = el("p", { class: "lede" }, "These changes are saved, and the server already runs them, but they are not committed. Commit them with git when you are happy with them.");
     content = [
       el("div", { class: "files-head" },
         el("h2", {}, plural(c.data.files.length, "file"), " changed"),
@@ -6068,7 +6079,7 @@ function paintFoot() {
   }
   if (n === 0 && !st.saving) {
     b.dot.hidden = true;
-    b.count.textContent = "Nothing changed";
+    b.count.textContent = "No unsaved changes";
     b.what.textContent = "";
     b.writes.textContent = "";
     b.link.hidden = true;
