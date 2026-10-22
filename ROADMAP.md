@@ -13,6 +13,7 @@ Workflows as files
 - [x] `flovr validate`, `test`, `run` and `serve`; tests call the models for real
 - [x] The answers of a round of tests recorded (`--record`) and replayed (`--replay`), so the examples, the page and CI can be tried without a key
 - [x] A timeout for each step, and retries after the failures a step names: rate limits, outages, timeouts and answers that do not fit
+- [x] The model's answer kept as it wrote it when it does not fit the schema, and shown with what was wrong; an empty answer is a failure
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page
@@ -49,7 +50,6 @@ Services
 
 A test that calls a model for real is one sample of what the model does. This release is about knowing what a test result means.
 
-- [ ] Keep the model's raw answer when it does not fit the schema, and show it beside the field that broke
 - [ ] Say on the page what is only saved, what is committed and what is live
 - [ ] Run tests several times (`flovr test --repeat N`), with a pass rate for each test and each expectation
 - [ ] Compare a round of tests with the last one at the commit, and show what got worse

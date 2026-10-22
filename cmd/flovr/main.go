@@ -692,6 +692,18 @@ func printStep(indent string, r engine.StepResult) {
 		line += "  " + r.Duration.Round(time.Millisecond).String()
 	}
 	fmt.Println(line)
+	// An answer the step could not use is shown as the model wrote it.
+	var invalid *engine.InvalidAnswerError
+	if errors.As(r.Err, &invalid) {
+		answer := invalid.Raw
+		if len(answer) > 2000 {
+			answer = answer[:2000] + "…"
+		}
+		if strings.TrimSpace(answer) == "" {
+			answer = "(nothing)"
+		}
+		fmt.Printf("%s    the model answered:\n%s      %s\n", indent, indent, strings.ReplaceAll(answer, "\n", "\n"+indent+"      "))
+	}
 
 	// What the steps of a component made of steps did comes before what
 	// the component gave back.

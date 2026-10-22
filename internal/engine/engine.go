@@ -316,6 +316,9 @@ func (e *Engine) ai(ctx context.Context, w files, s *workflow.AIStep, env *expr.
 		return nil, detail, &InvalidAnswerError{resp.Text, fmt.Errorf("the model's answer is not JSON: %w", err)}
 	}
 	if err := schema.Validate(instance); err != nil {
+		if problems := workflow.SchemaProblems(err, "the answer"); problems != nil {
+			err = errors.New(strings.Join(problems, "; "))
+		}
 		return nil, detail, &InvalidAnswerError{resp.Text, fmt.Errorf("the model's answer does not match %s: %w", s.Output, err)}
 	}
 	var out any

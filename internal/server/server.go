@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/robfig/cron/v3"
 
@@ -128,9 +129,27 @@ type Step struct {
 	Error  string `json:"error,omitempty"`
 	Tries  int    `json:"tries,omitempty"` // only when it ran more than once
 
+	// Answer is what a model wrote when the step could not use it, as it
+	// wrote it, so that it can be read beside the error.
+	Answer string `json:"answer,omitempty"`
+
 	// Steps is what the steps of a component made of steps did, for a step
 	// that uses one.
 	Steps []Step `json:"steps,omitempty"`
+}
+
+// maxAnswer bounds the answer a run keeps of a model it could not use.
+const maxAnswer = 64 << 10
+
+// clip cuts s to at most n bytes, at the start of a character.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }
 
 // record turns what a step did into the form runs are kept in.
@@ -144,6 +163,10 @@ func record(r engine.StepResult) Step {
 	}
 	if r.Tries > 1 {
 		step.Tries = r.Tries
+	}
+	var invalid *engine.InvalidAnswerError
+	if errors.As(r.Err, &invalid) {
+		step.Answer = clip(invalid.Raw, maxAnswer)
 	}
 	for _, inner := range r.Steps {
 		step.Steps = append(step.Steps, record(inner))

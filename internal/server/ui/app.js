@@ -5877,6 +5877,7 @@ function outputBody(step, rec, tested) {
   if (tested && tested.wouldRun === false) parts.push(el("p", { class: "ned-warn" }, "Its condition is false for this data, so a run would have skipped it; it was tried anyway."));
   if (rec.status === "skipped") parts.push(el("p", { class: "ned-plain" }, "Skipped in this run: its condition was false for that data."));
   if (rec.error || rec.status === "failed") parts.push(el("p", { class: "ned-bad" }, tested ? "Test step failed" : "The step failed in this run"), el("pre", { class: "error" }, rec.error || "No reason was recorded."));
+  if (rec.answer !== undefined && rec.answer !== "") parts.push(el("p", { class: "ned-plain" }, "The model answered:"), el("pre", { class: "plain" }, rec.answer));
   const out = rec.output;
   if (ed.outMode === "json") {
     parts.push(out !== undefined ? jsonView(out) : el("p", { class: "ned-plain" }, "It has no output."));

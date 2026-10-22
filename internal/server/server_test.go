@@ -12,8 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/flovrlabs/flovr/internal/ai"
+	"github.com/flovrlabs/flovr/internal/engine"
 	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
@@ -723,5 +725,19 @@ func TestBrowsersAskingForAnIconAreNotRefused(t *testing.T) {
 		if strings.HasPrefix(line, "refused") {
 			t.Errorf("logged %q", line)
 		}
+	}
+}
+
+func TestAnAnswerAStepCouldNotUseIsKept(t *testing.T) {
+	err := fmt.Errorf("step %q failed: %w", "summarize", &engine.InvalidAnswerError{Raw: `{"summary": 42}`})
+	step := record(engine.StepResult{ID: "summarize", Kind: "ai", Status: engine.Failed, Err: err, Tries: 2})
+	if step.Answer != `{"summary": 42}` || step.Tries != 2 {
+		t.Errorf("answer = %q, tries = %d", step.Answer, step.Tries)
+	}
+	if long := clip(strings.Repeat("é", maxAnswer), maxAnswer); len(long) > maxAnswer+len("…") || !utf8.ValidString(long) {
+		t.Errorf("clipped to %d bytes, valid %v", len(long), utf8.ValidString(long))
+	}
+	if step := record(engine.StepResult{ID: "a", Status: engine.OK, Tries: 1}); step.Answer != "" || step.Tries != 0 {
+		t.Errorf("a step that ran once and worked: %+v", step)
 	}
 }
