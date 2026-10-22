@@ -428,6 +428,20 @@ docker run -p 8080:8080 -v "$PWD/workflows:/work" -e FLOVR_TOKEN -e FLOVR_PAGE_K
 
 It runs as a user of its own, uid 10001, and writes its runs to `/work/.flovr`, so that user must be able to write there; `--user "$(id -u):$(id -g)"` runs it as you instead. Give `FLOVR_PAGE_KEY`, since a key the server made itself is lost with the container.
 
+## For editors and coding agents
+
+A workflow file can start by naming its JSON Schema, which editors with a YAML language server use to complete and check it as it is typed:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/workflow.json
+flovr: 1
+name: triage-ticket
+```
+
+`flovr: 1` is the version of the file format. A file that leaves it out is in format 1, and a flovr that reads an older format than a file says refuses the file rather than guessing. `flovr schema` prints the schema of workflow files, and `flovr schema component` that of component files. The schema is checked against every valid file in this repository, but `flovr validate` checks more: expressions, the files a step names, and the components it uses.
+
+A coding agent, or a script, can read what flovr says as JSON: `flovr validate --json` gives each problem with its line, and `flovr test --json` how each test went, with its failures and the tokens it used.
+
 ## In CI
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. Without the secret, as in pull requests from forks, it runs them with `--replay`. The same commands work for your own workflows:

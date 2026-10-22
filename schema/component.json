@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/component.json",
+  "title": "Flovr component",
+  "description": "A component.yaml of Flovr, which the page calls a service: what it takes, one kind of work or steps of its own, and its tests. A step uses it with use: and with:.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name"],
+  "properties": {
+    "flovr": {
+      "description": "The version of the file format. A file that leaves it out is in format 1.",
+      "const": 1
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "description": "A line on what it is for, shown where a component is chosen.", "type": "string" },
+    "input": {
+      "description": "What it takes, as name: type. Inside, expressions read each as input.<name>.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+      "additionalProperties": { "enum": ["string", "number", "boolean", "object", "list", "any"] }
+    },
+    "ai": { "$ref": "workflow.json#/$defs/ai" },
+    "decide": { "$ref": "workflow.json#/$defs/decide" },
+    "http": { "$ref": "workflow.json#/$defs/http" },
+    "steps": {
+      "description": "Steps of its own, run in order as in a workflow.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "workflow.json#/$defs/step" }
+    },
+    "output": {
+      "description": "With steps: what it gives back, a value that may take values from them.",
+      "$ref": "workflow.json#/$defs/value"
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["input", "expect"],
+        "properties": {
+          "name": { "type": "string" },
+          "input": { "description": "The values to give it, or a JSON file that holds them." },
+          "expect": { "type": "object", "minProperties": 1 }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    { "required": ["ai"] },
+    { "required": ["decide"] },
+    { "required": ["http"] },
+    { "required": ["steps"] }
+  ]
+}

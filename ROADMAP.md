@@ -16,6 +16,7 @@ Workflows as files
 - [x] The model's answer kept as it wrote it when it does not fit the schema, and shown with what was wrong; an empty answer is a failure
 - [x] The tokens of each step and run, and of each round of tests
 - [x] Tests run several times (`flovr test --repeat N`), saying how often each test passed and each expectation was missed, with `--min-pass` and a token budget
+- [x] A version for the file format (`flovr: 1`), JSON Schemas of the files for editors and agents (`flovr schema`), and JSON from `validate` and `test`
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page

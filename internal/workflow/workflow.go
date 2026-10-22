@@ -31,7 +31,12 @@ const (
 // FileName is the file Load looks for when given a directory.
 const FileName = "workflow.yaml"
 
+// Format is the version of the file format this flovr reads. A file says
+// which it is written in as flovr: 1; one that says nothing is in format 1.
+const Format = 1
+
 type Workflow struct {
+	Flovr   int      `yaml:"flovr"` // the format the file is written in
 	Name    string   `yaml:"name"`
 	Trigger *Trigger `yaml:"trigger"`
 	Steps   []Step   `yaml:"steps"`

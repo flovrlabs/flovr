@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -273,5 +274,26 @@ func TestRepeatSaysHowOftenATestPassed(t *testing.T) {
 	}
 	if _, err := run("--repeat", "2", "--replay"); err == nil {
 		t.Error("--repeat with --replay was taken")
+	}
+}
+
+func TestValidateSaysWhatIsWrongAsJSON(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "workflow.yaml"), []byte("flovr: 2\nname: bad\ntrigger:\n  webhook: /x\nsteps:\n  - id: a\n    retry: {times: 20}\n    http: {method: POST, url: \"http://x\"}\n"), 0o644)
+	cmd := validateCmd()
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{"--json", dir})
+	var err error
+	out := stdout(t, func() { err = cmd.Execute() })
+	if !errors.As(err, new(quiet)) {
+		t.Errorf("err = %v, want one already reported", err)
+	}
+	var report validateReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("%v in:\n%s", err, out)
+	}
+	if report.OK || len(report.Problems) != 2 || report.Problems[0].Line != 1 || report.Problems[1].Line != 7 ||
+		!strings.Contains(report.Problems[1].Message, "retry: times must be from 1 to 10") {
+		t.Errorf("report = %+v", report)
 	}
 }

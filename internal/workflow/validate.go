@@ -55,6 +55,7 @@ func (c *checker) under(base []any, path ...any) int {
 
 func (c *checker) run() {
 	w := c.w
+	c.format(w.Flovr)
 	if w.Name == "" {
 		c.addf(c.line("name"), "name is required")
 	}
@@ -74,6 +75,16 @@ func (c *checker) run() {
 	ids := c.steps(w.Steps, "trigger")
 	c.respond(ids)
 	c.tests(ids)
+}
+
+// format checks the version of the file format a file says it is written in.
+func (c *checker) format(v int) {
+	switch {
+	case v < 0:
+		c.addf(c.line("flovr"), "flovr: the format is a number from 1, such as flovr: %d", Format)
+	case v > Format:
+		c.addf(c.line("flovr"), "flovr: the file is written in format %d, and this flovr reads format %d; a newer flovr can run it", v, Format)
+	}
 }
 
 // reserved are the names expressions use for things other than steps.

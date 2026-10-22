@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/component.json
+flovr: 1
 # Tells a team about an urgent ticket. Every team is told the same way, so
 # the workflow uses this once per team instead of repeating the request.
 name: notify

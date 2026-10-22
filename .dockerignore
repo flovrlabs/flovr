@@ -5,6 +5,7 @@
 !go.sum
 !cmd/
 !internal/
+!schema/
 !examples/
 !LICENSE
 **/.env

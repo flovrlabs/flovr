@@ -24,7 +24,8 @@ func TestServiceIsMadeFromThePage(t *testing.T) {
 	if made := answer.Component; made.Name != filepath.ToSlash(dir) || made.Title != "ping" || !made.Component || made.Rev == "" {
 		t.Errorf("answer = %+v", made)
 	}
-	want := `name: ping
+	want := `flovr: 1
+name: ping
 description: Tells a channel something happened.
 
 input:
