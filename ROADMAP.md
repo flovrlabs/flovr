@@ -20,6 +20,7 @@ Workflows as files
 - [x] A skill that teaches coding agents to write and test workflows, and `llms.txt`
 - [x] Models that Ollama runs on your own machine, as `ollama/...`, with no key
 - [x] Messages that say plainly what is wrong with an expression, and what to run instead when no model can be reached
+- [x] The page says what is only on the page, what is saved and so live, and what is not committed yet
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page
@@ -57,7 +58,6 @@ Services
 
 A test that calls a model for real is one sample of what the model does. This release is about knowing what a test result means.
 
-- [ ] Say on the page what is only saved, what is committed and what is live
 - [ ] The pass rates of repeated tests on the page
 - [ ] Compare a round of tests with the last one at the commit, and show what got worse
 - [ ] Keep a run that failed as a test, writing what should have happened
