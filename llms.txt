@@ -1,0 +1,22 @@
+# Flovr
+
+> Flovr runs AI workflows written as YAML files in git, and tests them. A workflow is a workflow.yaml: what starts it (a webhook, a schedule or by hand), steps that ask a model for structured output (ai), ask a decision model typed questions (decide), send a request (http) or use a component (use), an optional answer to the caller, and tests. The flovr command validates, tests, runs and serves workflows; a server runs them on webhooks and schedules and has a page that edits the files as small git diffs. Open source, Apache-2.0, one Go binary.
+
+Write and check a workflow with `flovr validate --json`, test it without a key with `flovr test --replay`, and test it for real with `flovr test` (calls models, costs money). Secrets come from `${env.NAME}` and are never written into files.
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/flovrlabs/flovr/main/README.md): install, the file format, steps, expressions, tests, components, the server and the page
+- [Skill for coding agents](https://raw.githubusercontent.com/flovrlabs/flovr/main/skills/flovr/SKILL.md): how to write, change and test workflow files, in one page
+- [Workflow JSON Schema](https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/workflow.json): every field of a workflow.yaml
+- [Component JSON Schema](https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/component.json): every field of a component.yaml
+
+## Examples
+
+- [triage-ticket](https://raw.githubusercontent.com/flovrlabs/flovr/main/examples/triage-ticket/workflow.yaml): decide, ai with a schema, components, tests
+- [moderate-comment](https://raw.githubusercontent.com/flovrlabs/flovr/main/examples/moderate-comment/workflow.yaml): a webhook that answers the caller
+
+## Optional
+
+- [Roadmap](https://raw.githubusercontent.com/flovrlabs/flovr/main/ROADMAP.md): what is done, what comes next, and what is not planned
+- [Working on Flovr](https://raw.githubusercontent.com/flovrlabs/flovr/main/AGENTS.md): checks, layout and rules for changing Flovr itself

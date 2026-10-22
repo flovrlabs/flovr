@@ -17,6 +17,7 @@ Workflows as files
 - [x] The tokens of each step and run, and of each round of tests
 - [x] Tests run several times (`flovr test --repeat N`), saying how often each test passed and each expectation was missed, with `--min-pass` and a token budget
 - [x] A version for the file format (`flovr: 1`), JSON Schemas of the files for editors and agents (`flovr schema`), and JSON from `validate` and `test`
+- [x] A skill that teaches coding agents to write and test workflows, and `llms.txt`
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page
@@ -43,8 +44,9 @@ Services
 
 ## Now: 0.1, the first public release
 
-- [ ] Move the repository to `flovrlabs/flovr`, open it and tag 0.1.0, which builds the binaries
-- [ ] The Homebrew tap, `flovrlabs/homebrew-tap`, that the cask is published to
+- [x] Move the repository to `flovrlabs/flovr` and open it
+- [x] The Homebrew tap, `flovrlabs/homebrew-tap`, that the cask is published to
+- [ ] Tag 0.1.0, which builds the binaries
 - [ ] Publish the market's list with the example services, pinned to the release
 - [ ] The page of a service in the same editor as a workflow; its panel is still the old one
 - [ ] Services made of steps, from the page

@@ -442,6 +442,14 @@ name: triage-ticket
 
 A coding agent, or a script, can read what flovr says as JSON: `flovr validate --json` gives each problem with its line, and `flovr test --json` how each test went, with its failures and the tokens it used.
 
+[skills/flovr/SKILL.md](skills/flovr/SKILL.md) teaches a coding agent the format and the loop of validating and testing a change, in one page. For Claude Code, put it in the repository of your workflows:
+
+```bash
+mkdir -p .claude/skills/flovr && curl -fsSL https://raw.githubusercontent.com/flovrlabs/flovr/main/skills/flovr/SKILL.md -o .claude/skills/flovr/SKILL.md
+```
+
+Other agents can be pointed at the same file from their `AGENTS.md`. [llms.txt](llms.txt) lists the pages an agent should read.
+
 ## In CI
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. Without the secret, as in pull requests from forks, it runs them with `--replay`. The same commands work for your own workflows:
@@ -458,7 +466,7 @@ Both exit with a status other than 0 when something is wrong, and print what.
 
 ## What it does not do yet
 
-- It does not retry a step that failed or queue runs; a run is one pass through the steps in one process.
+- It does not queue runs; a run is one pass through the steps in one process, and a run under way when the server stops is lost.
 - It has no steps for databases or message brokers. A workflow reaches other systems through `http`.
 - It does not check signatures of webhooks from providers such as Stripe or GitHub.
 - The page does not reorder steps, does not add or remove the steps of a component, and makes only services that do one piece of work. A workflow it makes starts with one step and has no `respond`.
