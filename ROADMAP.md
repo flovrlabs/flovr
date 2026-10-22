@@ -12,6 +12,7 @@ Workflows as files
 - [x] Expressions in CEL, checked before anything runs
 - [x] `flovr validate`, `test`, `run` and `serve`; tests call the models for real
 - [x] The answers of a round of tests recorded (`--record`) and replayed (`--replay`), so the examples, the page and CI can be tried without a key
+- [x] A timeout for each step, and retries after the failures a step names: rate limits, outages, timeouts and answers that do not fit
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page
@@ -65,7 +66,7 @@ A test that calls a model for real is one sample of what the model does. This re
 
 ## Later
 
-- [ ] Retries and time limits for a step; runs queued so that a restart loses none
+- [ ] Runs queued so that a restart loses none
 - [ ] Signatures of webhooks from Stripe, GitHub and others; methods other than POST
 - [ ] Steps of your own code, run in a WebAssembly sandbox, so a custom step needs no trust in its author
 - [ ] Steps for databases and message queues

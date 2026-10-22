@@ -67,6 +67,11 @@ type Step struct {
 	Use  string         `yaml:"use"`
 	With map[string]any `yaml:"with"`
 
+	// Timeout limits each try of the step, and Retry says when it tries
+	// again after a failure.
+	Timeout *Duration `yaml:"timeout"`
+	Retry   *Retry    `yaml:"retry"`
+
 	component *Component // what Use names, once the workflow is loaded
 }
 

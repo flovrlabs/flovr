@@ -171,6 +171,28 @@ A `decide` question is yes/no unless it has `choice` (a mapping of answer to mea
 
 Models are named `provider/model`. The providers are `anthropic`, `openai` and `openrouter`, with keys in `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY`. `OPENAI_BASE_URL` points `openai/...` models at another server that speaks the same API. Decision models come from `openrouter` only, through its Decisions API, which OpenRouter labels alpha.
 
+### Timeouts and retries
+
+A step can limit each try with `timeout`, and try again after a failure with `retry`:
+
+```yaml
+  - id: summarize
+    timeout: 30s
+    retry: 2
+    ai: ...
+```
+
+`retry: 2` means up to two more tries after the first, waiting 1s, then 2s, then twice as long each time, up to a minute. In full it is `retry: {times: 2, wait: 2s, on: [rate-limit, unavailable]}`, where `on` names the failures to try again after:
+
+| Failure | When |
+|---|---|
+| `rate-limit` | a model service or the server of an `http` step answered 429 |
+| `unavailable` | it answered 5xx, or could not be reached |
+| `timeout` | a try took longer than the step's `timeout` |
+| `invalid-answer` | an `ai` step's model gave an answer that is empty, not JSON, or does not fit the schema |
+
+Without `on`, a step tries again after any of them. A failure that another try would not change, such as a request the service refused, a wrong key or an expression that does not work, is never tried again. Nothing is tried again unless the step says so: an `http` step that sends a POST may already have done its work when the answer is lost. The clients of the model services already try a rate limit or an outage twice within each call; `retry` runs the whole step again. A run records how many tries a step took.
+
 ### Expressions
 
 `when` is a [CEL](https://cel.dev) expression that must be true for the step to run:

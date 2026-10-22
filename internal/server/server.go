@@ -126,6 +126,7 @@ type Step struct {
 	Millis int64  `json:"ms"`
 	Output any    `json:"output,omitempty"`
 	Error  string `json:"error,omitempty"`
+	Tries  int    `json:"tries,omitempty"` // only when it ran more than once
 
 	// Steps is what the steps of a component made of steps did, for a step
 	// that uses one.
@@ -140,6 +141,9 @@ func record(r engine.StepResult) Step {
 	}
 	if r.Err != nil {
 		step.Error = r.Err.Error()
+	}
+	if r.Tries > 1 {
+		step.Tries = r.Tries
 	}
 	for _, inner := range r.Steps {
 		step.Steps = append(step.Steps, record(inner))

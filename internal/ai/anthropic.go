@@ -83,6 +83,7 @@ func describe(err error, model string) error {
 		case http.StatusTooManyRequests:
 			err = errors.New("Anthropic rate limit reached; try again shortly")
 		}
+		err = &StatusError{apiErr.StatusCode, err}
 	}
 	return &UnavailableError{err}
 }

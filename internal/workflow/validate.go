@@ -138,6 +138,13 @@ func (c *checker) steps(steps []Step, given string) []string {
 		if s.With != nil && s.Use == "" {
 			c.addf(c.under(base, "with"), "%s: with is only for a step that has use", label)
 		}
+		for _, err := range checkLimits(s) {
+			key := "retry"
+			if strings.HasPrefix(err.Error(), "timeout") {
+				key = "timeout"
+			}
+			c.addf(c.under(base, key), "%s: %v", label, err)
+		}
 
 		c.reads(line, label, s.expressions(), c.shapes)
 		if usable {
