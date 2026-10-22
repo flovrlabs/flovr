@@ -55,6 +55,7 @@ func (c *checker) under(base []any, path ...any) int {
 
 func (c *checker) run() {
 	w := c.w
+	c.format(w.Flovr)
 	if w.Name == "" {
 		c.addf(c.line("name"), "name is required")
 	}
@@ -74,6 +75,16 @@ func (c *checker) run() {
 	ids := c.steps(w.Steps, "trigger")
 	c.respond(ids)
 	c.tests(ids)
+}
+
+// format checks the version of the file format a file says it is written in.
+func (c *checker) format(v int) {
+	switch {
+	case v < 0:
+		c.addf(c.line("flovr"), "flovr: the format is a number from 1, such as flovr: %d", Format)
+	case v > Format:
+		c.addf(c.line("flovr"), "flovr: the file is written in format %d, and this flovr reads format %d; a newer flovr can run it", v, Format)
+	}
 }
 
 // reserved are the names expressions use for things other than steps.
@@ -109,6 +120,11 @@ func (c *checker) steps(steps []Step, given string) []string {
 			c.addf(line, "%s: %v", label, err)
 			continue
 		}
+		var later []string
+		for _, next := range steps[i:] {
+			later = append(later, next.ID)
+		}
+		env = env.Later(later...)
 		if s.When != "" {
 			if err := env.CheckCondition(s.When); err != nil {
 				c.addf(c.line("steps", i, "when"), "%s: when: %v", label, err)
@@ -137,6 +153,13 @@ func (c *checker) steps(steps []Step, given string) []string {
 		}
 		if s.With != nil && s.Use == "" {
 			c.addf(c.under(base, "with"), "%s: with is only for a step that has use", label)
+		}
+		for _, err := range checkLimits(s) {
+			key := "retry"
+			if strings.HasPrefix(err.Error(), "timeout") {
+				key = "timeout"
+			}
+			c.addf(c.under(base, key), "%s: %v", label, err)
 		}
 
 		c.reads(line, label, s.expressions(), c.shapes)

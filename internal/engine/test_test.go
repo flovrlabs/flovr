@@ -98,7 +98,7 @@ func TestExpectations(t *testing.T) {
 			name:   "key the output does not have",
 			answer: outageHigh,
 			expect: map[string]any{"classify.urgency": "high"},
-			want:   []string{`classify.urgency: no such key: urgency`},
+			want:   []string{`classify.urgency: classify has no urgency`},
 		},
 		{
 			name:   "run that fails",

@@ -31,7 +31,12 @@ const (
 // FileName is the file Load looks for when given a directory.
 const FileName = "workflow.yaml"
 
+// Format is the version of the file format this flovr reads. A file says
+// which it is written in as flovr: 1; one that says nothing is in format 1.
+const Format = 1
+
 type Workflow struct {
+	Flovr   int      `yaml:"flovr"` // the format the file is written in
 	Name    string   `yaml:"name"`
 	Trigger *Trigger `yaml:"trigger"`
 	Steps   []Step   `yaml:"steps"`
@@ -66,6 +71,11 @@ type Step struct {
 	// it gives the component.
 	Use  string         `yaml:"use"`
 	With map[string]any `yaml:"with"`
+
+	// Timeout limits each try of the step, and Retry says when it tries
+	// again after a failure.
+	Timeout *Duration `yaml:"timeout"`
+	Retry   *Retry    `yaml:"retry"`
 
 	component *Component // what Use names, once the workflow is loaded
 }

@@ -12,6 +12,14 @@ Workflows as files
 - [x] Expressions in CEL, checked before anything runs
 - [x] `flovr validate`, `test`, `run` and `serve`; tests call the models for real
 - [x] The answers of a round of tests recorded (`--record`) and replayed (`--replay`), so the examples, the page and CI can be tried without a key
+- [x] A timeout for each step, and retries after the failures a step names: rate limits, outages, timeouts and answers that do not fit
+- [x] The model's answer kept as it wrote it when it does not fit the schema, and shown with what was wrong; an empty answer is a failure
+- [x] The tokens of each step and run, and of each round of tests
+- [x] Tests run several times (`flovr test --repeat N`), saying how often each test passed and each expectation was missed, with `--min-pass` and a token budget
+- [x] A version for the file format (`flovr: 1`), JSON Schemas of the files for editors and agents (`flovr schema`), and JSON from `validate` and `test`
+- [x] A skill that teaches coding agents to write and test workflows, and `llms.txt`
+- [x] Models that Ollama runs on your own machine, as `ollama/...`, with no key
+- [x] Messages that say plainly what is wrong with an expression, and what to run instead when no model can be reached
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page
@@ -38,8 +46,9 @@ Services
 
 ## Now: 0.1, the first public release
 
-- [ ] Move the repository to `flovrlabs/flovr`, open it and tag 0.1.0, which builds the binaries
-- [ ] The Homebrew tap, `flovrlabs/homebrew-tap`, that the cask is published to
+- [x] Move the repository to `flovrlabs/flovr` and open it
+- [x] The Homebrew tap, `flovrlabs/homebrew-tap`, that the cask is published to
+- [ ] Tag 0.1.0, which builds the binaries
 - [ ] Publish the market's list with the example services, pinned to the release
 - [ ] The page of a service in the same editor as a workflow; its panel is still the old one
 - [ ] Services made of steps, from the page
@@ -48,9 +57,8 @@ Services
 
 A test that calls a model for real is one sample of what the model does. This release is about knowing what a test result means.
 
-- [ ] Keep the model's raw answer when it does not fit the schema, and show it beside the field that broke
 - [ ] Say on the page what is only saved, what is committed and what is live
-- [ ] Run tests several times (`flovr test --repeat N`), with a pass rate for each test and each expectation
+- [ ] The pass rates of repeated tests on the page
 - [ ] Compare a round of tests with the last one at the commit, and show what got worse
 - [ ] Keep a run that failed as a test, writing what should have happened
 
@@ -59,13 +67,13 @@ A test that calls a model for real is one sample of what the model does. This re
 - [ ] Run again with the same input, or from a step on, reusing what the steps before it gave
 - [ ] A form to run a workflow now, built from its trigger's schema; the next times a schedule fires
 - [ ] What changed, drawn on the steps of the workflow, with the history `git log` keeps
-- [ ] Tokens, and an estimate of the cost, of each run and each round of tests
+- [ ] An estimate of the cost of each run and each round of tests
 - [ ] Try a step with changes not saved yet
 - [ ] A branch for "otherwise", and steps put in another order
 
 ## Later
 
-- [ ] Retries and time limits for a step; runs queued so that a restart loses none
+- [ ] Runs queued so that a restart loses none
 - [ ] Signatures of webhooks from Stripe, GitHub and others; methods other than POST
 - [ ] Steps of your own code, run in a WebAssembly sandbox, so a custom step needs no trust in its author
 - [ ] Steps for databases and message queues

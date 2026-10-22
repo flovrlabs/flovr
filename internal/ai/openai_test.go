@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,5 +147,72 @@ func TestOpenAIFailures(t *testing.T) {
 				t.Errorf("error is an UnavailableError: %v, want %v", got, tt.unavailable)
 			}
 		})
+	}
+}
+
+func TestOllamaNeedsNoKey(t *testing.T) {
+	baseURL, _, header := fakeChatAPI(t, http.StatusOK, completion("stop", `{"category":"refund"}`, ""))
+	t.Setenv("OLLAMA_HOST", strings.TrimSuffix(baseURL, "/v1"))
+	t.Setenv("OPENAI_API_KEY", "openai-key")
+
+	resp, err := NewOllama().Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != `{"category":"refund"}` {
+		t.Errorf("text = %q", resp.Text)
+	}
+	if got := header.Get("Authorization"); strings.Contains(got, "openai-key") {
+		t.Errorf("Authorization = %q: the OpenAI key was sent to Ollama", got)
+	}
+}
+
+func TestAnOllamaThatIsNotRunningIsSaidPlainly(t *testing.T) {
+	// A port that nothing listens on.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+	t.Setenv("OLLAMA_HOST", addr)
+
+	_, err = NewOllama(option.WithMaxRetries(0)).Generate(context.Background(), request)
+	want := "Ollama could not be reached at http://" + addr + "; is it running?"
+	if err == nil || err.Error() != want {
+		t.Errorf("error = %v, want %q", err, want)
+	}
+	// A step that retries after an outage tries again.
+	var netErr net.Error
+	if !errors.As(err, &netErr) {
+		t.Errorf("error %v does not keep the network error", err)
+	}
+}
+
+func TestOllamaHostIsReadAsOllamaReadsIt(t *testing.T) {
+	for host, want := range map[string]string{
+		"":                           "http://127.0.0.1:11434/v1/",
+		"0.0.0.0":                    "http://0.0.0.0:11434/v1/",
+		"gpu-box":                    "http://gpu-box:11434/v1/",
+		"gpu-box:8080":               "http://gpu-box:8080/v1/",
+		"[::1]":                      "http://[::1]:11434/v1/",
+		"http://gpu-box:11434/":      "http://gpu-box:11434/v1/",
+		"https://ollama.example.com": "https://ollama.example.com/v1/",
+	} {
+		if got := ollamaURL(host); got != want {
+			t.Errorf("OLLAMA_HOST=%q: %s, want %s", host, got, want)
+		}
+	}
+}
+
+func TestAModelOllamaDoesNotHaveIsToBeFetched(t *testing.T) {
+	baseURL, _, _ := fakeChatAPI(t, http.StatusNotFound, `{"error":{"message":"model 'llama3.2' not found","type":"api_error"}}`)
+	t.Setenv("OLLAMA_HOST", strings.TrimSuffix(baseURL, "/v1"))
+	req := request
+	req.Model = "llama3.2"
+	_, err := NewOllama(option.WithMaxRetries(0)).Generate(context.Background(), req)
+	want := "Ollama answered 404: model 'llama3.2' not found; fetch it with: ollama pull llama3.2"
+	if err == nil || err.Error() != want {
+		t.Errorf("error = %v, want %q", err, want)
 	}
 }

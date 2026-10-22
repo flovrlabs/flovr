@@ -210,7 +210,7 @@ func TestMissingEnvVarFailsTheStep(t *testing.T) {
 		Env:   map[string]string{},
 	}
 	_, err = eng.Run(context.Background(), w, map[string]any{"body": "x"})
-	want := `step "escalate" failed: url: ${env.PAGER_URL}: no such key: PAGER_URL`
+	want := `step "escalate" failed: url: ${env.PAGER_URL}: PAGER_URL is not set in the environment`
 	if err == nil || err.Error() != want {
 		t.Errorf("error = %v, want %s", err, want)
 	}

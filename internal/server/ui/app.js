@@ -4768,7 +4768,8 @@ function diffLines(text) {
 
 function renderChanges(w) {
   const c = changesCache[w.name] || { state: "loading" };
-  const lede = el("p", { class: "lede" }, "These changes are saved in the file but not committed. Commit them with git when you are happy with them.");
+  // Said only over changes there are.
+  let lede = null;
   let content;
   if (c.state === "error") {
     content = [el("p", { class: "empty" }, "Could not read the changes: " + c.error + ". ",
@@ -4782,6 +4783,7 @@ function renderChanges(w) {
   } else {
     const lines = diffLines(c.data.diff || "");
     const added = lines.filter((l) => l[0] === "add").length, removed = lines.filter((l) => l[0] === "del").length;
+    lede = el("p", { class: "lede" }, "These changes are saved in the file but not committed. Commit them with git when you are happy with them.");
     content = [
       el("div", { class: "files-head" },
         el("h2", {}, plural(c.data.files.length, "file"), " changed"),
@@ -5877,6 +5879,7 @@ function outputBody(step, rec, tested) {
   if (tested && tested.wouldRun === false) parts.push(el("p", { class: "ned-warn" }, "Its condition is false for this data, so a run would have skipped it; it was tried anyway."));
   if (rec.status === "skipped") parts.push(el("p", { class: "ned-plain" }, "Skipped in this run: its condition was false for that data."));
   if (rec.error || rec.status === "failed") parts.push(el("p", { class: "ned-bad" }, tested ? "Test step failed" : "The step failed in this run"), el("pre", { class: "error" }, rec.error || "No reason was recorded."));
+  if (rec.answer !== undefined && rec.answer !== "") parts.push(el("p", { class: "ned-plain" }, "The model answered:"), el("pre", { class: "plain" }, rec.answer));
   const out = rec.output;
   if (ed.outMode === "json") {
     parts.push(out !== undefined ? jsonView(out) : el("p", { class: "ned-plain" }, "It has no output."));

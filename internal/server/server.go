@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/robfig/cron/v3"
 
@@ -102,6 +103,9 @@ type Run struct {
 	Steps    []Step    `json:"steps"`
 	Trigger  any       `json:"trigger,omitempty"`
 
+	// Tokens is what the run's models read and wrote, over all its steps.
+	Tokens engine.Tokens `json:"tokens,omitzero"`
+
 	// Response is what the caller was answered with, for a workflow that
 	// has respond.
 	Response *engine.Response `json:"response,omitempty"`
@@ -126,20 +130,56 @@ type Step struct {
 	Millis int64  `json:"ms"`
 	Output any    `json:"output,omitempty"`
 	Error  string `json:"error,omitempty"`
+	Tries  int    `json:"tries,omitempty"` // only when it ran more than once
+
+	Tokens engine.Tokens `json:"tokens,omitzero"`
+
+	// Answer is what a model wrote when the step could not use it, as it
+	// wrote it, so that it can be read beside the error.
+	Answer string `json:"answer,omitempty"`
 
 	// Steps is what the steps of a component made of steps did, for a step
 	// that uses one.
 	Steps []Step `json:"steps,omitempty"`
 }
 
+// tokensOf is what a log line says of the tokens of a run, if it used any.
+func tokensOf(t engine.Tokens) string {
+	if t == (engine.Tokens{}) {
+		return ""
+	}
+	return ", " + t.String()
+}
+
+// maxAnswer bounds the answer a run keeps of a model it could not use.
+const maxAnswer = 64 << 10
+
+// clip cuts s to at most n bytes, at the start of a character.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
+}
+
 // record turns what a step did into the form runs are kept in.
 func record(r engine.StepResult) Step {
 	step := Step{
 		ID: r.ID, Kind: r.Kind, Status: string(r.Status), Detail: r.Detail,
-		Millis: r.Duration.Milliseconds(), Output: r.Output,
+		Millis: r.Duration.Milliseconds(), Output: r.Output, Tokens: r.Tokens,
 	}
 	if r.Err != nil {
 		step.Error = r.Err.Error()
+	}
+	if r.Tries > 1 {
+		step.Tries = r.Tries
+	}
+	var invalid *engine.InvalidAnswerError
+	if errors.As(r.Err, &invalid) {
+		step.Answer = clip(invalid.Raw, maxAnswer)
 	}
 	for _, inner := range r.Steps {
 		step.Steps = append(step.Steps, record(inner))
@@ -581,6 +621,7 @@ func (s *Server) run(id string, w *workflow.Workflow, trigger any, source string
 				line += "  " + firstLine(step.Error)
 			}
 			run.Steps = append(run.Steps, step)
+			run.Tokens.Add(r.Tokens)
 			s.history.put(run)
 			// Step outputs can hold customer data, so they are not logged.
 			s.opts.Log("%s", line)
@@ -593,7 +634,7 @@ func (s *Server) run(id string, w *workflow.Workflow, trigger any, source string
 	}
 	run.Millis = time.Since(run.Started).Milliseconds()
 	s.history.put(run)
-	s.opts.Log("%s %s %s in %s", id, w.Name, run.Status, time.Duration(run.Millis)*time.Millisecond)
+	s.opts.Log("%s %s %s in %s%s", id, w.Name, run.Status, time.Duration(run.Millis)*time.Millisecond, tokensOf(run.Tokens))
 
 	if s.opts.OnRun != nil {
 		s.opts.OnRun(run)

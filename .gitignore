@@ -3,3 +3,4 @@
 .flovr/
 # Runs kept before the rename to Flovr.
 .flowmaker/
+.DS_Store

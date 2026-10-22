@@ -55,8 +55,8 @@ func TestEvalErrors(t *testing.T) {
 	}{
 		{"${trigger.body", "unclosed ${"},
 		{"${ }", "empty ${}"},
-		{"${later.summary}", "undeclared reference to 'later'"},
-		{"${classify.missing}", "no such key: missing"},
+		{"${later.summary}", "there is nothing called later here; an expression here can read trigger, classify and env"},
+		{"${classify.missing}", "classify has no missing"},
 		// The environment is read by naming a variable, and in no other way.
 		{"${env}", "as env.NAME"},
 		{`${env["URL"]}`, "as env.NAME"},
@@ -178,6 +178,32 @@ func TestReads(t *testing.T) {
 		slices.Sort(want)
 		if !slices.Equal(got, want) {
 			t.Errorf("Reads(%q) = %v, want %v", src, got, want)
+		}
+	}
+}
+
+func TestWhatIsWrongWithAnExpressionIsSaidPlainly(t *testing.T) {
+	env, _ := testEnv(t)
+	env = env.Later("notify")
+	for src, want := range map[string]string{
+		`classify.priority.value ==`:        `the expression ends too soon, after "classify.priority.value =="`,
+		`trigger.body.name = "a"`:           `= is not an operator; to compare, write ==`,
+		`trigger.body.name == 'a`:           `the text 'a has no closing '`,
+		`trigger.body.items[0`:              `a closing ] is missing at the end`,
+		`(trigger.body.x == 1`:              `a closing ) is missing at the end`,
+		`trigger.body.x == 1)`:              `) is not expected after "trigger.body.x == 1"`,
+		`trigger..body`:                     `. is not expected after "trigger."`,
+		`trigger.body.a and trigger.body.b`: `CEL writes and as &&`,
+		`trigger.body.x # 2`:                `# cannot be part of an expression`,
+		`upper(trigger.body.name)`:          `there is no function called upper`,
+		`trigger.body.name.upper()`:         `there is no function called upper`,
+		`clasify.priority`:                  `there is nothing called clasify here; an expression here can read trigger, classify and env`,
+		`notify.status`:                     `notify has not run yet here; a step can read only the steps before it`,
+		`size(trigger.body) + "x"`:          `+ cannot be used on these types: int, string`,
+	} {
+		err := env.CheckExpr(src)
+		if err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %q", src, err, want)
 		}
 	}
 }

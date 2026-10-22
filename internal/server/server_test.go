@@ -12,8 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/flovrlabs/flovr/internal/ai"
+	"github.com/flovrlabs/flovr/internal/engine"
 	"github.com/flovrlabs/flovr/internal/workflow"
 )
 
@@ -142,7 +144,7 @@ func TestWebhookRunsInBackground(t *testing.T) {
 	logged := strings.Join(*f.logs, "\n")
 	for _, want := range []string{
 		accepted.Run + " triage-ticket started by webhook /tickets",
-		accepted.Run + "   classify ok  fake-decider, 0 tokens in",
+		accepted.Run + "   classify ok  fake-decider",
 		accepted.Run + "   alert_billing skipped",
 		accepted.Run + " triage-ticket ok in ",
 	} {
@@ -571,7 +573,7 @@ func TestStateDescribesWorkflowsAndRuns(t *testing.T) {
 
 	var full Run
 	json.Unmarshal(get(f.srv, "/api/runs/"+finished.ID).Body.Bytes(), &full)
-	if full.Trigger == nil || full.Steps[0].Output == nil || full.Steps[0].Detail != "fake-decider, 0 tokens in" || full.Started.IsZero() {
+	if full.Trigger == nil || full.Steps[0].Output == nil || full.Steps[0].Detail != "fake-decider" || full.Started.IsZero() {
 		t.Errorf("run detail = %+v", full)
 	}
 	if rec := get(f.srv, "/api/runs/r-missing"); rec.Code != http.StatusNotFound {
@@ -723,5 +725,19 @@ func TestBrowsersAskingForAnIconAreNotRefused(t *testing.T) {
 		if strings.HasPrefix(line, "refused") {
 			t.Errorf("logged %q", line)
 		}
+	}
+}
+
+func TestAnAnswerAStepCouldNotUseIsKept(t *testing.T) {
+	err := fmt.Errorf("step %q failed: %w", "summarize", &engine.InvalidAnswerError{Raw: `{"summary": 42}`})
+	step := record(engine.StepResult{ID: "summarize", Kind: "ai", Status: engine.Failed, Err: err, Tries: 2})
+	if step.Answer != `{"summary": 42}` || step.Tries != 2 {
+		t.Errorf("answer = %q, tries = %d", step.Answer, step.Tries)
+	}
+	if long := clip(strings.Repeat("é", maxAnswer), maxAnswer); len(long) > maxAnswer+len("…") || !utf8.ValidString(long) {
+		t.Errorf("clipped to %d bytes, valid %v", len(long), utf8.ValidString(long))
+	}
+	if step := record(engine.StepResult{ID: "a", Status: engine.OK, Tries: 1}); step.Answer != "" || step.Tries != 0 {
+		t.Errorf("a step that ran once and worked: %+v", step)
 	}
 }

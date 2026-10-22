@@ -11,7 +11,7 @@ import (
 )
 
 // Providers are what a model name can start with, as in "openai/gpt-5".
-var Providers = []string{"anthropic", "openai", "openrouter"}
+var Providers = []string{"anthropic", "ollama", "openai", "openrouter"}
 
 // SplitModel splits a model name written as provider/model. The model part
 // may itself contain slashes, as OpenRouter's names do.
@@ -47,6 +47,7 @@ func NewRouter() *Router {
 	return &Router{
 		providers: map[string]generator{
 			"anthropic":  NewAnthropic(),
+			"ollama":     NewOllama(),
 			"openai":     NewOpenAI(),
 			"openrouter": NewOpenRouter(),
 		},
@@ -96,19 +97,33 @@ type UnavailableError struct{ Err error }
 func (e *UnavailableError) Error() string { return e.Err.Error() }
 func (e *UnavailableError) Unwrap() error { return e.Err }
 
+// StatusError is an error status that a model service answered with, so that
+// a step can tell a rate limit or an outage from a request that was wrong.
+type StatusError struct {
+	Status int
+	err    error
+}
+
+func (e *StatusError) Error() string {
+	if e.err == nil {
+		return fmt.Sprintf("the service answered %d %s", e.Status, http.StatusText(e.Status))
+	}
+	return e.err.Error()
+}
+
 // statusError describes an error status from a model service, with the reason
 // the service gave if it gave one.
 func statusError(service, keyEnv string, status int, reason string) error {
 	if status == http.StatusUnauthorized {
 		if reason == "" {
-			return fmt.Errorf("%s rejected the key in %s", service, keyEnv)
+			return &StatusError{status, fmt.Errorf("%s rejected the key in %s", service, keyEnv)}
 		}
-		return fmt.Errorf("%s rejected the key in %s: %s", service, keyEnv, reason)
+		return &StatusError{status, fmt.Errorf("%s rejected the key in %s: %s", service, keyEnv, reason)}
 	}
 	if reason == "" {
 		reason = http.StatusText(status)
 	}
-	return fmt.Errorf("%s answered %d: %s", service, status, reason)
+	return &StatusError{status, fmt.Errorf("%s answered %d: %s", service, status, reason)}
 }
 
 // constraints returns schema without $schema. That key tells editors which

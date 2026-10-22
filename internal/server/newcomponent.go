@@ -125,7 +125,7 @@ func (s *Server) createComponent(req componentRequest) (int, any) {
 		undo()
 		return status, refused
 	}
-	head := []yamledit.Pair{{Key: "name", Value: name}}
+	head := []yamledit.Pair{{Key: "flovr", Value: workflow.Format}, {Key: "name", Value: name}}
 	if d := strings.TrimSpace(req.Description); d != "" {
 		head = append(head, yamledit.Pair{Key: "description", Value: d})
 	}

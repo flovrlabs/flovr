@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -29,6 +30,7 @@ import (
 	"github.com/flovrlabs/flovr/internal/engine"
 	"github.com/flovrlabs/flovr/internal/server"
 	"github.com/flovrlabs/flovr/internal/workflow"
+	"github.com/flovrlabs/flovr/schema"
 )
 
 func main() {
@@ -37,19 +39,22 @@ func main() {
 		Short: "Validate and run AI workflows defined as YAML files",
 		Long: "Validate and run AI workflows defined as YAML files.\n\n" +
 			"Model API keys come from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY or\n" +
-			"OPENROUTER_API_KEY, depending on the models a workflow uses. Variables in a .env\n" +
-			"file in the current directory are loaded too, unless they are already set.",
+			"OPENROUTER_API_KEY, depending on the models a workflow uses; models of Ollama\n" +
+			"need none. Variables in a .env file in the current directory are loaded too,\n" +
+			"unless they are already set.",
 		Version:       currentVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(validateCmd(), runCmd(), testCmd(), serveCmd(), getCmd(), versionCmd())
+	root.AddCommand(validateCmd(), runCmd(), testCmd(), serveCmd(), getCmd(), schemaCmd(), versionCmd())
 	err := loadDotEnv(".env")
 	if err == nil {
 		err = root.Execute()
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if !errors.As(err, new(quiet)) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }
@@ -220,29 +225,112 @@ func clean(line string) string {
 }
 
 func validateCmd() *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:   "validate [workflow]",
 		Short: "Check a workflow file without running it",
 		Long: "Check a workflow file without running it: its structure, the prompt, schema and\n" +
 			"fixture files it refers to, the components it uses, and every expression.\n\n" +
 			"The argument is a workflow file or a directory containing workflow.yaml\n" +
 			"(default: the current directory). A component is checked the same way: give\n" +
-			"its component.yaml or the directory containing it.",
+			"its component.yaml or the directory containing it.\n\n" +
+			"With --json it prints one JSON document, with each problem's line, for scripts\n" +
+			"and coding agents; flovr schema prints the JSON Schema of the files.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			report := validateReport{Problems: []problemView{}}
+			var err error
 			if workflow.IsComponent(target(args)) {
-				c, err := workflow.LoadComponent(target(args))
-				if err != nil {
-					return err
+				var c *workflow.Component
+				report.Kind = "component"
+				if c, err = workflow.LoadComponent(target(args)); err == nil {
+					report.Name, report.File, report.Inputs, report.Tests = c.Name, c.Path, len(c.Input), len(c.Tests)
 				}
-				fmt.Printf("ok  %s  (component, %s, %s)\n", c.Path, count(len(c.Input), "input"), count(len(c.Tests), "test"))
+			} else {
+				var w *workflow.Workflow
+				report.Kind = "workflow"
+				if w, err = workflow.Load(target(args)); err == nil {
+					report.Name, report.File, report.Steps, report.Tests = w.Name, w.Path, len(w.Steps), len(w.Tests)
+				}
+			}
+			if !asJSON {
+				switch {
+				case err != nil:
+					return err
+				case report.Kind == "component":
+					fmt.Printf("ok  %s  (component, %s, %s)\n", report.File, count(report.Inputs, "input"), count(report.Tests, "test"))
+				default:
+					fmt.Printf("ok  %s  (%s, %s)\n", report.File, count(report.Steps, "step"), count(report.Tests, "test"))
+				}
 				return nil
 			}
-			w, err := workflow.Load(target(args))
-			if err != nil {
-				return err
+			report.OK = err == nil
+			var problems *workflow.Problems
+			switch {
+			case errors.As(err, &problems):
+				report.File = problems.Path
+				for _, p := range problems.Items {
+					report.Problems = append(report.Problems, problemView{p.Line, p.Msg})
+				}
+			case err != nil:
+				report.Problems = append(report.Problems, problemView{Message: err.Error()})
 			}
-			fmt.Printf("ok  %s  (%s, %s)\n", w.Path, count(len(w.Steps), "step"), count(len(w.Tests), "test"))
+			printJSON(report)
+			if err != nil {
+				return quiet{err}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the outcome as one JSON document, for scripts and coding agents")
+	return cmd
+}
+
+// printJSON prints v as indented JSON, with < and > as they are.
+func printJSON(v any) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	enc.Encode(v)
+}
+
+// validateReport is what flovr validate --json prints.
+type validateReport struct {
+	OK       bool          `json:"ok"`
+	Kind     string        `json:"kind"` // workflow or component
+	Name     string        `json:"name,omitempty"`
+	File     string        `json:"file,omitempty"`
+	Steps    int           `json:"steps,omitempty"`
+	Inputs   int           `json:"inputs,omitempty"`
+	Tests    int           `json:"tests"`
+	Problems []problemView `json:"problems"`
+}
+
+type problemView struct {
+	Line    int    `json:"line,omitempty"` // 0 when the problem has no one line
+	Message string `json:"message"`
+}
+
+func schemaCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "schema [workflow|component]",
+		Short: "Print the JSON Schema of workflow or component files",
+		Long: "Print the JSON Schema of workflow.yaml files, or with component of\n" +
+			"component.yaml files. Editors and coding agents use it to know what a file can\n" +
+			"hold; flovr validate checks more, such as expressions and the files a step names.\n\n" +
+			"A file can name the schema for editors in its first line:\n\n" +
+			"  # yaml-language-server: $schema=https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/workflow.json",
+		Args:      cobra.MaximumNArgs(1),
+		ValidArgs: []string{"workflow", "component"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch target := "workflow"; {
+			case len(args) == 1 && args[0] == "component":
+				os.Stdout.Write(schema.Component)
+			case len(args) == 0 || args[0] == target:
+				os.Stdout.Write(schema.Workflow)
+			default:
+				return fmt.Errorf("flovr schema takes workflow or component, not %q", args[0])
+			}
 			return nil
 		},
 	}
@@ -269,6 +357,9 @@ func runCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if fixture == "" && w.Trigger != nil && w.Trigger.Webhook != "" {
+				return needsFixture(w, args)
+			}
 			trigger, err := loadTrigger(w, fixture)
 			if err != nil {
 				return err
@@ -282,16 +373,30 @@ func runCmd() *cobra.Command {
 				return err
 			}
 			fmt.Println(w.Name)
+			var tokens engine.Tokens
 			eng := &engine.Engine{
-				Model:  model,
-				HTTP:   httpClient(),
-				Env:    environ(),
-				OnStep: func(r engine.StepResult) { printStep("  ", r) },
+				Model: model,
+				HTTP:  httpClient(),
+				Env:   environ(),
+				OnStep: func(r engine.StepResult) {
+					printStep("  ", r)
+					tokens.Add(r.Tokens)
+				},
 			}
 			resp, err := eng.Run(ctx, w, trigger)
 			if resp != nil {
 				body, _ := json.MarshalIndent(resp.Body, "    ", "  ")
 				fmt.Printf("  responds %d\n    %s\n", resp.Status, body)
+			}
+			if tokens != (engine.Tokens{}) {
+				fmt.Printf("  %s\n", tokens)
+			}
+			if !replay {
+				again := command("flovr run", args...)
+				if fixture != "" {
+					again += " --fixture " + shellQuote(fixture)
+				}
+				err = withReplayHint(err, w.Path, again+" --replay")
 			}
 			return err
 		},
@@ -304,6 +409,10 @@ func runCmd() *cobra.Command {
 
 func testCmd() *cobra.Command {
 	var verbose, record, replay bool
+	var repeat int
+	var minPass float64
+	var maxTokens int64
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "test [workflow]",
 		Short: "Run a workflow's tests",
@@ -315,14 +424,36 @@ func testCmd() *cobra.Command {
 			"the workflow, if every test passed. With --replay, the tests get those answers\n" +
 			"and no model is called, so they run without a key and cost nothing; a test whose\n" +
 			"prompt, input or schema has changed since cannot run until it is recorded again.\n\n" +
+			"A model can answer differently each time, so one passing run proves little.\n" +
+			"--repeat runs each test several times and says how often it passed and how\n" +
+			"often each expectation was missed. A test passes only if it passed every time,\n" +
+			"or as often as --min-pass asks. --max-tokens stops starting runs once the round\n" +
+			"has used that many tokens.\n\n" +
 			"The argument is a workflow file or a directory containing workflow.yaml\n" +
 			"(default: the current directory). A component's own tests run the same way:\n" +
 			"give its component.yaml or the directory containing it.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if record && replay {
+			switch {
+			case record && replay:
 				return errors.New("--record calls the models and --replay does not; give one of them")
+			case repeat < 1 || repeat > 100:
+				return errors.New("--repeat must be from 1 to 100")
+			case repeat > 1 && replay:
+				return errors.New("--repeat asks the models again each time, and replayed answers are the same every time; leave out --replay")
+			case repeat > 1 && record:
+				return errors.New("--record keeps the answers of one round; leave out --repeat")
+			case minPass <= 0 || minPass > 1:
+				return errors.New("--min-pass is the share of runs a test must pass, more than 0 and at most 1, such as 0.8")
+			case maxTokens < 0:
+				return errors.New("--max-tokens must be 0, for no limit, or more")
 			}
+			// --json prints one JSON document at the end instead.
+			out := io.Writer(os.Stdout)
+			if asJSON {
+				out, verbose = io.Discard, false
+			}
+			report := testReport{Repeat: repeat, Replayed: replay, Tests: []testOutcome{}}
 			eng := &engine.Engine{Env: environ()}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
@@ -336,6 +467,7 @@ func testCmd() *cobra.Command {
 					return err
 				}
 				name, file = c.Name, c.Path
+				report.Kind = "component"
 				for _, t := range c.Tests {
 					tests = append(tests, func() (engine.TestResult, error) { return eng.TestComponent(ctx, c, t) })
 				}
@@ -345,13 +477,16 @@ func testCmd() *cobra.Command {
 					return err
 				}
 				name, file = w.Name, w.Path
+				report.Kind = "workflow"
 				for _, t := range w.Tests {
 					tests = append(tests, func() (engine.TestResult, error) { return eng.Test(ctx, w, t) })
 				}
 			}
+			report.Name, report.File = name, file
 			if len(tests) == 0 {
-				fmt.Printf("%s has no tests\n", name)
-				return nil
+				fmt.Fprintf(out, "%s has no tests\n", name)
+				report.OK = true
+				return report.print(asJSON, nil)
 			}
 			answers := filepath.Join(filepath.Dir(file), ai.AnswersFile)
 			var recorder *ai.Recorder
@@ -362,63 +497,213 @@ func testCmd() *cobra.Command {
 					return err
 				}
 				eng.Model = model
-				fmt.Println(name + ", with the answers recorded for it")
+				fmt.Fprintln(out, name+", with the answers recorded for it")
 			case record:
 				recorder = ai.NewRecorder(ai.NewRouter())
 				eng.Model = recorder
-				fmt.Println(name)
+				fmt.Fprintln(out, name)
+			case repeat > 1:
+				eng.Model = ai.NewRouter()
+				fmt.Fprintf(out, "%s, each test %d times\n", name, repeat)
 			default:
 				eng.Model = ai.NewRouter()
-				fmt.Println(name)
+				fmt.Fprintln(out, name)
 			}
-			failed := 0
+			// Each test runs repeat times, one run after another, unless
+			// the round has used its tokens first.
+			var tokens engine.Tokens
+			spent := func() bool { return maxTokens > 0 && tokens.In+tokens.Out >= maxTokens }
+			failed, unrun, runs, passedRuns := 0, 0, 0, 0
+			stopped := false // a test did not get all its runs
 			for _, run := range tests {
-				res, err := run()
-				if err != nil {
-					return fmt.Errorf("test %q could not run: %w", res.Name, err)
+				var results []engine.TestResult
+				for len(results) < repeat && !spent() {
+					res, err := run()
+					for _, s := range res.Steps {
+						tokens.Add(s.Tokens)
+					}
+					if err != nil {
+						err = fmt.Errorf("test %q could not run: %w", res.Name, err)
+						if !replay && !record && repeat == 1 {
+							err = withReplayHint(err, file, command("flovr test", args...)+" --replay")
+						}
+						return report.print(asJSON, err)
+					}
+					results = append(results, res)
 				}
+				stopped = stopped || len(results) < repeat
+				if len(results) == 0 {
+					unrun++
+					continue
+				}
+				passed := 0
+				var took time.Duration
+				for _, res := range results {
+					if len(res.Failures) == 0 {
+						passed++
+					}
+					took += res.Duration
+				}
+				runs, passedRuns = runs+len(results), passedRuns+passed
 				mark := "✓"
-				if len(res.Failures) > 0 {
+				if len(results) < repeat || float64(passed) < minPass*float64(repeat) {
 					mark = "✗"
 					failed++
 				}
-				fmt.Printf("  %s %s  %s\n", mark, res.Name, res.Duration.Round(time.Millisecond))
-				for _, f := range res.Failures {
-					fmt.Printf("      %s\n", strings.ReplaceAll(f, "\n", "\n      "))
+				name := results[0].Name
+				outcome := testOutcome{Name: name, Runs: len(results), Passed: passed, OK: mark == "✓", Failures: []failureCount{}}
+				if repeat == 1 {
+					fmt.Fprintf(out, "  %s %s  %s\n", mark, name, took.Round(time.Millisecond))
+					for _, f := range results[0].Failures {
+						fmt.Fprintf(out, "      %s\n", strings.ReplaceAll(f, "\n", "\n      "))
+						outcome.Failures = append(outcome.Failures, failureCount{1, f})
+					}
+				} else {
+					cut := ""
+					if len(results) < repeat {
+						cut = ", then the round had used its tokens"
+					}
+					fmt.Fprintf(out, "  %s %s  passed %d of %d%s  %s each\n", mark, name, passed, len(results), cut,
+						(took / time.Duration(len(results))).Round(time.Millisecond))
+					// How often each failure happened, in the order first met.
+					var met []string
+					times := map[string]int{}
+					for _, res := range results {
+						for _, f := range res.Failures {
+							if times[f] == 0 {
+								met = append(met, f)
+							}
+							times[f]++
+						}
+					}
+					for _, f := range met {
+						fmt.Fprintf(out, "      %d of %d: %s\n", times[f], len(results), strings.ReplaceAll(f, "\n", "\n      "))
+						outcome.Failures = append(outcome.Failures, failureCount{times[f], f})
+					}
 				}
+				report.Tests = append(report.Tests, outcome)
 				if verbose {
-					for _, s := range res.Steps {
-						printStep("      ", s)
+					for _, res := range results {
+						if repeat == 1 || len(res.Failures) > 0 {
+							for _, s := range res.Steps {
+								printStep("      ", s)
+							}
+						}
 					}
 				}
 			}
-
-			fmt.Println()
-			if failed > 0 {
-				if record {
-					fmt.Println("The answers were not recorded, since a test failed.")
-				}
-				return fmt.Errorf("%d of %s failed", failed, count(len(tests), "test"))
+			if unrun > 0 {
+				fmt.Fprintf(out, "  %s not run: the round had used its %d tokens\n", count(unrun, "test"), maxTokens)
 			}
-			fmt.Printf("%s passed\n", count(len(tests), "test"))
+
+			report.Tokens, report.NotRun = tokens, unrun
+			fmt.Fprintln(out)
+			used := ""
+			switch {
+			case replay:
+				used = " · replayed, no model was called"
+			case tokens != (engine.Tokens{}):
+				used = " · " + tokens.String()
+			}
+			if repeat > 1 {
+				fmt.Fprintf(out, "%d of %d runs passed%s\n", passedRuns, runs, used)
+				used = ""
+			}
+			if stopped {
+				fmt.Fprintf(out, "The round stopped starting runs at --max-tokens %d.\n", maxTokens)
+			}
+			if failed > 0 || unrun > 0 {
+				if record {
+					fmt.Fprintln(out, "The answers were not recorded, since a test failed.")
+				}
+				switch {
+				case failed == 0:
+					return report.print(asJSON, fmt.Errorf("%d of %s did not run%s", unrun, count(len(tests), "test"), used))
+				case repeat == 1:
+					return report.print(asJSON, fmt.Errorf("%d of %s failed%s", failed, count(len(tests), "test"), used))
+				case minPass == 1:
+					return report.print(asJSON, fmt.Errorf("%d of %s did not pass every time", failed, count(len(tests), "test")))
+				}
+				return report.print(asJSON, fmt.Errorf("%d of %s passed in fewer than %.0f%% of their runs", failed, count(len(tests), "test"), minPass*100))
+			}
+			switch {
+			case repeat > 1 && minPass < 1:
+				fmt.Fprintf(out, "%s passed in at least %.0f%% of their runs\n", count(len(tests), "test"), minPass*100)
+			case repeat > 1:
+				fmt.Fprintf(out, "%s passed every time\n", count(len(tests), "test"))
+			default:
+				fmt.Fprintf(out, "%s passed%s\n", count(len(tests), "test"), used)
+			}
 			if record {
 				if err := recorder.Write(answers); err != nil {
 					return err
 				}
 				if recorder.Len() == 0 {
-					fmt.Println("No model was asked anything, so there are no answers to record.")
+					fmt.Fprintln(out, "No model was asked anything, so there are no answers to record.")
 				} else {
-					fmt.Printf("%s recorded in %s\n", count(recorder.Len(), "answer"), answers)
+					fmt.Fprintf(out, "%s recorded in %s\n", count(recorder.Len(), "answer"), answers)
 				}
 			}
-			return nil
+			report.OK = true
+			return report.print(asJSON, nil)
 		},
 	}
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show what every step did in each test")
 	cmd.Flags().BoolVar(&record, "record", false, "if every test passes, keep the models' answers in "+ai.AnswersFile+" next to the workflow")
 	cmd.Flags().BoolVar(&replay, "replay", false, "answer with what --record kept instead of calling the models; no key is needed")
+	cmd.Flags().IntVar(&repeat, "repeat", 1, "run each test this many times, and say how often it passed")
+	cmd.Flags().Float64Var(&minPass, "min-pass", 1, "with --repeat, the share of its runs a test must pass, such as 0.8")
+	cmd.Flags().Int64Var(&maxTokens, "max-tokens", 0, "stop starting runs once the round has used this many tokens; 0 is no limit")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the outcome as one JSON document, for scripts and coding agents")
 	return cmd
 }
+
+// testReport is what flovr test --json prints.
+type testReport struct {
+	Name     string        `json:"name"`
+	Kind     string        `json:"kind"` // workflow or component
+	File     string        `json:"file"`
+	OK       bool          `json:"ok"`
+	Error    string        `json:"error,omitempty"`
+	Repeat   int           `json:"repeat"`   // the runs each test was to have
+	Replayed bool          `json:"replayed"` // answered from answers.jsonl, with no model called
+	Tests    []testOutcome `json:"tests"`
+	NotRun   int           `json:"notRun,omitempty"` // tests the token budget left out
+	Tokens   engine.Tokens `json:"tokens"`
+}
+
+type testOutcome struct {
+	Name     string         `json:"name"`
+	OK       bool           `json:"ok"`
+	Runs     int            `json:"runs"`
+	Passed   int            `json:"passed"`
+	Failures []failureCount `json:"failures"`
+}
+
+type failureCount struct {
+	Runs    int    `json:"runs"` // in how many runs it happened
+	Failure string `json:"failure"`
+}
+
+// print prints the report as JSON if asked, and returns err, the outcome as
+// an error, for the exit status.
+func (r *testReport) print(asJSON bool, err error) error {
+	if !asJSON {
+		return err
+	}
+	if err != nil {
+		r.OK, r.Error = false, err.Error()
+	}
+	printJSON(r)
+	if err != nil {
+		return quiet{err}
+	}
+	return nil
+}
+
+// quiet is an error that has been reported already, as JSON; flovr exits
+// with status 1 without printing it again.
+type quiet struct{ error }
 
 func serveCmd() *cobra.Command {
 	var addr, history, tlsCert, tlsKey string
@@ -652,8 +937,61 @@ func target(args []string) string {
 	return args[0]
 }
 
+// needsFixture says what to give a run of a workflow that a request starts,
+// which has nothing to run on without one.
+func needsFixture(w *workflow.Workflow, args []string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s starts on a request to %s, so a run needs one: give --fixture with a JSON file shaped like {\"body\": {...}}", w.Name, w.Trigger.Webhook)
+	var fixtures []string
+	for _, t := range w.Tests {
+		if t.Fixture != "" && !slices.Contains(fixtures, t.Fixture) {
+			fixtures = append(fixtures, t.Fixture)
+		}
+	}
+	if len(fixtures) > 0 {
+		b.WriteString(". Its tests run on these:")
+		for _, f := range fixtures {
+			fmt.Fprintf(&b, "\n  %s --fixture %s", command("flovr run", args...), shellQuote(f))
+		}
+	}
+	return errors.New(b.String())
+}
+
+// withReplayHint adds to err, when no model could be reached and answers
+// were recorded next to file, how to go on with those answers instead.
+func withReplayHint(err error, file, again string) error {
+	var unavailable *ai.UnavailableError
+	if !errors.As(err, &unavailable) {
+		return err
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(file), ai.AnswersFile)); statErr != nil {
+		return err
+	}
+	return fmt.Errorf("%w\n\nThe answers recorded in %s can stand in for the models, with no key and at no cost:\n  %s", err, ai.AnswersFile, again)
+}
+
+// command is a command line to run name with args.
+func command(name string, args ...string) string {
+	for _, a := range args {
+		name += " " + shellQuote(a)
+	}
+	return name
+}
+
+// shellQuote quotes s for a shell, if it needs it.
+func shellQuote(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`!*?[]{}()<>|&;#~") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func loadTrigger(w *workflow.Workflow, fixture string) (any, error) {
 	if fixture == "" {
+		if w.Trigger != nil && w.Trigger.Cron != "" {
+			// What the server gives a run that its schedule starts.
+			return map[string]any{"time": time.Now().Format(time.RFC3339)}, nil
+		}
 		return map[string]any{}, nil
 	}
 	data, err := os.ReadFile(fixture)
@@ -692,6 +1030,18 @@ func printStep(indent string, r engine.StepResult) {
 		line += "  " + r.Duration.Round(time.Millisecond).String()
 	}
 	fmt.Println(line)
+	// An answer the step could not use is shown as the model wrote it.
+	var invalid *engine.InvalidAnswerError
+	if errors.As(r.Err, &invalid) {
+		answer := invalid.Raw
+		if len(answer) > 2000 {
+			answer = answer[:2000] + "…"
+		}
+		if strings.TrimSpace(answer) == "" {
+			answer = "(nothing)"
+		}
+		fmt.Printf("%s    the model answered:\n%s      %s\n", indent, indent, strings.ReplaceAll(answer, "\n", "\n"+indent+"      "))
+	}
 
 	// What the steps of a component made of steps did comes before what
 	// the component gave back.

@@ -68,7 +68,8 @@ func TestWorkflowIsMadeFromThePage(t *testing.T) {
 	}
 
 	dir := filepath.Join(root, "refund-alerts")
-	want := `name: refund-alerts
+	want := `flovr: 1
+name: refund-alerts
 
 trigger:
   webhook: /refunds

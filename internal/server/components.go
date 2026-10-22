@@ -258,6 +258,7 @@ func (s *Server) runComponentTest(id string, c *workflow.Component, t workflow.C
 	// A component made of steps shows its steps; another its one kind of work.
 	for _, whole := range res.Steps {
 		run.Gave = whole.Output
+		run.Tokens.Add(whole.Tokens)
 		if len(c.Steps) == 0 {
 			run.Steps = append(run.Steps, record(whole))
 			continue

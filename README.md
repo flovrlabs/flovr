@@ -169,7 +169,49 @@ Steps run in the order they are written. Each has an `id`, an optional `when`, a
 
 A `decide` question is yes/no unless it has `choice` (a mapping of answer to meaning) or `score` (a list of levels from lowest to highest). `yes_if` and `no_if` tell a yes/no question what each answer means.
 
-Models are named `provider/model`. The providers are `anthropic`, `openai` and `openrouter`, with keys in `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY`. `OPENAI_BASE_URL` points `openai/...` models at another server that speaks the same API. Decision models come from `openrouter` only, through its Decisions API, which OpenRouter labels alpha.
+Models are named `provider/model`. The providers are `anthropic`, `openai` and `openrouter`, with keys in `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY`, and `ollama`, which needs no key. `OPENAI_BASE_URL` points `openai/...` models at another server that speaks the same API. Decision models come from `openrouter` only, through its Decisions API, which OpenRouter labels alpha.
+
+### Models on your own machine
+
+An `ai` step can use a model that [Ollama](https://ollama.com) runs, so that what the step reads never leaves the machine and costs nothing per call. Fetch a model that can answer in JSON, then name it with `ollama/`:
+
+```bash
+ollama pull llama3.2
+```
+
+```yaml
+  - id: summarize
+    timeout: 2m
+    ai:
+      model: ollama/llama3.2
+      prompt: prompts/summarize.md
+      input: ${trigger.body}
+      output: schemas/summary.json
+```
+
+flovr reaches Ollama at `127.0.0.1:11434`, or where `OLLAMA_HOST` says, and asks for an answer that fits the schema. A small model fits it less often than a large one, which `flovr test --repeat` shows. A `decide` step still needs OpenRouter.
+
+### Timeouts and retries
+
+A step can limit each try with `timeout`, and try again after a failure with `retry`:
+
+```yaml
+  - id: summarize
+    timeout: 30s
+    retry: 2
+    ai: ...
+```
+
+`retry: 2` means up to two more tries after the first, waiting 1s, then 2s, then twice as long each time, up to a minute. In full it is `retry: {times: 2, wait: 2s, on: [rate-limit, unavailable]}`, where `on` names the failures to try again after:
+
+| Failure | When |
+|---|---|
+| `rate-limit` | a model service or the server of an `http` step answered 429 |
+| `unavailable` | it answered 5xx, or could not be reached |
+| `timeout` | a try took longer than the step's `timeout` |
+| `invalid-answer` | an `ai` step's model gave an answer that is empty, not JSON, or does not fit the schema |
+
+Without `on`, a step tries again after any of them. A failure that another try would not change, such as a request the service refused, a wrong key or an expression that does not work, is never tried again. Nothing is tried again unless the step says so: an `http` step that sends a POST may already have done its work when the answer is lost. The clients of the model services already try a rate limit or an outage twice within each call; `retry` runs the whole step again. A run records how many tries a step took.
 
 ### Expressions
 
@@ -214,6 +256,17 @@ tests:
 A key under `expect` is either a step's id, expecting it to be `called` or `skipped`, or an expression whose value is compared with what is written, as in `classify.priority.probabilities.high < 0.3: true`. A workflow with `respond` can expect things of its answer as `response.status` and `response.body`.
 
 In a test, `ai` and `decide` steps call their models for real, because what the model answers is the thing being tested. `http` steps are not sent, and environment variables they would need do not have to be set.
+
+A model can answer differently each time, so one passing run proves little. `flovr test --repeat 5` runs each test five times and says how often it passed, and how often each expectation was missed:
+
+```
+triage-ticket, each test 5 times
+  ✓ refund request is not escalated  passed 5 of 5  1.1s each
+  ✗ outage report pages on-call  passed 4 of 5  1.9s each
+      1 of 5: classify.priority.value: expected "high", got "medium"
+```
+
+A test passes only if it passed every time, or as often as `--min-pass 0.8` asks. `--max-tokens` stops starting runs once the round has used that many tokens, and every round ends with the tokens it used.
 
 `flovr test --record` keeps what the models answered in `answers.jsonl` next to the workflow, if every test passed. `flovr test --replay` then runs the tests with those answers instead of calling the models. A replayed test checks the workflow, its expressions, which steps run and what it answers, but not the models; it needs no key and costs nothing. Commit the file with the workflow, so that others and CI can run the tests without a key. Answers are recorded only from tests, never from the runs of a server.
 
@@ -395,6 +448,28 @@ docker run -p 8080:8080 -v "$PWD/workflows:/work" -e FLOVR_TOKEN -e FLOVR_PAGE_K
 
 It runs as a user of its own, uid 10001, and writes its runs to `/work/.flovr`, so that user must be able to write there; `--user "$(id -u):$(id -g)"` runs it as you instead. Give `FLOVR_PAGE_KEY`, since a key the server made itself is lost with the container.
 
+## For editors and coding agents
+
+A workflow file can start by naming its JSON Schema, which editors with a YAML language server use to complete and check it as it is typed:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/workflow.json
+flovr: 1
+name: triage-ticket
+```
+
+`flovr: 1` is the version of the file format. A file that leaves it out is in format 1, and a flovr that reads an older format than a file says refuses the file rather than guessing. `flovr schema` prints the schema of workflow files, and `flovr schema component` that of component files. The schema is checked against every valid file in this repository, but `flovr validate` checks more: expressions, the files a step names, and the components it uses.
+
+A coding agent, or a script, can read what flovr says as JSON: `flovr validate --json` gives each problem with its line, and `flovr test --json` how each test went, with its failures and the tokens it used.
+
+[skills/flovr/SKILL.md](skills/flovr/SKILL.md) teaches a coding agent the format and the loop of validating and testing a change, in one page. For Claude Code, put it in the repository of your workflows:
+
+```bash
+mkdir -p .claude/skills/flovr && curl -fsSL https://raw.githubusercontent.com/flovrlabs/flovr/main/skills/flovr/SKILL.md -o .claude/skills/flovr/SKILL.md
+```
+
+Other agents can be pointed at the same file from their `AGENTS.md`. [llms.txt](llms.txt) lists the pages an agent should read.
+
 ## In CI
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. Without the secret, as in pull requests from forks, it runs them with `--replay`. The same commands work for your own workflows:
@@ -411,7 +486,7 @@ Both exit with a status other than 0 when something is wrong, and print what.
 
 ## What it does not do yet
 
-- It does not retry a step that failed or queue runs; a run is one pass through the steps in one process.
+- It does not queue runs; a run is one pass through the steps in one process, and a run under way when the server stops is lost.
 - It has no steps for databases or message brokers. A workflow reaches other systems through `http`.
 - It does not check signatures of webhooks from providers such as Stripe or GitHub.
 - The page does not reorder steps, does not add or remove the steps of a component, and makes only services that do one piece of work. A workflow it makes starts with one step and has no `respond`.

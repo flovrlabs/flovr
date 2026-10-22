@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/workflow.json",
+  "title": "Flovr workflow",
+  "description": "A workflow.yaml of Flovr: what starts it, its steps, what it answers and its tests. flovr validate checks more than this schema can, such as expressions and the files a step names.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "trigger", "steps"],
+  "properties": {
+    "flovr": {
+      "description": "The version of the file format. A file that leaves it out is in format 1.",
+      "const": 1
+    },
+    "name": {
+      "description": "The workflow's name, unique among the workflows a server serves.",
+      "type": "string",
+      "minLength": 1
+    },
+    "trigger": { "$ref": "#/$defs/trigger" },
+    "steps": {
+      "description": "The steps, run in the order written.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    },
+    "respond": { "$ref": "#/$defs/respond" },
+    "tests": {
+      "description": "Each test runs the workflow with a fixture as the event that starts it, and compares what happened with expect.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/test" }
+    }
+  },
+  "$defs": {
+    "trigger": {
+      "description": "What starts the workflow: exactly one of webhook, cron or manual.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "webhook": { "description": "A path that a POST request starts the workflow on.", "type": "string", "pattern": "^/" },
+        "cron": { "description": "A schedule of five fields: minute hour day month weekday.", "type": "string" },
+        "manual": { "description": "Started only by flovr run.", "type": "boolean" },
+        "input": { "description": "With webhook: a JSON Schema file the request body must match, or the request is refused.", "type": "string" }
+      },
+      "oneOf": [
+        { "required": ["webhook"] },
+        { "required": ["cron"] },
+        { "required": ["manual"] }
+      ]
+    },
+    "id": {
+      "description": "Letters, digits and underscores, not starting with a digit.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "not": { "enum": ["trigger", "env", "response", "input", "output"] }
+    },
+    "expression": {
+      "description": "A CEL expression, without ${ }.",
+      "type": "string"
+    },
+    "value": {
+      "description": "Any value. A string may hold ${expression} placeholders, and a string that is one placeholder takes the value of the expression."
+    },
+    "model": {
+      "description": "provider/model, where provider is anthropic, ollama, openai or openrouter, as in openrouter/deepseek/deepseek-v4.1-flash or ollama/llama3.2.",
+      "type": "string",
+      "pattern": "^(anthropic|ollama|openai|openrouter)/.+"
+    },
+    "duration": {
+      "description": "A length of time, such as 30s, 2m or 1m30s.",
+      "type": "string",
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "when": { "description": "The step runs only when this condition is true.", "$ref": "#/$defs/expression" },
+        "ai": { "$ref": "#/$defs/ai" },
+        "decide": { "$ref": "#/$defs/decide" },
+        "http": { "$ref": "#/$defs/http" },
+        "use": { "description": "The folder of a component, relative to this file, or a component in git as host/owner/repo[/dir]@ref.", "type": "string" },
+        "with": { "description": "The values the component takes, by name.", "type": "object", "additionalProperties": { "$ref": "#/$defs/value" } },
+        "timeout": { "description": "How long each try of the step may take.", "$ref": "#/$defs/duration" },
+        "retry": { "$ref": "#/$defs/retry" }
+      },
+      "oneOf": [
+        { "required": ["ai"] },
+        { "required": ["decide"] },
+        { "required": ["http"] },
+        { "required": ["use"] }
+      ]
+    },
+    "ai": {
+      "description": "Asks a model for an answer that fits a JSON Schema.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "prompt", "input", "output"],
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "prompt": { "description": "A file holding the system prompt.", "type": "string" },
+        "input": { "description": "What the model is given: text, or a value sent as JSON.", "$ref": "#/$defs/value" },
+        "output": { "description": "A JSON Schema file the answer must fit. Later steps read its fields.", "type": "string" }
+      }
+    },
+    "decide": {
+      "description": "Asks a decision model typed questions. It answers with probabilities and writes no text.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "input", "questions"],
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "input": { "$ref": "#/$defs/value" },
+        "questions": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/question" }
+        }
+      }
+    },
+    "question": {
+      "description": "A yes/no question, unless it has choice or score.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ask"],
+      "properties": {
+        "ask": { "type": "string" },
+        "choice": {
+          "description": "The answers, each with what it means, as a mapping or a list.",
+          "oneOf": [
+            { "type": "object", "additionalProperties": { "type": "string" } },
+            { "type": "array", "items": { "oneOf": [ { "type": "string" }, { "type": "object", "minProperties": 1, "maxProperties": 1, "additionalProperties": { "type": "string" } } ] } }
+          ]
+        },
+        "score": {
+          "description": "The levels from lowest to highest, as a list.",
+          "type": "array",
+          "minItems": 2,
+          "items": { "oneOf": [ { "type": "string" }, { "type": "object", "minProperties": 1, "maxProperties": 1, "additionalProperties": { "type": "string" } } ] }
+        },
+        "yes_if": { "type": "string" },
+        "no_if": { "type": "string" }
+      },
+      "not": { "required": ["choice", "score"] },
+      "dependentRequired": { "yes_if": ["no_if"], "no_if": ["yes_if"] }
+    },
+    "http": {
+      "description": "Sends a request. Later steps read status and body.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "url"],
+      "properties": {
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "url": { "type": "string" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": { "$ref": "#/$defs/value" }
+      }
+    },
+    "retry": {
+      "description": "Try the step again after a failure: a number of tries after the first, or in full.",
+      "oneOf": [
+        { "type": "integer", "minimum": 1, "maximum": 10 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["times"],
+          "properties": {
+            "times": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "wait": { "description": "Before the first try again, doubled for each one after; 1s if left out.", "$ref": "#/$defs/duration" },
+            "on": {
+              "description": "The failures to try again after; every one if left out.",
+              "type": "array",
+              "items": { "enum": ["rate-limit", "unavailable", "timeout", "invalid-answer"] }
+            }
+          }
+        }
+      ]
+    },
+    "respond": {
+      "description": "Makes the workflow an endpoint: the request waits and is answered with this.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": { "description": "200 if left out.", "type": ["integer", "string"] },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": { "$ref": "#/$defs/value" }
+      }
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixture", "expect"],
+      "properties": {
+        "name": { "type": "string" },
+        "fixture": { "description": "A JSON file shaped like the event that starts the workflow, for a webhook {\"body\": {...}}.", "type": "string" },
+        "expect": {
+          "description": "A step's id with called or skipped, or an expression with the value it should have, such as classify.category.value: refund.",
+          "type": "object",
+          "minProperties": 1
+        }
+      }
+    }
+  }
+}

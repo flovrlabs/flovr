@@ -107,32 +107,32 @@ func TestFlowProblems(t *testing.T) {
 			`1: component "reply": output is required: it is what the component gives back to the step that uses it`,
 		}},
 		{"what the workflow has is out of reach", `input: "${input.ticket}"`, `input: "${trigger.body}"`, []string{
-			`8: step "draft": ai.input: ${trigger.body}: undeclared reference to 'trigger'`,
+			`8: step "draft": ai.input: ${trigger.body}: there is nothing called trigger here; an expression here can read input and env`,
 		}},
 		{"an input that is not listed", "url: ${input.url}", "url: ${input.address}", []string{
 			`6: component "reply": reads input.address, which is not listed under input`,
 		}},
 		{"a step read before it has run", `when: draft.summary != ""`, `when: send.status == 200`, []string{
-			`10: step "send": when: undeclared reference to 'send'`,
+			`10: step "send": when: send has not run yet here; a step can read only the steps before it`,
 		}},
 		{"a field a step does not put out", "subject: ${draft.summary}", "subject: ${draft.subject}", []string{
 			`16: component "reply": output: draft has no subject; it has summary`,
 		}},
 		{"a step named as what steps are given", "  - id: draft", "  - id: input", []string{
 			`7: step "input": this id is reserved`,
-			`10: step "send": when: undeclared reference to 'draft'`,
-			`14: step "send": with.text: ${draft.summary}: undeclared reference to 'draft'`,
-			`16: component "reply": output: ${draft.summary}: undeclared reference to 'draft'`,
-			`24: test "sends what it drafts": expect.draft.summary != "": undeclared reference to 'draft'`,
+			`10: step "send": when: there is nothing called draft here; an expression here can read input and env`,
+			`14: step "send": with.text: ${draft.summary}: there is nothing called draft here; an expression here can read input and env`,
+			`16: component "reply": output: ${draft.summary}: there is nothing called draft here; an expression here can read input, send and env`,
+			`24: test "sends what it drafts": expect.draft.summary != "": there is nothing called draft here; an expression here can read input, output, send and env`,
 		}},
 		{"what a test expects of a step", "send: called", "send: maybe", []string{
 			`23: test "sends what it drafts": expect.send must be called or skipped`,
 		}},
 		{"no steps", "steps:\n  - id: draft\n    ai: {model: anthropic/m, prompt: prompt.md, input: \"${input.ticket}\", output: schema.json}\n  - id: send\n    when: draft.summary != \"\"\n    use: ../notify\n    with:\n      url: ${input.url}\n      text: ${draft.summary}\n      urgent: false\n", "steps: []\n", []string{
 			`6: component "reply": steps needs at least one step`,
-			`7: component "reply": output: ${send != null}: undeclared reference to 'send'`,
-			`14: test "sends what it drafts": expect.send: undeclared reference to 'send'`,
-			`15: test "sends what it drafts": expect.draft.summary != "": undeclared reference to 'draft'`,
+			`7: component "reply": output: ${send != null}: there is nothing called send here; an expression here can read input and env`,
+			`14: test "sends what it drafts": expect.send: there is nothing called send here; an expression here can read input, output and env`,
+			`15: test "sends what it drafts": expect.draft.summary != "": there is nothing called draft here; an expression here can read input, output and env`,
 		}},
 		{"steps and work of its own", "steps:\n", "http: {method: GET, url: \"http://x\"}\nsteps:\n", []string{
 			`1: component "reply": a component can have only one of ai, decide, http, steps`,

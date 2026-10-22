@@ -110,7 +110,7 @@ func TestTestsRunAsRunsThatSendNothing(t *testing.T) {
 	}
 	want := []string{
 		`classify.category.value: expected "refund", got "outage"`,
-		`classify.priority.probabilities.high < 0.3: no such key: probabilities`,
+		`classify.priority.probabilities.high < 0.3: classify.priority has no probabilities`,
 		`page_oncall: expected skipped, but it was called`,
 		`summarize: expected skipped, but it was called`,
 	}

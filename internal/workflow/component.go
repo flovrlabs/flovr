@@ -30,7 +30,8 @@ const ComponentFile = "component.yaml"
 // steps of its own, which may use other components. One made of steps gives
 // back what its output says.
 type Component struct {
-	Name string `yaml:"name"`
+	Flovr int    `yaml:"flovr"` // the format the file is written in, as in a workflow
+	Name  string `yaml:"name"`
 	// Description says in a line what the component is for, to whoever
 	// chooses among components.
 	Description string      `yaml:"description"`
@@ -347,6 +348,7 @@ func loadComponent(path string, loading []string, files Overlay) (*Component, er
 
 // component checks a component file.
 func (c *checker) component(comp *Component) {
+	c.format(comp.Flovr)
 	label := fmt.Sprintf("component %q", comp.Name)
 	if comp.Name == "" {
 		label = "component"

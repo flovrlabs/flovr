@@ -40,6 +40,8 @@ type StepResult struct {
 	Detail   string // one-line summary for people, free of secrets
 	Duration time.Duration
 	Err      error
+	Tries    int    // how many times it ran: more than 1 after a retry, 0 if skipped
+	Tokens   Tokens // what its models read and wrote, over every try and every step inside it
 
 	// Steps is what the steps of a component made of steps did, for a step
 	// that uses one.
@@ -186,16 +188,7 @@ func (e *Engine) step(ctx context.Context, f files, s workflow.Step, env *expr.E
 			return res
 		}
 	}
-	switch {
-	case s.AI != nil:
-		res.Output, res.Detail, res.Err = e.ai(ctx, f, s.AI, env, vars)
-	case s.Decide != nil:
-		res.Output, res.Detail, res.Err = e.decide(ctx, s.Decide, env, vars)
-	case s.HTTP != nil:
-		res.Output, res.Detail, res.Err = e.http(ctx, s.HTTP, env, vars)
-	case s.Component() != nil:
-		res.Output, res.Detail, res.Steps, res.Err = e.use(ctx, s, env, vars)
-	}
+	e.do(ctx, f, s, env, vars, &res)
 	return res
 }
 
@@ -312,16 +305,25 @@ func (e *Engine) ai(ctx context.Context, w files, s *workflow.AIStep, env *expr.
 	if err != nil {
 		return nil, "", err
 	}
-	detail := fmt.Sprintf("%s, %d tokens in, %d out", resp.Model, resp.InputTokens, resp.OutputTokens)
+	detail := resp.Model
+	if resp.InputTokens+resp.OutputTokens > 0 {
+		detail += fmt.Sprintf(", %d tokens in, %d out", resp.InputTokens, resp.OutputTokens)
+	}
 
 	// The API constrains the answer to the schema, but only for the schema
 	// features it supports, so the full schema is checked here as well.
+	if strings.TrimSpace(resp.Text) == "" {
+		return nil, detail, &InvalidAnswerError{resp.Text, errors.New("the model gave an empty answer")}
+	}
 	instance, err := jsonschema.UnmarshalJSON(strings.NewReader(resp.Text))
 	if err != nil {
-		return nil, detail, fmt.Errorf("the model's answer is not JSON: %w", err)
+		return nil, detail, &InvalidAnswerError{resp.Text, fmt.Errorf("the model's answer is not JSON: %w", err)}
 	}
 	if err := schema.Validate(instance); err != nil {
-		return nil, detail, fmt.Errorf("the model's answer does not match %s: %w", s.Output, err)
+		if problems := workflow.SchemaProblems(err, "the answer"); problems != nil {
+			err = errors.New(strings.Join(problems, "; "))
+		}
+		return nil, detail, &InvalidAnswerError{resp.Text, fmt.Errorf("the model's answer does not match %s: %w", s.Output, err)}
 	}
 	var out any
 	if err := json.Unmarshal([]byte(resp.Text), &out); err != nil {
@@ -344,7 +346,11 @@ func (e *Engine) decide(ctx context.Context, s *workflow.DecideStep, env *expr.E
 	if err != nil {
 		return nil, "", err
 	}
-	return resp.Answers, fmt.Sprintf("%s, %d tokens in", resp.Model, resp.InputTokens), nil
+	detail := resp.Model
+	if resp.InputTokens > 0 {
+		detail += fmt.Sprintf(", %d tokens in", resp.InputTokens)
+	}
+	return resp.Answers, detail, nil
 }
 
 func (e *Engine) http(ctx context.Context, s *workflow.HTTPStep, env *expr.Env, vars map[string]any) (any, string, error) {
@@ -408,7 +414,7 @@ func (e *Engine) http(ctx context.Context, s *workflow.HTTPStep, env *expr.Env, 
 	}
 	detail := fmt.Sprintf("%s -> %d", where, resp.StatusCode)
 	if resp.StatusCode >= 400 {
-		return nil, detail, fmt.Errorf("the server answered %s", resp.Status)
+		return nil, detail, &HTTPStatusError{resp.StatusCode, resp.Status}
 	}
 
 	var parsed any

@@ -151,9 +151,13 @@ export async function open({ profile, width = 1120, height = 700, scale = 2, dar
         return frames.length;
       };
     },
+    // close waits for Chrome to exit, so that the next page can use the
+    // same profile.
     async close() {
       ws.close();
+      const exited = new Promise((resolve) => chrome.once("exit", resolve));
       chrome.kill();
+      await exited;
     },
   };
   return page;

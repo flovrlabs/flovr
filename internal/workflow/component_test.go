@@ -147,7 +147,7 @@ http:
   body: ${input.text}
 `,
 			want: []string{
-				`5: component "x": http.url: ${trigger.body.id}: undeclared reference to 'trigger'`,
+				`5: component "x": http.url: ${trigger.body.id}: there is nothing called trigger here; an expression here can read input and env`,
 				`3: component "x": reads input.text, which is not listed under input`,
 			},
 		},
@@ -183,8 +183,8 @@ tests:
 				`8: test "wrong input": input: t must be a string, but is a number`,
 				`10: test "missing file": input file not found: nowhere.json`,
 				`12: test "not by name": input must hold a value for each of the component's inputs, by name`,
-				`15: test 5: expect.output.: Syntax error: no viable alternative at input '.'`,
-				`16: test 5: expect.trigger.body: undeclared reference to 'trigger'`,
+				`15: test 5: expect.output.: the expression ends too soon, after "output."`,
+				`16: test 5: expect.trigger.body: there is nothing called trigger here; an expression here can read input, output and env`,
 			},
 		},
 	}
@@ -340,7 +340,7 @@ func TestUseProblems(t *testing.T) {
       extra: x`,
 			want: []string{
 				`6: step "a": with.url must be a string, but is a number`,
-				`7: step "a": with.text: ${trigger.body.}: Syntax error`,
+				`7: step "a": with.text: ${trigger.body.}: the expression ends too soon`,
 				`8: step "a": with.urgent must be a boolean, but is a string`,
 				`9: step "a": with.extra is not an input of notify`,
 			},

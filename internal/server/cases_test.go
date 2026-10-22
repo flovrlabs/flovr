@@ -180,7 +180,7 @@ func TestTestThatIsNotOneIsRefusedAndLeavesNothingBehind(t *testing.T) {
 		{"nothing expected", `"add": {"name": "x", ` + body + `, "expect": []}`,
 			http.StatusUnprocessableEntity, "at least one thing to expect"},
 		{"an expression that does not parse", `"add": {"name": "x", ` + body + `, "expect": [{"key": "classify.category.value ==", "want": true}]}`,
-			http.StatusUnprocessableEntity, "Syntax error"},
+			http.StatusUnprocessableEntity, "the expression ends too soon"},
 		{"a field that is not there", `"add": {"name": "x", ` + body + `, "expect": [{"key": "classify.categry.value", "want": "outage"}]}`,
 			http.StatusUnprocessableEntity, "classify has no categry"},
 		{"a step expected to be something else", `"add": {"name": "x", ` + body + `, "expect": [{"key": "classify", "want": "maybe"}]}`,

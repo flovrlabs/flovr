@@ -112,7 +112,7 @@ func (s *Server) create(req createRequest) (int, any) {
 
 	var text strings.Builder
 	for i, part := range [][]yamledit.Pair{
-		{{Key: "name", Value: name}},
+		{{Key: "flovr", Value: workflow.Format}, {Key: "name", Value: name}},
 		{{Key: "trigger", Value: []yamledit.Pair{trigger}}},
 		stepUsing(req.Step.ID, req.Step.When, use, req.Step.With, inputs),
 	} {

@@ -8,17 +8,23 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 
 	"cel.dev/cel-go/cel"
+	"cel.dev/cel-go/common"
 	celast "cel.dev/cel-go/common/ast"
 	"cel.dev/cel-go/common/types/ref"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-type Env struct{ cel *cel.Env }
+type Env struct {
+	cel   *cel.Env
+	names []string // what expressions can read
+	later []string // steps that run after the expressions are read
+}
 
 // NewEnv returns an environment in which expressions can refer to trigger,
 // env, and the outputs of the given steps.
@@ -39,7 +45,15 @@ func Vars(names ...string) (*Env, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Env{e}, nil
+	return &Env{cel: e, names: append(slices.Clone(names), "env")}, nil
+}
+
+// Later returns e, saying of the steps named that they have not run when its
+// expressions are read, if an expression reads one.
+func (e *Env) Later(steps ...string) *Env {
+	later := *e
+	later.later = steps
+	return &later
 }
 
 // CheckCondition reports whether src is a valid expression that yields a bool.
@@ -61,7 +75,7 @@ func (e *Env) EvalCondition(src string, vars map[string]any) (bool, error) {
 	}
 	out, _, err := prg.Eval(vars)
 	if err != nil {
-		return false, err
+		return false, missing(src, err)
 	}
 	b, ok := out.Value().(bool)
 	if !ok {
@@ -84,9 +98,30 @@ func (e *Env) EvalExpr(src string, vars map[string]any) (any, error) {
 	}
 	out, _, err := prg.Eval(vars)
 	if err != nil {
-		return nil, err
+		return nil, missing(src, err)
 	}
 	return native(out)
+}
+
+// missing turns CEL's "no such key" into which value src read the key of,
+// if it can tell.
+func missing(src string, err error) error {
+	key, ok := strings.CutPrefix(err.Error(), "no such key: ")
+	if !ok {
+		return err
+	}
+	for _, path := range Reads(src) {
+		for i := 1; i < len(path); i++ {
+			switch {
+			case path[i] != key:
+			case path[0] == "env" && i == 1:
+				return fmt.Errorf("%s is not set in the environment", key)
+			default:
+				return fmt.Errorf("%s has no %s", strings.Join(path[:i], "."), key)
+			}
+		}
+	}
+	return err
 }
 
 // Check reports the first invalid ${...} placeholder in v, which may be a
@@ -173,7 +208,7 @@ func (e *Env) template(src string, vars map[string]any, eval bool) (any, error) 
 func (e *Env) compile(src string) (cel.Program, *cel.Type, error) {
 	ast, iss := e.cel.Compile(src)
 	if iss.Err() != nil {
-		return nil, nil, errors.New(strings.TrimSuffix(iss.Errors()[0].Message, " (in container '')"))
+		return nil, nil, errors.New(e.plain(src, iss.Errors()[0]))
 	}
 	// The environment holds the server's keys. Naming a variable is the
 	// only way to read one, so a workflow reads only those its author wrote
@@ -192,6 +227,97 @@ func (e *Env) compile(src string) (cel.Program, *cel.Type, error) {
 		return nil, nil, err
 	}
 	return prg, ast.OutputType(), nil
+}
+
+// plain says what is wrong with src in words for someone who has not read
+// CEL's grammar, from the first error CEL found in it.
+func (e *Env) plain(src string, issue *common.Error) string {
+	msg := strings.TrimSuffix(strings.TrimPrefix(issue.Message, "Syntax error: "), " (in container '')")
+	col := min(max(issue.Location.Column(), 0), len(src))
+	where := "at the start"
+	if before := strings.TrimSpace(src[:col]); before != "" {
+		where = fmt.Sprintf("after %q", before)
+	}
+	// quoted is the text CEL quotes after prefix, up to end, or to the
+	// last quote when end is "".
+	quoted := func(prefix, end string) (string, bool) {
+		rest, ok := strings.CutPrefix(msg, prefix+"'")
+		if !ok {
+			return "", false
+		}
+		if end == "" {
+			return strings.TrimSuffix(rest, "'"), true
+		}
+		text, _, ok := strings.Cut(rest, "'"+end)
+		return text, ok
+	}
+	if text, ok := quoted("token recognition error at: ", ""); ok {
+		switch {
+		case strings.HasPrefix(text, "="):
+			return "= is not an operator; to compare, write =="
+		case strings.HasPrefix(text, "'"), strings.HasPrefix(text, `"`):
+			return fmt.Sprintf("the text %s has no closing %c", strings.TrimSpace(text), text[0])
+		}
+		return fmt.Sprintf("%s cannot be part of an expression", strings.TrimSpace(text))
+	}
+	if text, ok := quoted("missing ", " at "); ok {
+		if col >= len(strings.TrimRight(src, " ")) {
+			return fmt.Sprintf("a closing %s is missing at the end", text)
+		}
+		return fmt.Sprintf("a %s is missing %s", text, where)
+	}
+	text, ok := quoted("mismatched input ", " expecting")
+	if !ok {
+		text, ok = quoted("extraneous input ", " expecting")
+	}
+	if _, viable := quoted("no viable alternative at input ", ""); viable {
+		// CEL quotes the tokens it read up to the one it could not use.
+		text, ok = "<EOF>", true
+		if col < len(src) {
+			text = src[col : col+1]
+		}
+	}
+	if ok {
+		switch text {
+		case "<EOF>":
+			return fmt.Sprintf("the expression ends too soon, %s", where)
+		case "and", "or", "not":
+			return fmt.Sprintf("CEL writes %s as %s", text, map[string]string{"and": "&&", "or": "||", "not": "!"}[text])
+		}
+		return fmt.Sprintf("%s is not expected %s", text, where)
+	}
+	if text, ok := quoted("undeclared reference to ", ""); ok {
+		if regexp.MustCompile(`(^|[^\w])` + regexp.QuoteMeta(text) + `\s*\(`).MatchString(src) {
+			return fmt.Sprintf("there is no function called %s", text)
+		}
+		if slices.Contains(e.later, text) {
+			return fmt.Sprintf("%s has not run yet here; a step can read only the steps before it", text)
+		}
+		return fmt.Sprintf("there is nothing called %s here; an expression here can read %s", text, list(e.names))
+	}
+	if fn, ok := quoted("found no matching overload for ", " applied to '"); ok {
+		if op, ok := operators[fn]; ok {
+			fn = op
+		}
+		args := strings.TrimSuffix(strings.TrimPrefix(msg[strings.Index(msg, " applied to '")+len(" applied to '"):], "("), ")'")
+		return fmt.Sprintf("%s cannot be used on these types: %s", fn, args)
+	}
+	return msg
+}
+
+// operators are CEL's names for its operators.
+var operators = map[string]string{
+	"_+_": "+", "_-_": "-", "_*_": "*", "_/_": "/", "_%_": "%",
+	"_==_": "==", "_!=_": "!=", "_<_": "<", "_<=_": "<=", "_>_": ">", "_>=_": ">=",
+	"_&&_": "&&", "_||_": "||", "!_": "!", "-_": "-", "_[_]": "[]", "_?_:_": "?:", "@in": "in",
+}
+
+// list joins names as "a, b and c".
+func list(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 var parser = sync.OnceValue(func() *cel.Env {

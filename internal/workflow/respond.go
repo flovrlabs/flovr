@@ -60,6 +60,28 @@ func (w *Workflow) CheckTrigger(trigger any) error {
 	return matches(schema, body)
 }
 
+// SchemaProblems lists what a JSON Schema found wrong with a value, each as where
+// in the value and what, with whole standing for the value itself. It is
+// nil when err is not a validation error.
+func SchemaProblems(err error, whole string) []string {
+	var invalid *jsonschema.ValidationError
+	if !errors.As(err, &invalid) {
+		return nil
+	}
+	var problems []string
+	for _, unit := range invalid.BasicOutput().Errors {
+		if unit.Error == nil {
+			continue
+		}
+		where := unit.InstanceLocation
+		if where == "" {
+			where = whole
+		}
+		problems = append(problems, fmt.Sprintf("%s: %s", where, unit.Error))
+	}
+	return problems
+}
+
 // matches checks v, as decoded from JSON or YAML, against schema.
 func matches(schema *jsonschema.Schema, v any) error {
 	// The validator wants numbers the way its own decoder reads them.
@@ -76,17 +98,7 @@ func matches(schema *jsonschema.Schema, v any) error {
 	if !errors.As(err, &invalid) {
 		return err
 	}
-	e := &InputError{}
-	for _, unit := range invalid.BasicOutput().Errors {
-		if unit.Error == nil {
-			continue
-		}
-		where := unit.InstanceLocation
-		if where == "" {
-			where = "the body"
-		}
-		e.Problems = append(e.Problems, fmt.Sprintf("%s: %s", where, unit.Error))
-	}
+	e := &InputError{Problems: SchemaProblems(err, "the body")}
 	if len(e.Problems) == 0 {
 		e.Problems = []string{err.Error()}
 	}
