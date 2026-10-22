@@ -15,6 +15,7 @@ Workflows as files
 - [x] A timeout for each step, and retries after the failures a step names: rate limits, outages, timeouts and answers that do not fit
 - [x] The model's answer kept as it wrote it when it does not fit the schema, and shown with what was wrong; an empty answer is a failure
 - [x] The tokens of each step and run, and of each round of tests
+- [x] Tests run several times (`flovr test --repeat N`), saying how often each test passed and each expectation was missed, with `--min-pass` and a token budget
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page
@@ -52,7 +53,7 @@ Services
 A test that calls a model for real is one sample of what the model does. This release is about knowing what a test result means.
 
 - [ ] Say on the page what is only saved, what is committed and what is live
-- [ ] Run tests several times (`flovr test --repeat N`), with a pass rate for each test and each expectation
+- [ ] The pass rates of repeated tests on the page
 - [ ] Compare a round of tests with the last one at the commit, and show what got worse
 - [ ] Keep a run that failed as a test, writing what should have happened
 

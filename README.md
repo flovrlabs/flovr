@@ -237,6 +237,17 @@ A key under `expect` is either a step's id, expecting it to be `called` or `skip
 
 In a test, `ai` and `decide` steps call their models for real, because what the model answers is the thing being tested. `http` steps are not sent, and environment variables they would need do not have to be set.
 
+A model can answer differently each time, so one passing run proves little. `flovr test --repeat 5` runs each test five times and says how often it passed, and how often each expectation was missed:
+
+```
+triage-ticket, each test 5 times
+  ✓ refund request is not escalated  passed 5 of 5  1.1s each
+  ✗ outage report pages on-call  passed 4 of 5  1.9s each
+      1 of 5: classify.priority.value: expected "high", got "medium"
+```
+
+A test passes only if it passed every time, or as often as `--min-pass 0.8` asks. `--max-tokens` stops starting runs once the round has used that many tokens, and every round ends with the tokens it used.
+
 `flovr test --record` keeps what the models answered in `answers.jsonl` next to the workflow, if every test passed. `flovr test --replay` then runs the tests with those answers instead of calling the models. A replayed test checks the workflow, its expressions, which steps run and what it answers, but not the models; it needs no key and costs nothing. Commit the file with the workflow, so that others and CI can run the tests without a key. Answers are recorded only from tests, never from the runs of a server.
 
 ## Components

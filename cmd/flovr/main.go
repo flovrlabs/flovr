@@ -311,6 +311,9 @@ func runCmd() *cobra.Command {
 
 func testCmd() *cobra.Command {
 	var verbose, record, replay bool
+	var repeat int
+	var minPass float64
+	var maxTokens int64
 	cmd := &cobra.Command{
 		Use:   "test [workflow]",
 		Short: "Run a workflow's tests",
@@ -322,13 +325,29 @@ func testCmd() *cobra.Command {
 			"the workflow, if every test passed. With --replay, the tests get those answers\n" +
 			"and no model is called, so they run without a key and cost nothing; a test whose\n" +
 			"prompt, input or schema has changed since cannot run until it is recorded again.\n\n" +
+			"A model can answer differently each time, so one passing run proves little.\n" +
+			"--repeat runs each test several times and says how often it passed and how\n" +
+			"often each expectation was missed. A test passes only if it passed every time,\n" +
+			"or as often as --min-pass asks. --max-tokens stops starting runs once the round\n" +
+			"has used that many tokens.\n\n" +
 			"The argument is a workflow file or a directory containing workflow.yaml\n" +
 			"(default: the current directory). A component's own tests run the same way:\n" +
 			"give its component.yaml or the directory containing it.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if record && replay {
+			switch {
+			case record && replay:
 				return errors.New("--record calls the models and --replay does not; give one of them")
+			case repeat < 1 || repeat > 100:
+				return errors.New("--repeat must be from 1 to 100")
+			case repeat > 1 && replay:
+				return errors.New("--repeat asks the models again each time, and replayed answers are the same every time; leave out --replay")
+			case repeat > 1 && record:
+				return errors.New("--record keeps the answers of one round; leave out --repeat")
+			case minPass <= 0 || minPass > 1:
+				return errors.New("--min-pass is the share of runs a test must pass, more than 0 and at most 1, such as 0.8")
+			case maxTokens < 0:
+				return errors.New("--max-tokens must be 0, for no limit, or more")
 			}
 			eng := &engine.Engine{Env: environ()}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -374,34 +393,90 @@ func testCmd() *cobra.Command {
 				recorder = ai.NewRecorder(ai.NewRouter())
 				eng.Model = recorder
 				fmt.Println(name)
+			case repeat > 1:
+				eng.Model = ai.NewRouter()
+				fmt.Printf("%s, each test %d times\n", name, repeat)
 			default:
 				eng.Model = ai.NewRouter()
 				fmt.Println(name)
 			}
-			failed := 0
+			// Each test runs repeat times, one run after another, unless
+			// the round has used its tokens first.
 			var tokens engine.Tokens
+			spent := func() bool { return maxTokens > 0 && tokens.In+tokens.Out >= maxTokens }
+			failed, unrun, runs, passedRuns := 0, 0, 0, 0
+			stopped := false // a test did not get all its runs
 			for _, run := range tests {
-				res, err := run()
-				for _, s := range res.Steps {
-					tokens.Add(s.Tokens)
+				var results []engine.TestResult
+				for len(results) < repeat && !spent() {
+					res, err := run()
+					for _, s := range res.Steps {
+						tokens.Add(s.Tokens)
+					}
+					if err != nil {
+						return fmt.Errorf("test %q could not run: %w", res.Name, err)
+					}
+					results = append(results, res)
 				}
-				if err != nil {
-					return fmt.Errorf("test %q could not run: %w", res.Name, err)
+				stopped = stopped || len(results) < repeat
+				if len(results) == 0 {
+					unrun++
+					continue
 				}
+				passed := 0
+				var took time.Duration
+				for _, res := range results {
+					if len(res.Failures) == 0 {
+						passed++
+					}
+					took += res.Duration
+				}
+				runs, passedRuns = runs+len(results), passedRuns+passed
 				mark := "✓"
-				if len(res.Failures) > 0 {
+				if len(results) < repeat || float64(passed) < minPass*float64(repeat) {
 					mark = "✗"
 					failed++
 				}
-				fmt.Printf("  %s %s  %s\n", mark, res.Name, res.Duration.Round(time.Millisecond))
-				for _, f := range res.Failures {
-					fmt.Printf("      %s\n", strings.ReplaceAll(f, "\n", "\n      "))
-				}
-				if verbose {
-					for _, s := range res.Steps {
-						printStep("      ", s)
+				name := results[0].Name
+				if repeat == 1 {
+					fmt.Printf("  %s %s  %s\n", mark, name, took.Round(time.Millisecond))
+					for _, f := range results[0].Failures {
+						fmt.Printf("      %s\n", strings.ReplaceAll(f, "\n", "\n      "))
+					}
+				} else {
+					cut := ""
+					if len(results) < repeat {
+						cut = ", then the round had used its tokens"
+					}
+					fmt.Printf("  %s %s  passed %d of %d%s  %s each\n", mark, name, passed, len(results), cut,
+						(took / time.Duration(len(results))).Round(time.Millisecond))
+					// How often each failure happened, in the order first met.
+					var met []string
+					times := map[string]int{}
+					for _, res := range results {
+						for _, f := range res.Failures {
+							if times[f] == 0 {
+								met = append(met, f)
+							}
+							times[f]++
+						}
+					}
+					for _, f := range met {
+						fmt.Printf("      %d of %d: %s\n", times[f], len(results), strings.ReplaceAll(f, "\n", "\n      "))
 					}
 				}
+				if verbose {
+					for _, res := range results {
+						if repeat == 1 || len(res.Failures) > 0 {
+							for _, s := range res.Steps {
+								printStep("      ", s)
+							}
+						}
+					}
+				}
+			}
+			if unrun > 0 {
+				fmt.Printf("  %s not run: the round had used its %d tokens\n", count(unrun, "test"), maxTokens)
 			}
 
 			fmt.Println()
@@ -412,13 +487,35 @@ func testCmd() *cobra.Command {
 			case tokens != (engine.Tokens{}):
 				used = " · " + tokens.String()
 			}
-			if failed > 0 {
+			if repeat > 1 {
+				fmt.Printf("%d of %d runs passed%s\n", passedRuns, runs, used)
+				used = ""
+			}
+			if stopped {
+				fmt.Printf("The round stopped starting runs at --max-tokens %d.\n", maxTokens)
+			}
+			if failed > 0 || unrun > 0 {
 				if record {
 					fmt.Println("The answers were not recorded, since a test failed.")
 				}
-				return fmt.Errorf("%d of %s failed%s", failed, count(len(tests), "test"), used)
+				switch {
+				case failed == 0:
+					return fmt.Errorf("%d of %s did not run%s", unrun, count(len(tests), "test"), used)
+				case repeat == 1:
+					return fmt.Errorf("%d of %s failed%s", failed, count(len(tests), "test"), used)
+				case minPass == 1:
+					return fmt.Errorf("%d of %s did not pass every time", failed, count(len(tests), "test"))
+				}
+				return fmt.Errorf("%d of %s passed in fewer than %.0f%% of their runs", failed, count(len(tests), "test"), minPass*100)
 			}
-			fmt.Printf("%s passed%s\n", count(len(tests), "test"), used)
+			switch {
+			case repeat > 1 && minPass < 1:
+				fmt.Printf("%s passed in at least %.0f%% of their runs\n", count(len(tests), "test"), minPass*100)
+			case repeat > 1:
+				fmt.Printf("%s passed every time\n", count(len(tests), "test"))
+			default:
+				fmt.Printf("%s passed%s\n", count(len(tests), "test"), used)
+			}
 			if record {
 				if err := recorder.Write(answers); err != nil {
 					return err
@@ -435,6 +532,9 @@ func testCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show what every step did in each test")
 	cmd.Flags().BoolVar(&record, "record", false, "if every test passes, keep the models' answers in "+ai.AnswersFile+" next to the workflow")
 	cmd.Flags().BoolVar(&replay, "replay", false, "answer with what --record kept instead of calling the models; no key is needed")
+	cmd.Flags().IntVar(&repeat, "repeat", 1, "run each test this many times, and say how often it passed")
+	cmd.Flags().Float64Var(&minPass, "min-pass", 1, "with --repeat, the share of its runs a test must pass, such as 0.8")
+	cmd.Flags().Int64Var(&maxTokens, "max-tokens", 0, "stop starting runs once the round has used this many tokens; 0 is no limit")
 	return cmd
 }
 
