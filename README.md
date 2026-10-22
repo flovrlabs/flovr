@@ -472,7 +472,7 @@ Other agents can be pointed at the same file from their `AGENTS.md`. [llms.txt](
 
 ## In CI
 
-[.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and, when the `OPENROUTER_API_KEY` secret is available, runs their tests and those of their components. Without the secret, as in pull requests from forks, it runs them with `--replay`. The same commands work for your own workflows:
+[.github/workflows/ci.yml](.github/workflows/ci.yml) validates every example and runs their tests and those of their components with `--replay`, so pull requests and pushes call no model and cost nothing. Run it by hand from the Actions tab and, with the `OPENROUTER_API_KEY` secret set, the tests call the models for real. The same commands work for your own workflows:
 
 ```bash
 flovr validate path/to/workflow

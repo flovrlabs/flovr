@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Started by hand from the Actions tab, the example tests call the models
+  # for real, which costs money. Every other run replays recorded answers.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -42,8 +45,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # Not available to pull requests from forks, which skip the model tests.
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # Only a run started by hand gets the key. Pull requests from forks
+      # never have it.
+      OPENROUTER_API_KEY: ${{ github.event_name == 'workflow_dispatch' && secrets.OPENROUTER_API_KEY || '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -78,7 +82,7 @@ jobs:
       - name: Test workflows with recorded answers
         if: env.OPENROUTER_API_KEY == ''
         run: |
-          echo "::notice::The OPENROUTER_API_KEY secret is not available to this run, so the workflow tests replay recorded answers."
+          echo "::notice::The workflow tests replay recorded answers and call no model. To call the models, run CI by hand from the Actions tab."
           failed=0
           for dir in examples/*/; do
             "$RUNNER_TEMP/flovr" test --replay "$dir" || failed=1
