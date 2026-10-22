@@ -71,6 +71,14 @@ func failureOf(err error) string {
 // do runs a step that is to run: once, or again after a failure its retry
 // names, each try within the step's timeout.
 func (e *Engine) do(ctx context.Context, f files, s workflow.Step, env *expr.Env, vars map[string]any, res *StepResult) {
+	// The step runs with a model that counts its tokens, tries and the
+	// steps of a component included.
+	counted := *e
+	model := &counting{next: e.Model}
+	counted.Model = model
+	e = &counted
+	defer func() { res.Tokens = model.total() }()
+
 	for n := 1; ; n++ {
 		var failure string
 		res.Output, res.Detail, res.Steps, failure, res.Err = e.try(ctx, f, s, env, vars)

@@ -91,13 +91,14 @@ func (s *Server) runTest(id string, w *workflow.Workflow, t workflow.Test) Run {
 		Env:   s.opts.Env,
 		OnStep: func(r engine.StepResult) {
 			run.Steps = append(run.Steps, record(r))
+			run.Tokens.Add(r.Tokens)
 			s.history.put(run)
 		},
 	}
 	res, err := eng.Test(ctx, w, t)
 	run.Response = res.Response
 	s.finishTest(&run, res, err)
-	s.opts.Log("%s %s test %q %s in %s", id, w.Name, run.Test, run.Status, time.Duration(run.Millis)*time.Millisecond)
+	s.opts.Log("%s %s test %q %s in %s%s", id, w.Name, run.Test, run.Status, time.Duration(run.Millis)*time.Millisecond, tokensOf(run.Tokens))
 	return run
 }
 

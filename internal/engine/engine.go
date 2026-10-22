@@ -40,7 +40,8 @@ type StepResult struct {
 	Detail   string // one-line summary for people, free of secrets
 	Duration time.Duration
 	Err      error
-	Tries    int // how many times it ran: more than 1 after a retry, 0 if skipped
+	Tries    int    // how many times it ran: more than 1 after a retry, 0 if skipped
+	Tokens   Tokens // what its models read and wrote, over every try and every step inside it
 
 	// Steps is what the steps of a component made of steps did, for a step
 	// that uses one.

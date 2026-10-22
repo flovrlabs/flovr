@@ -282,16 +282,23 @@ func runCmd() *cobra.Command {
 				return err
 			}
 			fmt.Println(w.Name)
+			var tokens engine.Tokens
 			eng := &engine.Engine{
-				Model:  model,
-				HTTP:   httpClient(),
-				Env:    environ(),
-				OnStep: func(r engine.StepResult) { printStep("  ", r) },
+				Model: model,
+				HTTP:  httpClient(),
+				Env:   environ(),
+				OnStep: func(r engine.StepResult) {
+					printStep("  ", r)
+					tokens.Add(r.Tokens)
+				},
 			}
 			resp, err := eng.Run(ctx, w, trigger)
 			if resp != nil {
 				body, _ := json.MarshalIndent(resp.Body, "    ", "  ")
 				fmt.Printf("  responds %d\n    %s\n", resp.Status, body)
+			}
+			if tokens != (engine.Tokens{}) {
+				fmt.Printf("  %s\n", tokens)
 			}
 			return err
 		},
@@ -372,8 +379,12 @@ func testCmd() *cobra.Command {
 				fmt.Println(name)
 			}
 			failed := 0
+			var tokens engine.Tokens
 			for _, run := range tests {
 				res, err := run()
+				for _, s := range res.Steps {
+					tokens.Add(s.Tokens)
+				}
 				if err != nil {
 					return fmt.Errorf("test %q could not run: %w", res.Name, err)
 				}
@@ -394,13 +405,20 @@ func testCmd() *cobra.Command {
 			}
 
 			fmt.Println()
+			used := ""
+			switch {
+			case replay:
+				used = " · replayed, no model was called"
+			case tokens != (engine.Tokens{}):
+				used = " · " + tokens.String()
+			}
 			if failed > 0 {
 				if record {
 					fmt.Println("The answers were not recorded, since a test failed.")
 				}
-				return fmt.Errorf("%d of %s failed", failed, count(len(tests), "test"))
+				return fmt.Errorf("%d of %s failed%s", failed, count(len(tests), "test"), used)
 			}
-			fmt.Printf("%s passed\n", count(len(tests), "test"))
+			fmt.Printf("%s passed%s\n", count(len(tests), "test"), used)
 			if record {
 				if err := recorder.Write(answers); err != nil {
 					return err

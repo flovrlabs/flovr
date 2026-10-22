@@ -14,6 +14,7 @@ Workflows as files
 - [x] The answers of a round of tests recorded (`--record`) and replayed (`--replay`), so the examples, the page and CI can be tried without a key
 - [x] A timeout for each step, and retries after the failures a step names: rate limits, outages, timeouts and answers that do not fit
 - [x] The model's answer kept as it wrote it when it does not fit the schema, and shown with what was wrong; an empty answer is a failure
+- [x] The tokens of each step and run, and of each round of tests
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page
@@ -60,7 +61,7 @@ A test that calls a model for real is one sample of what the model does. This re
 - [ ] Run again with the same input, or from a step on, reusing what the steps before it gave
 - [ ] A form to run a workflow now, built from its trigger's schema; the next times a schedule fires
 - [ ] What changed, drawn on the steps of the workflow, with the history `git log` keeps
-- [ ] Tokens, and an estimate of the cost, of each run and each round of tests
+- [ ] An estimate of the cost of each run and each round of tests
 - [ ] Try a step with changes not saved yet
 - [ ] A branch for "otherwise", and steps put in another order
 
