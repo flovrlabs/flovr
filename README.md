@@ -169,7 +169,27 @@ Steps run in the order they are written. Each has an `id`, an optional `when`, a
 
 A `decide` question is yes/no unless it has `choice` (a mapping of answer to meaning) or `score` (a list of levels from lowest to highest). `yes_if` and `no_if` tell a yes/no question what each answer means.
 
-Models are named `provider/model`. The providers are `anthropic`, `openai` and `openrouter`, with keys in `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY`. `OPENAI_BASE_URL` points `openai/...` models at another server that speaks the same API. Decision models come from `openrouter` only, through its Decisions API, which OpenRouter labels alpha.
+Models are named `provider/model`. The providers are `anthropic`, `openai` and `openrouter`, with keys in `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY`, and `ollama`, which needs no key. `OPENAI_BASE_URL` points `openai/...` models at another server that speaks the same API. Decision models come from `openrouter` only, through its Decisions API, which OpenRouter labels alpha.
+
+### Models on your own machine
+
+An `ai` step can use a model that [Ollama](https://ollama.com) runs, so that what the step reads never leaves the machine and costs nothing per call. Fetch a model that can answer in JSON, then name it with `ollama/`:
+
+```bash
+ollama pull llama3.2
+```
+
+```yaml
+  - id: summarize
+    timeout: 2m
+    ai:
+      model: ollama/llama3.2
+      prompt: prompts/summarize.md
+      input: ${trigger.body}
+      output: schemas/summary.json
+```
+
+flovr reaches Ollama at `127.0.0.1:11434`, or where `OLLAMA_HOST` says, and asks for an answer that fits the schema. A small model fits it less often than a large one, which `flovr test --repeat` shows. A `decide` step still needs OpenRouter.
 
 ### Timeouts and retries
 

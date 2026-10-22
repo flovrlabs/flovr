@@ -18,6 +18,8 @@ Workflows as files
 - [x] Tests run several times (`flovr test --repeat N`), saying how often each test passed and each expectation was missed, with `--min-pass` and a token budget
 - [x] A version for the file format (`flovr: 1`), JSON Schemas of the files for editors and agents (`flovr schema`), and JSON from `validate` and `test`
 - [x] A skill that teaches coding agents to write and test workflows, and `llms.txt`
+- [x] Models that Ollama runs on your own machine, as `ollama/...`, with no key
+- [x] Messages that say plainly what is wrong with an expression, and what to run instead when no model can be reached
 
 The server
 - [x] Webhooks and schedules, with a token for webhooks and a key for the page

@@ -144,7 +144,7 @@ func TestWebhookRunsInBackground(t *testing.T) {
 	logged := strings.Join(*f.logs, "\n")
 	for _, want := range []string{
 		accepted.Run + " triage-ticket started by webhook /tickets",
-		accepted.Run + "   classify ok  fake-decider, 0 tokens in",
+		accepted.Run + "   classify ok  fake-decider",
 		accepted.Run + "   alert_billing skipped",
 		accepted.Run + " triage-ticket ok in ",
 	} {
@@ -573,7 +573,7 @@ func TestStateDescribesWorkflowsAndRuns(t *testing.T) {
 
 	var full Run
 	json.Unmarshal(get(f.srv, "/api/runs/"+finished.ID).Body.Bytes(), &full)
-	if full.Trigger == nil || full.Steps[0].Output == nil || full.Steps[0].Detail != "fake-decider, 0 tokens in" || full.Started.IsZero() {
+	if full.Trigger == nil || full.Steps[0].Output == nil || full.Steps[0].Detail != "fake-decider" || full.Started.IsZero() {
 		t.Errorf("run detail = %+v", full)
 	}
 	if rec := get(f.srv, "/api/runs/r-missing"); rec.Code != http.StatusNotFound {

@@ -81,7 +81,7 @@ Each step has an `id` (letters, digits, underscores; not `trigger`, `env`, `resp
 | `use` | the folder of a component, and `with` for its input | what the component gives back |
 
 - A `decide` question is yes/no unless it has `choice` (answer: meaning) or `score` (a list of levels from lowest to highest). `yes_if` and `no_if`, given together, say what each answer of a yes/no question means.
-- Models are `provider/model`, with providers `anthropic`, `openai` and `openrouter`. Decision models come from `openrouter` only.
+- Models are `provider/model`, with providers `anthropic`, `openai`, `openrouter` and `ollama` (a model on this machine, no key). Decision models come from `openrouter` only.
 - Put each prompt in a file and each output schema in a file next to the workflow. A schema with `"additionalProperties": false` and `required` keeps answers tight.
 - `timeout` limits each try. `retry: 2`, or `retry: {times: 2, wait: 2s, on: [rate-limit, unavailable, timeout, invalid-answer]}`, tries again after those failures only. Do not add `retry` to an `http` step that must not run twice, such as a payment.
 

@@ -120,6 +120,11 @@ func (c *checker) steps(steps []Step, given string) []string {
 			c.addf(line, "%s: %v", label, err)
 			continue
 		}
+		var later []string
+		for _, next := range steps[i:] {
+			later = append(later, next.ID)
+		}
+		env = env.Later(later...)
 		if s.When != "" {
 			if err := env.CheckCondition(s.When); err != nil {
 				c.addf(c.line("steps", i, "when"), "%s: when: %v", label, err)

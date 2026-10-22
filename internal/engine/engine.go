@@ -305,7 +305,10 @@ func (e *Engine) ai(ctx context.Context, w files, s *workflow.AIStep, env *expr.
 	if err != nil {
 		return nil, "", err
 	}
-	detail := fmt.Sprintf("%s, %d tokens in, %d out", resp.Model, resp.InputTokens, resp.OutputTokens)
+	detail := resp.Model
+	if resp.InputTokens+resp.OutputTokens > 0 {
+		detail += fmt.Sprintf(", %d tokens in, %d out", resp.InputTokens, resp.OutputTokens)
+	}
 
 	// The API constrains the answer to the schema, but only for the schema
 	// features it supports, so the full schema is checked here as well.
@@ -343,7 +346,11 @@ func (e *Engine) decide(ctx context.Context, s *workflow.DecideStep, env *expr.E
 	if err != nil {
 		return nil, "", err
 	}
-	return resp.Answers, fmt.Sprintf("%s, %d tokens in", resp.Model, resp.InputTokens), nil
+	detail := resp.Model
+	if resp.InputTokens > 0 {
+		detail += fmt.Sprintf(", %d tokens in", resp.InputTokens)
+	}
+	return resp.Answers, detail, nil
 }
 
 func (e *Engine) http(ctx context.Context, s *workflow.HTTPStep, env *expr.Env, vars map[string]any) (any, string, error) {

@@ -104,16 +104,16 @@ func TestEndpointProblems(t *testing.T) {
 		{"schema file missing", "input: in.json", "input: nowhere.json", []string{`4: trigger: schema file not found: nowhere.json`}},
 		{"schema not valid", "input: in.json", "input: bad.json", []string{`4: trigger: bad.json is not a valid JSON Schema`}},
 		{"status", "status: 201", "status: 99", []string{`12: respond: status must be an HTTP status from 200 to 599`}},
-		{"header", "X-Team: ${env.TEAM}", "X-Team: ${c.team}", []string{`14: respond: headers.X-Team: ${c.team}: undeclared reference to 'c'`}},
-		{"body", "category: ${a.category}", "category: ${a.}", []string{`15: respond: body: ${a.}: Syntax error`}},
+		{"header", "X-Team: ${env.TEAM}", "X-Team: ${c.team}", []string{`14: respond: headers.X-Team: ${c.team}: there is nothing called c here; an expression here can read trigger, a, b and env`}},
+		{"body", "category: ${a.category}", "category: ${a.}", []string{`15: respond: body: ${a.}: the expression ends too soon, after "a."`}},
 		{"a step called response", "  - id: b", "  - id: response", []string{
 			`8: step "response": this id is reserved`,
-			`15: respond: body: ${b != null}: undeclared reference to 'b'`,
+			`15: respond: body: ${b != null}: there is nothing called b here; an expression here can read trigger, a and env`,
 		}},
 		{"fixture the workflow would refuse", "fixture: good.json", "fixture: bad.json",
 			[]string{`19: test 1: fixture bad.json does not match trigger.input: /text: got number, want string`}},
 		{"expecting something of an answer there is none of", "respond:\n  status: 201\n  headers:\n    X-Team: ${env.TEAM}\n  body:\n    category: ${a.category}\n    told: ${b != null}\n", "",
-			[]string{`15: test 1: expect.response.body.category: undeclared reference to 'response'`, `14: test 1: expect.response.status: undeclared reference to 'response'`}},
+			[]string{`15: test 1: expect.response.body.category: there is nothing called response here; an expression here can read trigger, a, b and env`, `14: test 1: expect.response.status: there is nothing called response here; an expression here can read trigger, a, b and env`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

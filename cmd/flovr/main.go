@@ -39,8 +39,9 @@ func main() {
 		Short: "Validate and run AI workflows defined as YAML files",
 		Long: "Validate and run AI workflows defined as YAML files.\n\n" +
 			"Model API keys come from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY or\n" +
-			"OPENROUTER_API_KEY, depending on the models a workflow uses. Variables in a .env\n" +
-			"file in the current directory are loaded too, unless they are already set.",
+			"OPENROUTER_API_KEY, depending on the models a workflow uses; models of Ollama\n" +
+			"need none. Variables in a .env file in the current directory are loaded too,\n" +
+			"unless they are already set.",
 		Version:       currentVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -356,6 +357,9 @@ func runCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if fixture == "" && w.Trigger != nil && w.Trigger.Webhook != "" {
+				return needsFixture(w, args)
+			}
 			trigger, err := loadTrigger(w, fixture)
 			if err != nil {
 				return err
@@ -386,6 +390,13 @@ func runCmd() *cobra.Command {
 			}
 			if tokens != (engine.Tokens{}) {
 				fmt.Printf("  %s\n", tokens)
+			}
+			if !replay {
+				again := command("flovr run", args...)
+				if fixture != "" {
+					again += " --fixture " + shellQuote(fixture)
+				}
+				err = withReplayHint(err, w.Path, again+" --replay")
 			}
 			return err
 		},
@@ -512,7 +523,11 @@ func testCmd() *cobra.Command {
 						tokens.Add(s.Tokens)
 					}
 					if err != nil {
-						return report.print(asJSON, fmt.Errorf("test %q could not run: %w", res.Name, err))
+						err = fmt.Errorf("test %q could not run: %w", res.Name, err)
+						if !replay && !record && repeat == 1 {
+							err = withReplayHint(err, file, command("flovr test", args...)+" --replay")
+						}
+						return report.print(asJSON, err)
 					}
 					results = append(results, res)
 				}
@@ -922,8 +937,61 @@ func target(args []string) string {
 	return args[0]
 }
 
+// needsFixture says what to give a run of a workflow that a request starts,
+// which has nothing to run on without one.
+func needsFixture(w *workflow.Workflow, args []string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s starts on a request to %s, so a run needs one: give --fixture with a JSON file shaped like {\"body\": {...}}", w.Name, w.Trigger.Webhook)
+	var fixtures []string
+	for _, t := range w.Tests {
+		if t.Fixture != "" && !slices.Contains(fixtures, t.Fixture) {
+			fixtures = append(fixtures, t.Fixture)
+		}
+	}
+	if len(fixtures) > 0 {
+		b.WriteString(". Its tests run on these:")
+		for _, f := range fixtures {
+			fmt.Fprintf(&b, "\n  %s --fixture %s", command("flovr run", args...), shellQuote(f))
+		}
+	}
+	return errors.New(b.String())
+}
+
+// withReplayHint adds to err, when no model could be reached and answers
+// were recorded next to file, how to go on with those answers instead.
+func withReplayHint(err error, file, again string) error {
+	var unavailable *ai.UnavailableError
+	if !errors.As(err, &unavailable) {
+		return err
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(file), ai.AnswersFile)); statErr != nil {
+		return err
+	}
+	return fmt.Errorf("%w\n\nThe answers recorded in %s can stand in for the models, with no key and at no cost:\n  %s", err, ai.AnswersFile, again)
+}
+
+// command is a command line to run name with args.
+func command(name string, args ...string) string {
+	for _, a := range args {
+		name += " " + shellQuote(a)
+	}
+	return name
+}
+
+// shellQuote quotes s for a shell, if it needs it.
+func shellQuote(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`!*?[]{}()<>|&;#~") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func loadTrigger(w *workflow.Workflow, fixture string) (any, error) {
 	if fixture == "" {
+		if w.Trigger != nil && w.Trigger.Cron != "" {
+			// What the server gives a run that its schedule starts.
+			return map[string]any{"time": time.Now().Format(time.RFC3339)}, nil
+		}
 		return map[string]any{}, nil
 	}
 	data, err := os.ReadFile(fixture)

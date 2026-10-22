@@ -4768,7 +4768,8 @@ function diffLines(text) {
 
 function renderChanges(w) {
   const c = changesCache[w.name] || { state: "loading" };
-  const lede = el("p", { class: "lede" }, "These changes are saved in the file but not committed. Commit them with git when you are happy with them.");
+  // Said only over changes there are.
+  let lede = null;
   let content;
   if (c.state === "error") {
     content = [el("p", { class: "empty" }, "Could not read the changes: " + c.error + ". ",
@@ -4782,6 +4783,7 @@ function renderChanges(w) {
   } else {
     const lines = diffLines(c.data.diff || "");
     const added = lines.filter((l) => l[0] === "add").length, removed = lines.filter((l) => l[0] === "del").length;
+    lede = el("p", { class: "lede" }, "These changes are saved in the file but not committed. Commit them with git when you are happy with them.");
     content = [
       el("div", { class: "files-head" },
         el("h2", {}, plural(c.data.files.length, "file"), " changed"),

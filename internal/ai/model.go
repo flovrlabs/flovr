@@ -11,7 +11,7 @@ import (
 )
 
 // Providers are what a model name can start with, as in "openai/gpt-5".
-var Providers = []string{"anthropic", "openai", "openrouter"}
+var Providers = []string{"anthropic", "ollama", "openai", "openrouter"}
 
 // SplitModel splits a model name written as provider/model. The model part
 // may itself contain slashes, as OpenRouter's names do.
@@ -47,6 +47,7 @@ func NewRouter() *Router {
 	return &Router{
 		providers: map[string]generator{
 			"anthropic":  NewAnthropic(),
+			"ollama":     NewOllama(),
 			"openai":     NewOpenAI(),
 			"openrouter": NewOpenRouter(),
 		},

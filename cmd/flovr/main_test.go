@@ -297,3 +297,34 @@ func TestValidateSaysWhatIsWrongAsJSON(t *testing.T) {
 		t.Errorf("report = %+v", report)
 	}
 }
+
+func TestARunOfAWebhookSaysWhichFixturesToGive(t *testing.T) {
+	target := filepath.Join("..", "..", "examples", "triage-ticket")
+	cmd := runCmd()
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{target})
+	var err error
+	stdout(t, func() { err = cmd.Execute() })
+	if err == nil || !strings.Contains(err.Error(), "starts on a request to /tickets, so a run needs one") ||
+		!strings.Contains(err.Error(), "\n  flovr run "+target+" --fixture fixtures/outage.json") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestWithoutAKeyTheRecordedAnswersAreOffered(t *testing.T) {
+	// No request is sent without a key.
+	t.Setenv("OPENROUTER_API_KEY", "")
+	target := filepath.Join("..", "..", "examples", "triage-ticket")
+	cmd := testCmd()
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{target})
+	var err error
+	stdout(t, func() { err = cmd.Execute() })
+	if err == nil || !strings.Contains(err.Error(), "set OPENROUTER_API_KEY") ||
+		!strings.Contains(err.Error(), "\n  flovr test "+target+" --replay") {
+		t.Errorf("err = %v", err)
+	}
+	if got := shellQuote("fixtures/a b.json"); got != "'fixtures/a b.json'" {
+		t.Errorf("shellQuote = %s", got)
+	}
+}

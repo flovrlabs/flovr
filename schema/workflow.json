@@ -61,9 +61,9 @@
       "description": "Any value. A string may hold ${expression} placeholders, and a string that is one placeholder takes the value of the expression."
     },
     "model": {
-      "description": "provider/model, where provider is anthropic, openai or openrouter, as in openrouter/deepseek/deepseek-v4.1-flash.",
+      "description": "provider/model, where provider is anthropic, ollama, openai or openrouter, as in openrouter/deepseek/deepseek-v4.1-flash or ollama/llama3.2.",
       "type": "string",
-      "pattern": "^(anthropic|openai|openrouter)/.+"
+      "pattern": "^(anthropic|ollama|openai|openrouter)/.+"
     },
     "duration": {
       "description": "A length of time, such as 30s, 2m or 1m30s.",
