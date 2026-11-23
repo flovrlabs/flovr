@@ -374,7 +374,7 @@ The market is a list of components in git that anyone may use. The page lists th
 {"services": [{
   "name": "notify",
   "description": "Tells a team about an urgent ticket by sending it a summary.",
-  "use": "github.com/flovrlabs/flovr/examples/triage-ticket/components/notify@main",
+  "use": "github.com/flovrlabs/flovr/examples/triage-ticket/components/notify@v0.1.0",
   "kind": "http",
   "inputs": [{"name": "url", "type": "string"}, {"name": "summary", "type": "string"}, {"name": "category", "type": "string"}],
   "tags": ["alert", "webhook"]
