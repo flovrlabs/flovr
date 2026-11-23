@@ -28,8 +28,12 @@ type componentRequest struct {
 		Type string `json:"type"` // one of workflow.ParamTypes
 	} `json:"inputs"`
 	// Work is what it does, as for a new step that does its own work: its
-	// Kind is "ai", "decide" or "http". Its id and condition are not used.
+	// Kind is "ai", "decide" or "http". Its condition is not used.
 	Work stepAdd `json:"work"`
+	// Steps makes it a component of steps, with Work as the first of them,
+	// under the id Work gives, and what that step puts out as what it gives
+	// back. More steps are added from its page.
+	Steps bool `json:"steps"`
 }
 
 // componentsDir is the folder, inside a root, that components made from the
@@ -119,7 +123,15 @@ func (s *Server) createComponent(req componentRequest) (int, any) {
 	}
 
 	work := req.Work
+	stepID := strings.TrimSpace(work.ID)
 	work.ID, work.When = name, ""
+	if req.Steps {
+		if !inputName.MatchString(stepID) {
+			undo()
+			return refuse("The first step needs an id of letters, digits and _, starting with a letter or _.")
+		}
+		work.ID = stepID
+	}
 	pairs, _, status, refused := ownWork(dir, &work)
 	if status != 0 {
 		undo()
@@ -133,8 +145,28 @@ func (s *Server) createComponent(req componentRequest) (int, any) {
 	if len(input) > 0 {
 		parts = append(parts, []yamledit.Pair{{Key: "input", Value: input}})
 	}
-	// The work itself, without the id that a step has.
-	parts = append(parts, pairs[len(pairs)-1:])
+	// The work itself, without the id that a step has; or, for a component
+	// of steps, the step whole and what it puts out as what is given back.
+	var steps string
+	if req.Steps {
+		step, err := yamledit.Mapping(pairs)
+		if err != nil {
+			undo()
+			return refuse("%v", err)
+		}
+		lines := strings.Split(strings.TrimRight(step, "\n"), "\n")
+		for i, line := range lines {
+			switch {
+			case i == 0:
+				lines[i] = "  - " + line
+			case line != "":
+				lines[i] = "    " + line
+			}
+		}
+		steps = "\nsteps:\n" + strings.Join(lines, "\n") + "\n\noutput: ${" + stepID + "}\n"
+	} else {
+		parts = append(parts, pairs[len(pairs)-1:])
+	}
 	var text strings.Builder
 	for i, part := range parts {
 		written, err := yamledit.Mapping(part)
@@ -147,7 +179,7 @@ func (s *Server) createComponent(req componentRequest) (int, any) {
 		}
 		text.WriteString(written)
 	}
-	data := []byte(text.String())
+	data := []byte(text.String() + steps)
 
 	if _, err := workflow.LoadComponentWith(path, workflow.Overlay{path: data}); err != nil {
 		undo()

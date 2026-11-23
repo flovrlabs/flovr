@@ -114,3 +114,72 @@ func TestServiceIsRefused(t *testing.T) {
 		t.Error("the service was written over")
 	}
 }
+
+func TestServiceOfStepsIsMadeAndGrownFromThePage(t *testing.T) {
+	srv, root, _ := editFolder(t)
+	rec := post(srv, "/api/components", "", `{"name": "ping", "steps": true,
+		"inputs": [{"name": "url", "type": "string"}],
+		"work": {"id": "send", "kind": "http", "method": "post", "url": "${input.url}"}}`)
+	var made struct{ Component workflowView }
+	if err := json.Unmarshal(rec.Body.Bytes(), &made); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	file := filepath.Join(root, "components", "ping", "component.yaml")
+	want := `flovr: 1
+name: ping
+
+input:
+  url: string
+
+steps:
+  - id: send
+    http:
+      method: POST
+      url: ${input.url}
+
+output: ${send}
+`
+	if got := readFile(t, file); got != want {
+		t.Fatalf("file =\n%s\nwant\n%s", got, want)
+	}
+
+	// A step is added after the first, and taken out again.
+	name := made.Component.Name
+	body, _ := json.Marshal(map[string]any{"workflow": name, "rev": made.Component.Rev,
+		"add": map[string]any{"id": "again", "after": "send", "kind": "http", "method": "post", "url": "${input.url}"}})
+	rec = post(srv, "/api/steps", "", string(body))
+	var grown struct{ Workflow workflowView }
+	if err := json.Unmarshal(rec.Body.Bytes(), &grown); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("adding: status = %d, body %s", rec.Code, rec.Body)
+	}
+	if c, err := workflow.LoadComponent(file); err != nil || len(c.Steps) != 2 || c.Steps[1].ID != "again" {
+		t.Fatalf("after adding: %v, %+v", err, c)
+	}
+	body, _ = json.Marshal(map[string]any{"workflow": name, "rev": grown.Workflow.Rev, "remove": "again"})
+	if rec = post(srv, "/api/steps", "", string(body)); rec.Code != http.StatusOK {
+		t.Fatalf("removing: status = %d, body %s", rec.Code, rec.Body)
+	}
+	if got := readFile(t, file); got != want {
+		t.Errorf("after removing, file =\n%s\nwant\n%s", got, want)
+	}
+
+	// The step that is given back cannot go: the file is left as it was.
+	var back struct{ Workflow workflowView }
+	json.Unmarshal(rec.Body.Bytes(), &back)
+	body, _ = json.Marshal(map[string]any{"workflow": name, "rev": back.Workflow.Rev, "remove": "send"})
+	if rec = post(srv, "/api/steps", "", string(body)); rec.Code != http.StatusUnprocessableEntity || readFile(t, file) != want {
+		t.Errorf("removing the only step: status = %d, body %s", rec.Code, rec.Body)
+	}
+
+	// A service that is one piece of work has no steps to add to.
+	single := ""
+	for _, w := range currentState(t, srv).Workflows {
+		if w.Component && w.Title == "notify" {
+			single = w.Name
+		}
+	}
+	body, _ = json.Marshal(map[string]any{"workflow": single, "rev": "x", "add": map[string]any{"id": "a", "kind": "http", "method": "post", "url": "http://x"}})
+	if rec = post(srv, "/api/steps", "", string(body)); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "does one piece of work") {
+		t.Errorf("adding to a service of one piece of work: status = %d, body %s", rec.Code, rec.Body)
+	}
+}

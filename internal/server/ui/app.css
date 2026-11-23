@@ -1923,3 +1923,8 @@ body.ned-open .inspector { display: none; }
 .xhelp > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 .xhelp[open] > summary { margin-bottom: 8px; }
 .xlede[hidden] { display: none; }
+
+/* A new service: one piece of work, or the first of several steps. */
+.svcsteps { display: flex; align-items: center; gap: 10px; min-height: 44px; margin-top: 8px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.svcsteps input { width: 16px; height: 16px; accent-color: var(--brand); }
+.cservices[hidden] { display: none; }

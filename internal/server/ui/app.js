@@ -713,7 +713,7 @@ const PARAM_TYPES = ["string", "number", "boolean", "object", "list", "any"];
 const SVC_KINDS = [["http", "HTTP request", "Send to any API"], ["ai", "AI", "Write or extract, in fields you define"], ["decide", "Decide", "Yes or no, one of a list, or a score"]];
 const svcOf = () => svc || (svc = {
   root: (state.roots || [])[0] || "", name: "", description: "", kind: "http", inputs: [{ name: "", type: "string" }],
-  method: "POST", url: "", input: "${input}", prompt: "", edited: false, saving: false, failure: null,
+  method: "POST", url: "", input: "${input}", prompt: "", edited: false, saving: false, failure: null, steps: false,
   models: { decide: "openrouter/cloudflare/clef", ai: "openrouter/deepseek/deepseek-v4.1-flash" },
   questions: [blankQuestion()], fields: [blankField()],
 });
@@ -744,6 +744,11 @@ function buildServiceForm(kind) {
     b.addEventListener("click", () => { if (m.kind !== k) { m.kind = k; buildWork(); paintServiceForm(); } });
     return b;
   }));
+  // More than one step: this is its first, and the rest are added on its page.
+  const many = el("input", { type: "checkbox", id: "svc-steps" });
+  many.checked = !!m.steps;
+  many.addEventListener("change", () => { m.steps = many.checked; m.edited = true; });
+  A.stepsRow = el("label", { class: "svcsteps", for: "svc-steps" }, many, el("span", {}, "It will have more steps. This is the first, and the rest are added on its page."));
   A.inputsBox = el("div", { class: "svcinputs" });
   A.addInput = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add an input");
   A.addInput.addEventListener("click", () => { m.inputs.push({ name: "", type: "string" }); paintInputs(true); });
@@ -767,7 +772,7 @@ function buildServiceForm(kind) {
         field("Name", "svc-name", A.nameBox, A.fileNote),
         field("Description", "svc-desc", A.descBox, el("p", { class: "hint-text" }, "A line on what it is for, shown where a service is picked.")),
         A.rootBox ? field("Folder", "svc-root", A.rootBox) : null),
-      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it does")), A.kinds,
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it does")), A.kinds, A.stepsRow,
       el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it takes"), el("span", { class: "muted small" }, "Each step that uses it fills these in.")),
       A.inputsBox, A.addInput,
       el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "How it does it")), A.refs, A.work, A.problems),
@@ -869,8 +874,10 @@ async function makeService() {
   paintServiceForm();
   let r = null;
   try {
+    // The first step of several is named after what it does.
+    if (m.steps) work.id = { http: "send", decide: "decide", ai: "write" }[m.kind];
     r = await request("POST", "/api/components", {
-      root: m.root, name: m.name.trim(), description: m.description.trim(), work,
+      root: m.root, name: m.name.trim(), description: m.description.trim(), work, steps: !!m.steps,
       inputs: m.inputs.filter((i) => i.name.trim()).map((i) => ({ name: i.name.trim(), type: i.type })),
     });
   } catch (err) {
@@ -1106,11 +1113,11 @@ function renderCanvas(moved) {
         el("span", { class: "text" },
           el("span", { class: "title" + (node.mono ? " mono" : "") }, node.title),
           el("span", { class: "sub" }, node.subtitle)),
-        !leaf || (adding && node.id !== "response") ? el("span", { class: "port pout", "aria-hidden": "true" }) : null,
+        !leaf || (adding && node.id !== "response" && node.id !== OUT) ? el("span", { class: "port pout", "aria-hidden": "true" }) : null,
         badge(status)),
       result ? el("span", { class: "result" + (result.tone ? " " + result.tone : ""), title: result.text }, result.parts) : null,
       // The place to put a step: right after this one in the file.
-      adding && node.id !== "response" ? addButton(node) : null);
+      adding && node.id !== "response" && node.id !== OUT ? addButton(node) : null);
   });
 
   const stage = el("div", { class: "stage", css: { width: plan.width + "px", height: plan.height + "px" } },
@@ -1175,16 +1182,17 @@ function panOn(scroller) {
 }
 
 // canAdd: steps can only be added to a workflow, when the server edits files and the file is sound.
-// A component's steps are fixed on this page: it never adds or removes one.
-const canAdd = (w) => !!w && state.editable && !w.problem && !w.component && !w.draft;
+// A service takes steps when it is made of steps, and is not one from git.
+const canAdd = (w) => !!w && state.editable && !w.problem && !w.draft && (!w.component || (!!w.gives && !w.source));
 
 // addButton is the plus after a node's right port, where a step can be put after it.
 function addButton(node) {
-  const label = node.id === "trigger" ? "Add a step first, right after the trigger" : "Add a step after " + node.id;
+  const first = node.id === "trigger" || node.id === IN;
+  const label = first ? "Add a step first" : "Add a step after " + node.id;
   return el("button", {
       type: "button", class: "addbtn" + (node.children.length ? "" : " leaf"), "data-focus": "add:" + node.id, title: label, "aria-label": label,
       css: { left: node.w + 14 + "px", top: node.h / 2 - 13 + "px" },
-      onclick: () => openAdd(node.id),
+      onclick: () => openAdd(first ? "trigger" : node.id),
     }, icon("plus", 13));
 }
 
@@ -1320,7 +1328,7 @@ function renderInspector(w, run, moved) {
   else if (selected.changes && state.editable && !comp && !editing(w)) parts = changesDetails(w);
   else if (testing) parts = [header("workflow", "plus", selected.test === "-" ? "New test" : "Keep as a test",
     selected.test === "-" ? "of " + w.name : "from the run at " + (source ? when(source.started) : selected.test) + " of " + w.name, true)];
-  else if (adding) parts = [header("workflow", "plus", "Add a step", "to " + w.name, true)];
+  else if (adding) parts = [header("workflow", "plus", "Add a step", "to " + (comp ? compTitle(w) : w.name), true)];
   else if (onStart) parts = comp ? inputDetails(w, run) : triggerDetails(w, run);
   else if (onEnd) parts = comp ? outputDetails(w, run) : responseDetails(w, run);
   else if (step) parts = stepDetails(w, step, run, hasForm);
@@ -2968,8 +2976,10 @@ function resolveAfter(w, v) {
 function referencesFor(w, after) {
   const rows = [];
   const keys = w.sample && typeof w.sample === "object" && !Array.isArray(w.sample) ? Object.keys(w.sample).slice(0, 6) : [];
-  // Where no test shows what a request holds, the field's name is typed.
-  rows.push({ id: "trigger", kind: "trigger", chips: isWebhook(w) || !w.trigger
+  // A service reads what it takes; a workflow, what started it. Where no
+  // test shows what a request holds, the field's name is typed.
+  if (isComp(w)) rows.push({ id: "input", kind: "input", chips: [{ text: "input" }, ...(w.inputs || []).map((i) => ({ text: "input." + i.name, short: i.name }))] });
+  else rows.push({ id: "trigger", kind: "trigger", chips: isWebhook(w) || !w.trigger
     ? [{ text: "trigger.body" }, ...(keys.length ? keys.map((k) => ({ text: "trigger.body." + k })) : [{ text: "trigger.body.", open: true, short: "body.field" }])]
     : [{ text: "trigger.time" }] });
   const upto = after === "trigger" ? 0 : w.steps.findIndex((s) => s.id === after) + 1;
@@ -3200,6 +3210,8 @@ function syncAdder(w) {
     c.row.classList.toggle("on", a.kind === kind);
   }
   A.noComps.hidden = comps.some((c) => !c.market);
+  // A step of a service does its own work.
+  A.services.hidden = isComp(workflowByName(A.workflow));
   const comp = chosenOf(w, a);
   if (!comp) A.expanded = true;
   A.groups.hidden = A.finder.hidden = !A.expanded;
@@ -3398,6 +3410,8 @@ async function addStep() {
   if (!w || w.problem || st.saving) return;
   const comp = chosenOf(w, a);
   if (!comp) return;
+  // What was left as the form first had it reads the request, which a service has none of.
+  if (isComp(w) && a.input.trim() === "${trigger.body}") a.input = "${input}";
   if (a.after !== "trigger" && !w.steps.some((s) => s.id === a.after)) {
     st.notice = { kind: "error", did: "add", error: "The step this was to go after is no longer in the workflow. Choose a position and add it again." };
     updateBar();
@@ -4830,11 +4844,18 @@ function nodeOf(w, id) {
   if (!w) return null;
   if (id === "trigger") return w.edit && w.edit.length ? { id, kind: "trigger", end: true, edit: w.edit, reads: [], outputs: [] } : null;
   if (id === "response") return w.respond && w.respond.edit ? { id, kind: "response", end: true, edit: w.respond.edit, reads: w.respond.reads || [], outputs: [] } : null;
+  // In a service the page can change what a step holds, and what is given
+  // back if it is written out; what it takes is changed in its file.
+  if (isComp(w)) {
+    if (id === OUT) return w.gives && w.gives.edit && w.gives.edit.length ? { id, kind: "output", end: true, edit: w.gives.edit, reads: w.gives.reads || [], outputs: [] } : null;
+    const step = w.steps.find((s) => s.id === id);
+    return step && step.edit && step.edit.length ? step : null;
+  }
   return w.steps.find((s) => s.id === id) || null;
 }
 
 // endTitle is what the editor calls the trigger or the response.
-const endTitle = (w, step) => (step.kind === "trigger" ? (isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Trigger") : "Response");
+const endTitle = (w, step) => (step.kind === "output" ? "Output" : step.kind === "trigger" ? (isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Trigger") : "Response");
 
 // changeNow makes a change of shape at once and says how it went, as adding
 // a step does: a field of the body in or out, or what starts the workflow.
@@ -5105,7 +5126,7 @@ let ed = null;          // the editor now on the page, if any
 let dragRef = null;     // the key being dragged: { path, source }
 const stepTests = {};   // "workflow|step" -> { state: running | done | error, run, at, rev, unsaved, result, error }
 
-const canOpen = (w, id) => !!w && !!state.editable && !w.problem && !w.draft && !isComp(w) && !!nodeOf(w, id);
+const canOpen = (w, id) => !!w && !!state.editable && !w.problem && !w.draft && !!nodeOf(w, id);
 function openEditor(id) { if (view && canOpen(view.w, id)) go({ node: id, edit: id, changes: false }); }
 // Closing the editor leaves the step too: it has no other view to fall back to.
 // A save the editor already said was done is not said again behind it.
@@ -5188,7 +5209,8 @@ function showEditor(w, step) {
       ed.line),
     el("span", { class: "grow" }), ed.testBtn, close);
 
-  ed.testBtn.hidden = !!step.end;
+  // A step is tried with the data of a run of its workflow, which a service has none of.
+  ed.testBtn.hidden = !!step.end || isComp(w);
   ed.inCol = sideColumn("in", step.kind === "trigger" ? "Sample request" : "Data it can read");
   ed.outCol = sideColumn("out", "Output");
 
@@ -5324,7 +5346,7 @@ function rebuildForm(w, step, key) {
   ed.target = null;
   ed.form = buildEditorForm(w, step, key);
   ed.panels.params.replaceChildren(...ed.form.params);
-  ed.panels.settings.replaceChildren(...ed.form.settings);
+  if (ed.panels.settings) ed.panels.settings.replaceChildren(...ed.form.settings);
   ed.schemaSig = "";
   syncForm(w, ed.form);
   paintSchema();
@@ -5469,11 +5491,14 @@ function buildEditorForm(w, step, key) {
   });
   const role = {}, qs = {}, rest = [];
   for (const c of cs) {
-    const p = c.field.path, last = p[p.length - 1];
+    // k is where the step's kind is in the path: steps, n, ai in a workflow,
+    // and first in a service that is one piece of work.
+    const p = c.field.path, last = p[p.length - 1], k = p.indexOf(step.kind);
+    const roles = isComp(w) ? ["model", "input", "prompt"] : ["model", "input", "prompt", "output"];
     if (p.length === 3 && last === "when") role.when = c;
-    else if ((step.kind === "decide" || step.kind === "ai") && p.length === 4 && p[2] === step.kind && ["model", "input", "prompt", "output"].includes(last)) role[last] = c;
-    else if (step.kind === "decide" && p[3] === "questions" && p.length >= 6) {
-      const q = qs[p[4]] || (qs[p[4]] = { ask: null, meanings: [] });
+    else if ((step.kind === "decide" || step.kind === "ai") && k >= 0 && p.length === k + 2 && roles.includes(last)) role[last] = c;
+    else if (step.kind === "decide" && k >= 0 && p[k + 1] === "questions" && p.length >= k + 4) {
+      const q = qs[p[k + 2]] || (qs[p[k + 2]] = { ask: null, meanings: [] });
       if (last === "ask") q.ask = c;
       else if (last === "yes_if" || last === "no_if") q.meanings.push({ c, name: last === "yes_if" ? "yes" : "no" });
       else q.meanings.push({ c, name: c.field.label });
@@ -5522,7 +5547,7 @@ function buildEditorForm(w, step, key) {
   if (role.output) {
     relabel(role.output, "Output schema file");
     role.output.row.classList.add("ned-schemafile");
-    settings.push(role.output.row, el("p", { class: "ned-words" }, "The JSON Schema file the model's answer must fit. Its fields are edited under Parameters."));
+    settings.push(role.output.row, el("p", { class: "ned-words" }, "The JSON Schema file the model's answer must fit. Its fields are edited under Settings."));
   }
   if (role.when) {
     relabel(role.when, "Run only when");
@@ -5534,7 +5559,7 @@ function buildEditorForm(w, step, key) {
     role.when.after = paintWords;
     settings.push(role.when.row, words);
   } else settings.push(el("p", { class: "ned-plain" }, "This step has no settings the page can change."));
-  settings.push(el("p", { class: "ned-plain" }, "Step " + (w.steps.indexOf(step) + 1) + " of " + w.steps.length + " in file order."));
+  if (!step.end) settings.push(el("p", { class: "ned-plain" }, "Step " + (w.steps.indexOf(step) + 1) + " of " + w.steps.length + " in file order."));
   // Every field that takes text takes a key dropped on it, once the rows are laid out.
   for (const c of cs) if (c.refable) wireDrop(c);
   f.params = params;
@@ -5743,7 +5768,11 @@ function inputSources(w, step, ran) {
   const idx = w.steps.includes(step) ? w.steps.indexOf(step) : w.steps.length, reads = new Set(step.reads || []);
   const out = [];
   const trig = { id: "trigger", kind: "trigger", rows: [], read: reads.has("trigger"), note: null };
-  if (ran && ran.trigger && typeof ran.trigger === "object") {
+  if (isComp(w)) {
+    const given = ran && ran.trigger && ran.trigger.input && typeof ran.trigger.input === "object" ? ran.trigger.input : {};
+    Object.assign(trig, { id: "input", kind: "input", read: reads.has("input") });
+    for (const i of w.inputs || []) trig.rows.push({ path: "input." + i.name, short: i.name, value: given[i.name] });
+  } else if (ran && ran.trigger && typeof ran.trigger === "object") {
     for (const [k, v] of Object.entries(ran.trigger)) {
       if (k === "body") {
         trig.rows.push({ path: "trigger.body", short: "body", value: v });
@@ -5826,9 +5855,9 @@ function paintInput() {
   }
   let divided = false;
   for (const s of sources) {
-    if (!s.read && !divided && s.id !== "trigger" && !s.env) { divided = true; body.push(el("div", { class: "ned-divide" }, "Not read by this step yet")); }
+    if (!s.read && !divided && s.id !== "trigger" && s.id !== "input" && !s.env) { divided = true; body.push(el("div", { class: "ned-divide" }, "Not read by this step yet")); }
     if (s.env && !divided) body.push(el("div", { class: "ned-divide" }, "From the environment"));
-    body.push(el("div", { class: "ned-src kind-" + s.kind + (s.read || s.id === "trigger" ? "" : " unread") },
+    body.push(el("div", { class: "ned-src kind-" + s.kind + (s.read || s.id === "trigger" || s.id === "input" ? "" : " unread") },
       el("div", { class: "ned-srchead" },
         s.env ? el("span", { class: "ned-stile" }, "$") : el("span", { class: "ned-stile kind-" + s.kind }, icon(s.kind, 12)),
         el("span", { class: "mono ned-sid" }, s.id),
@@ -5910,6 +5939,12 @@ function paintOutput() {
   const ran = runShown();
   if (step.kind === "trigger") return paintTriggerOutput(w, ran);
   if (step.kind === "response") return paintResponseOutput(w, ran);
+  if (step.kind === "output") {
+    ed.outCol.seg.replaceChildren();
+    ed.outCol.meta.replaceChildren(ran ? (view.run ? "this test run" : "last test run") : "no test run yet");
+    ed.outCol.body.replaceChildren(ran && ran.gave !== undefined ? jsonView(ran.gave) : el("p", { class: "ned-plain" }, ran ? "This test run gave nothing back." : "Run a test of the service to see what it gives back."));
+    return;
+  }
   const t = stepTests[testKey()] || null;
   const source = t && ed.outSource !== "run" ? "test" : "run";
   const ctl = [];
