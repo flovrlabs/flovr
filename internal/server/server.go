@@ -115,6 +115,9 @@ type Run struct {
 	// meet it, if it did. Such a run sends none of its http steps.
 	Test   string         `json:"test,omitempty"`
 	Checks []engine.Check `json:"checks,omitempty"`
+	// Round names the runs that one request for tests started, so that the
+	// runs of a test asked for several times are counted together.
+	Round string `json:"round,omitempty"`
 
 	// Gave is what a component gave back, in a run that is one of a
 	// component's tests. Workflow then holds the name the page knows the

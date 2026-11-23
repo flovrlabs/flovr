@@ -201,3 +201,31 @@ func TestTestOfAnEndpointSeesItsAnswer(t *testing.T) {
 		t.Errorf("run = %+v, checks %s", run, mustJSON(run.Checks))
 	}
 }
+
+func TestATestRunsSeveralTimesInOneRound(t *testing.T) {
+	srv, _ := serveToTest(t, fakeModel{"high"})
+	rec, runs := startTests(t, srv, `, "test": 1, "repeat": 3`)
+	if rec.Code != http.StatusAccepted || len(runs) != 3 {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	round := ""
+	for _, r := range runs {
+		var run Run
+		json.Unmarshal(get(srv, "/api/runs/"+r.Run).Body.Bytes(), &run)
+		if run.Status != "ok" || run.Round == "" || (round != "" && run.Round != round) || run.Test != "outage report pages on-call" {
+			t.Errorf("run = %+v", run)
+		}
+		round = run.Round
+	}
+	// A run asked for on its own is a round of its own.
+	_, one := startTests(t, srv, `, "test": 1`)
+	var alone Run
+	json.Unmarshal(get(srv, "/api/runs/"+one[0].Run).Body.Bytes(), &alone)
+	if alone.Round == "" || alone.Round == round {
+		t.Errorf("round of a later request = %q, of the first %q", alone.Round, round)
+	}
+
+	if rec, _ := startTests(t, srv, `, "repeat": 21`); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "from 1 to 20 times") {
+		t.Errorf("too many times: status = %d, body %s", rec.Code, rec.Body)
+	}
+}
