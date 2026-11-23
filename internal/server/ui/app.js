@@ -4830,11 +4830,18 @@ function nodeOf(w, id) {
   if (!w) return null;
   if (id === "trigger") return w.edit && w.edit.length ? { id, kind: "trigger", end: true, edit: w.edit, reads: [], outputs: [] } : null;
   if (id === "response") return w.respond && w.respond.edit ? { id, kind: "response", end: true, edit: w.respond.edit, reads: w.respond.reads || [], outputs: [] } : null;
+  // In a service the page can change what a step holds, and what is given
+  // back if it is written out; what it takes is changed in its file.
+  if (isComp(w)) {
+    if (id === OUT) return w.gives && w.gives.edit && w.gives.edit.length ? { id, kind: "output", end: true, edit: w.gives.edit, reads: w.gives.reads || [], outputs: [] } : null;
+    const step = w.steps.find((s) => s.id === id);
+    return step && step.edit && step.edit.length ? step : null;
+  }
   return w.steps.find((s) => s.id === id) || null;
 }
 
 // endTitle is what the editor calls the trigger or the response.
-const endTitle = (w, step) => (step.kind === "trigger" ? (isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Trigger") : "Response");
+const endTitle = (w, step) => (step.kind === "output" ? "Output" : step.kind === "trigger" ? (isWebhook(w) ? "Webhook" : w.trigger ? "Schedule" : "Trigger") : "Response");
 
 // changeNow makes a change of shape at once and says how it went, as adding
 // a step does: a field of the body in or out, or what starts the workflow.
@@ -5105,7 +5112,7 @@ let ed = null;          // the editor now on the page, if any
 let dragRef = null;     // the key being dragged: { path, source }
 const stepTests = {};   // "workflow|step" -> { state: running | done | error, run, at, rev, unsaved, result, error }
 
-const canOpen = (w, id) => !!w && !!state.editable && !w.problem && !w.draft && !isComp(w) && !!nodeOf(w, id);
+const canOpen = (w, id) => !!w && !!state.editable && !w.problem && !w.draft && !!nodeOf(w, id);
 function openEditor(id) { if (view && canOpen(view.w, id)) go({ node: id, edit: id, changes: false }); }
 // Closing the editor leaves the step too: it has no other view to fall back to.
 // A save the editor already said was done is not said again behind it.
@@ -5188,7 +5195,8 @@ function showEditor(w, step) {
       ed.line),
     el("span", { class: "grow" }), ed.testBtn, close);
 
-  ed.testBtn.hidden = !!step.end;
+  // A step is tried with the data of a run of its workflow, which a service has none of.
+  ed.testBtn.hidden = !!step.end || isComp(w);
   ed.inCol = sideColumn("in", step.kind === "trigger" ? "Sample request" : "Data it can read");
   ed.outCol = sideColumn("out", "Output");
 
@@ -5324,7 +5332,7 @@ function rebuildForm(w, step, key) {
   ed.target = null;
   ed.form = buildEditorForm(w, step, key);
   ed.panels.params.replaceChildren(...ed.form.params);
-  ed.panels.settings.replaceChildren(...ed.form.settings);
+  if (ed.panels.settings) ed.panels.settings.replaceChildren(...ed.form.settings);
   ed.schemaSig = "";
   syncForm(w, ed.form);
   paintSchema();
@@ -5469,11 +5477,14 @@ function buildEditorForm(w, step, key) {
   });
   const role = {}, qs = {}, rest = [];
   for (const c of cs) {
-    const p = c.field.path, last = p[p.length - 1];
+    // k is where the step's kind is in the path: steps, n, ai in a workflow,
+    // and first in a service that is one piece of work.
+    const p = c.field.path, last = p[p.length - 1], k = p.indexOf(step.kind);
+    const roles = isComp(w) ? ["model", "input", "prompt"] : ["model", "input", "prompt", "output"];
     if (p.length === 3 && last === "when") role.when = c;
-    else if ((step.kind === "decide" || step.kind === "ai") && p.length === 4 && p[2] === step.kind && ["model", "input", "prompt", "output"].includes(last)) role[last] = c;
-    else if (step.kind === "decide" && p[3] === "questions" && p.length >= 6) {
-      const q = qs[p[4]] || (qs[p[4]] = { ask: null, meanings: [] });
+    else if ((step.kind === "decide" || step.kind === "ai") && k >= 0 && p.length === k + 2 && roles.includes(last)) role[last] = c;
+    else if (step.kind === "decide" && k >= 0 && p[k + 1] === "questions" && p.length >= k + 4) {
+      const q = qs[p[k + 2]] || (qs[p[k + 2]] = { ask: null, meanings: [] });
       if (last === "ask") q.ask = c;
       else if (last === "yes_if" || last === "no_if") q.meanings.push({ c, name: last === "yes_if" ? "yes" : "no" });
       else q.meanings.push({ c, name: c.field.label });
@@ -5522,7 +5533,7 @@ function buildEditorForm(w, step, key) {
   if (role.output) {
     relabel(role.output, "Output schema file");
     role.output.row.classList.add("ned-schemafile");
-    settings.push(role.output.row, el("p", { class: "ned-words" }, "The JSON Schema file the model's answer must fit. Its fields are edited under Parameters."));
+    settings.push(role.output.row, el("p", { class: "ned-words" }, "The JSON Schema file the model's answer must fit. Its fields are edited under Settings."));
   }
   if (role.when) {
     relabel(role.when, "Run only when");
@@ -5534,7 +5545,7 @@ function buildEditorForm(w, step, key) {
     role.when.after = paintWords;
     settings.push(role.when.row, words);
   } else settings.push(el("p", { class: "ned-plain" }, "This step has no settings the page can change."));
-  settings.push(el("p", { class: "ned-plain" }, "Step " + (w.steps.indexOf(step) + 1) + " of " + w.steps.length + " in file order."));
+  if (!step.end) settings.push(el("p", { class: "ned-plain" }, "Step " + (w.steps.indexOf(step) + 1) + " of " + w.steps.length + " in file order."));
   // Every field that takes text takes a key dropped on it, once the rows are laid out.
   for (const c of cs) if (c.refable) wireDrop(c);
   f.params = params;
@@ -5743,7 +5754,11 @@ function inputSources(w, step, ran) {
   const idx = w.steps.includes(step) ? w.steps.indexOf(step) : w.steps.length, reads = new Set(step.reads || []);
   const out = [];
   const trig = { id: "trigger", kind: "trigger", rows: [], read: reads.has("trigger"), note: null };
-  if (ran && ran.trigger && typeof ran.trigger === "object") {
+  if (isComp(w)) {
+    const given = ran && ran.trigger && ran.trigger.input && typeof ran.trigger.input === "object" ? ran.trigger.input : {};
+    Object.assign(trig, { id: "input", kind: "input", read: reads.has("input") });
+    for (const i of w.inputs || []) trig.rows.push({ path: "input." + i.name, short: i.name, value: given[i.name] });
+  } else if (ran && ran.trigger && typeof ran.trigger === "object") {
     for (const [k, v] of Object.entries(ran.trigger)) {
       if (k === "body") {
         trig.rows.push({ path: "trigger.body", short: "body", value: v });
@@ -5826,9 +5841,9 @@ function paintInput() {
   }
   let divided = false;
   for (const s of sources) {
-    if (!s.read && !divided && s.id !== "trigger" && !s.env) { divided = true; body.push(el("div", { class: "ned-divide" }, "Not read by this step yet")); }
+    if (!s.read && !divided && s.id !== "trigger" && s.id !== "input" && !s.env) { divided = true; body.push(el("div", { class: "ned-divide" }, "Not read by this step yet")); }
     if (s.env && !divided) body.push(el("div", { class: "ned-divide" }, "From the environment"));
-    body.push(el("div", { class: "ned-src kind-" + s.kind + (s.read || s.id === "trigger" ? "" : " unread") },
+    body.push(el("div", { class: "ned-src kind-" + s.kind + (s.read || s.id === "trigger" || s.id === "input" ? "" : " unread") },
       el("div", { class: "ned-srchead" },
         s.env ? el("span", { class: "ned-stile" }, "$") : el("span", { class: "ned-stile kind-" + s.kind }, icon(s.kind, 12)),
         el("span", { class: "mono ned-sid" }, s.id),
@@ -5910,6 +5925,12 @@ function paintOutput() {
   const ran = runShown();
   if (step.kind === "trigger") return paintTriggerOutput(w, ran);
   if (step.kind === "response") return paintResponseOutput(w, ran);
+  if (step.kind === "output") {
+    ed.outCol.seg.replaceChildren();
+    ed.outCol.meta.replaceChildren(ran ? (view.run ? "this test run" : "last test run") : "no test run yet");
+    ed.outCol.body.replaceChildren(ran && ran.gave !== undefined ? jsonView(ran.gave) : el("p", { class: "ned-plain" }, ran ? "This test run gave nothing back." : "Run a test of the service to see what it gives back."));
+    return;
+  }
   const t = stepTests[testKey()] || null;
   const source = t && ed.outSource !== "run" ? "test" : "run";
   const ctl = [];
