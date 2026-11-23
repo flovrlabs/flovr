@@ -49,12 +49,15 @@ Services
 
 - [x] Move the repository to `flovrlabs/flovr` and open it
 - [x] The Homebrew tap, `flovrlabs/homebrew-tap`, that the cask is published to
-- [ ] Tag 0.1.0, which builds the binaries
-- [ ] Publish the market's list with the example services, pinned to the release
+- [x] Tag 0.1.0, which builds the binaries
+- [x] Publish the market's list with the example services, pinned to the release
+
+## Next: 0.1.1, services on the page
+
 - [ ] The page of a service in the same editor as a workflow; its panel is still the old one
 - [ ] Services made of steps, from the page
 
-## Next: 0.2, tests to trust
+## Then: 0.2, tests to trust
 
 A test that calls a model for real is one sample of what the model does. This release is about knowing what a test result means.
 
@@ -62,7 +65,7 @@ A test that calls a model for real is one sample of what the model does. This re
 - [ ] Compare a round of tests with the last one at the commit, and show what got worse
 - [ ] Keep a run that failed as a test, writing what should have happened
 
-## Then: 0.3, run and debug from the page
+## After that: 0.3, run and debug from the page
 
 - [ ] Run again with the same input, or from a step on, reusing what the steps before it gave
 - [ ] A form to run a workflow now, built from its trigger's schema; the next times a schedule fires
