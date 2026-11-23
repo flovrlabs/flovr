@@ -713,7 +713,7 @@ const PARAM_TYPES = ["string", "number", "boolean", "object", "list", "any"];
 const SVC_KINDS = [["http", "HTTP request", "Send to any API"], ["ai", "AI", "Write or extract, in fields you define"], ["decide", "Decide", "Yes or no, one of a list, or a score"]];
 const svcOf = () => svc || (svc = {
   root: (state.roots || [])[0] || "", name: "", description: "", kind: "http", inputs: [{ name: "", type: "string" }],
-  method: "POST", url: "", input: "${input}", prompt: "", edited: false, saving: false, failure: null,
+  method: "POST", url: "", input: "${input}", prompt: "", edited: false, saving: false, failure: null, steps: false,
   models: { decide: "openrouter/cloudflare/clef", ai: "openrouter/deepseek/deepseek-v4.1-flash" },
   questions: [blankQuestion()], fields: [blankField()],
 });
@@ -744,6 +744,11 @@ function buildServiceForm(kind) {
     b.addEventListener("click", () => { if (m.kind !== k) { m.kind = k; buildWork(); paintServiceForm(); } });
     return b;
   }));
+  // More than one step: this is its first, and the rest are added on its page.
+  const many = el("input", { type: "checkbox", id: "svc-steps" });
+  many.checked = !!m.steps;
+  many.addEventListener("change", () => { m.steps = many.checked; m.edited = true; });
+  A.stepsRow = el("label", { class: "svcsteps", for: "svc-steps" }, many, el("span", {}, "It will have more steps. This is the first, and the rest are added on its page."));
   A.inputsBox = el("div", { class: "svcinputs" });
   A.addInput = el("button", { type: "button", class: "btn small" }, icon("plus", 12), "Add an input");
   A.addInput.addEventListener("click", () => { m.inputs.push({ name: "", type: "string" }); paintInputs(true); });
@@ -767,7 +772,7 @@ function buildServiceForm(kind) {
         field("Name", "svc-name", A.nameBox, A.fileNote),
         field("Description", "svc-desc", A.descBox, el("p", { class: "hint-text" }, "A line on what it is for, shown where a service is picked.")),
         A.rootBox ? field("Folder", "svc-root", A.rootBox) : null),
-      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it does")), A.kinds,
+      el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it does")), A.kinds, A.stepsRow,
       el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "What it takes"), el("span", { class: "muted small" }, "Each step that uses it fills these in.")),
       A.inputsBox, A.addInput,
       el("div", { class: "ned-sect" }, el("span", { class: "ned-h" }, "How it does it")), A.refs, A.work, A.problems),
@@ -869,8 +874,10 @@ async function makeService() {
   paintServiceForm();
   let r = null;
   try {
+    // The first step of several is named after what it does.
+    if (m.steps) work.id = { http: "send", decide: "decide", ai: "write" }[m.kind];
     r = await request("POST", "/api/components", {
-      root: m.root, name: m.name.trim(), description: m.description.trim(), work,
+      root: m.root, name: m.name.trim(), description: m.description.trim(), work, steps: !!m.steps,
       inputs: m.inputs.filter((i) => i.name.trim()).map((i) => ({ name: i.name.trim(), type: i.type })),
     });
   } catch (err) {
@@ -1106,11 +1113,11 @@ function renderCanvas(moved) {
         el("span", { class: "text" },
           el("span", { class: "title" + (node.mono ? " mono" : "") }, node.title),
           el("span", { class: "sub" }, node.subtitle)),
-        !leaf || (adding && node.id !== "response") ? el("span", { class: "port pout", "aria-hidden": "true" }) : null,
+        !leaf || (adding && node.id !== "response" && node.id !== OUT) ? el("span", { class: "port pout", "aria-hidden": "true" }) : null,
         badge(status)),
       result ? el("span", { class: "result" + (result.tone ? " " + result.tone : ""), title: result.text }, result.parts) : null,
       // The place to put a step: right after this one in the file.
-      adding && node.id !== "response" ? addButton(node) : null);
+      adding && node.id !== "response" && node.id !== OUT ? addButton(node) : null);
   });
 
   const stage = el("div", { class: "stage", css: { width: plan.width + "px", height: plan.height + "px" } },
@@ -1175,16 +1182,17 @@ function panOn(scroller) {
 }
 
 // canAdd: steps can only be added to a workflow, when the server edits files and the file is sound.
-// A component's steps are fixed on this page: it never adds or removes one.
-const canAdd = (w) => !!w && state.editable && !w.problem && !w.component && !w.draft;
+// A service takes steps when it is made of steps, and is not one from git.
+const canAdd = (w) => !!w && state.editable && !w.problem && !w.draft && (!w.component || (!!w.gives && !w.source));
 
 // addButton is the plus after a node's right port, where a step can be put after it.
 function addButton(node) {
-  const label = node.id === "trigger" ? "Add a step first, right after the trigger" : "Add a step after " + node.id;
+  const first = node.id === "trigger" || node.id === IN;
+  const label = first ? "Add a step first" : "Add a step after " + node.id;
   return el("button", {
       type: "button", class: "addbtn" + (node.children.length ? "" : " leaf"), "data-focus": "add:" + node.id, title: label, "aria-label": label,
       css: { left: node.w + 14 + "px", top: node.h / 2 - 13 + "px" },
-      onclick: () => openAdd(node.id),
+      onclick: () => openAdd(first ? "trigger" : node.id),
     }, icon("plus", 13));
 }
 
@@ -1320,7 +1328,7 @@ function renderInspector(w, run, moved) {
   else if (selected.changes && state.editable && !comp && !editing(w)) parts = changesDetails(w);
   else if (testing) parts = [header("workflow", "plus", selected.test === "-" ? "New test" : "Keep as a test",
     selected.test === "-" ? "of " + w.name : "from the run at " + (source ? when(source.started) : selected.test) + " of " + w.name, true)];
-  else if (adding) parts = [header("workflow", "plus", "Add a step", "to " + w.name, true)];
+  else if (adding) parts = [header("workflow", "plus", "Add a step", "to " + (comp ? compTitle(w) : w.name), true)];
   else if (onStart) parts = comp ? inputDetails(w, run) : triggerDetails(w, run);
   else if (onEnd) parts = comp ? outputDetails(w, run) : responseDetails(w, run);
   else if (step) parts = stepDetails(w, step, run, hasForm);
@@ -2968,8 +2976,10 @@ function resolveAfter(w, v) {
 function referencesFor(w, after) {
   const rows = [];
   const keys = w.sample && typeof w.sample === "object" && !Array.isArray(w.sample) ? Object.keys(w.sample).slice(0, 6) : [];
-  // Where no test shows what a request holds, the field's name is typed.
-  rows.push({ id: "trigger", kind: "trigger", chips: isWebhook(w) || !w.trigger
+  // A service reads what it takes; a workflow, what started it. Where no
+  // test shows what a request holds, the field's name is typed.
+  if (isComp(w)) rows.push({ id: "input", kind: "input", chips: [{ text: "input" }, ...(w.inputs || []).map((i) => ({ text: "input." + i.name, short: i.name }))] });
+  else rows.push({ id: "trigger", kind: "trigger", chips: isWebhook(w) || !w.trigger
     ? [{ text: "trigger.body" }, ...(keys.length ? keys.map((k) => ({ text: "trigger.body." + k })) : [{ text: "trigger.body.", open: true, short: "body.field" }])]
     : [{ text: "trigger.time" }] });
   const upto = after === "trigger" ? 0 : w.steps.findIndex((s) => s.id === after) + 1;
@@ -3200,6 +3210,8 @@ function syncAdder(w) {
     c.row.classList.toggle("on", a.kind === kind);
   }
   A.noComps.hidden = comps.some((c) => !c.market);
+  // A step of a service does its own work.
+  A.services.hidden = isComp(workflowByName(A.workflow));
   const comp = chosenOf(w, a);
   if (!comp) A.expanded = true;
   A.groups.hidden = A.finder.hidden = !A.expanded;
@@ -3398,6 +3410,8 @@ async function addStep() {
   if (!w || w.problem || st.saving) return;
   const comp = chosenOf(w, a);
   if (!comp) return;
+  // What was left as the form first had it reads the request, which a service has none of.
+  if (isComp(w) && a.input.trim() === "${trigger.body}") a.input = "${input}";
   if (a.after !== "trigger" && !w.steps.some((s) => s.id === a.after)) {
     st.notice = { kind: "error", did: "add", error: "The step this was to go after is no longer in the workflow. Choose a position and add it again." };
     updateBar();

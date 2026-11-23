@@ -37,6 +37,7 @@ The page
 - [x] What starts a workflow switched between a request and a schedule; fields of the response added and taken out
 - [x] A step tried on its own with the data of a past run
 - [x] What git says has changed, under Changes
+- [x] A simpler page: the drawing and little else, one status of the files, a panel beside the drawing for a step, and lists of runs and tests that have the page to themselves
 - [x] Light and dark
 
 Services
@@ -44,6 +45,8 @@ Services
 - [x] A new service made from the page
 - [x] Services taken from git, pinned to a commit in `flovr.lock` by `flovr get`, held to reading only their input and their own files
 - [x] A market: a list of services in git, offered on the page and added as a step
+- [x] A service's steps and output opened in the same panel as a workflow's
+- [x] Services made of steps from the page: made with their first step, then steps added and removed
 
 ## Now: 0.1, the first public release
 
@@ -52,12 +55,7 @@ Services
 - [x] Tag 0.1.0, which builds the binaries
 - [x] Publish the market's list with the example services, pinned to the release
 
-## Next: 0.1.1, services on the page
-
-- [ ] The page of a service in the same editor as a workflow; its panel is still the old one
-- [ ] Services made of steps, from the page
-
-## Then: 0.2, tests to trust
+## Next: 0.2, tests to trust
 
 A test that calls a model for real is one sample of what the model does. This release is about knowing what a test result means.
 
@@ -65,7 +63,7 @@ A test that calls a model for real is one sample of what the model does. This re
 - [ ] Compare a round of tests with the last one at the commit, and show what got worse
 - [ ] Keep a run that failed as a test, writing what should have happened
 
-## After that: 0.3, run and debug from the page
+## Then: 0.3, run and debug from the page
 
 - [ ] Run again with the same input, or from a step on, reusing what the steps before it gave
 - [ ] A form to run a workflow now, built from its trigger's schema; the next times a schedule fires

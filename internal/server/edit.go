@@ -560,14 +560,14 @@ type questionSpec struct {
 	NoIf  string `json:"noIf"`
 }
 
-// steps adds a step that uses a component to a workflow file, or removes a
-// step from it. As with edit, the file is written only if the result is a
+// steps adds a step to a workflow file, or to that of a component made of
+// steps, or removes a step from it. As with edit, the file is written only if the result is a
 // workflow the server can go on serving.
 func (s *Server) steps(req stepsRequest) (int, any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.componentNamed(req.Workflow) != nil {
-		return http.StatusUnprocessableEntity, fail("The steps of a component are added and removed in its file.")
+	if c := s.componentNamed(req.Workflow); c != nil {
+		return s.componentSteps(c, req)
 	}
 	i, w, data, status, refused := s.open(req.Workflow, req.Rev)
 	if status != 0 {

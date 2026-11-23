@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"os"
@@ -134,7 +135,6 @@ func (s *Server) editComponent(c *workflow.Component, req editRequest) (int, any
 		return http.StatusUnprocessableEntity, fail(fromGit, componentID(c))
 	}
 	s.refresh()
-	id := componentID(c)
 	data, err := os.ReadFile(c.Path)
 	switch {
 	case err != nil:
@@ -170,6 +170,14 @@ func (s *Server) editComponent(c *workflow.Component, req editRequest) (int, any
 		return http.StatusOK, map[string]any{"workflow": s.componentView(c, nil)}
 	}
 
+	return s.saveComponent(c, out, strings.Join(changed, ", "))
+}
+
+// saveComponent writes a component file as it would be after a change, if the
+// component is still valid and every workflow that uses it is still one the
+// server can serve. what says what changed, for the log. The caller holds s.mu.
+func (s *Server) saveComponent(c *workflow.Component, out []byte, what string) (int, any) {
+	id := componentID(c)
 	files := workflow.Overlay{c.Path: out}
 	if _, err := workflow.LoadComponentWith(c.Path, files); err != nil {
 		return http.StatusUnprocessableEntity, invalid("Nothing was saved, because the component would no longer be valid.", err)
@@ -197,13 +205,95 @@ func (s *Server) editComponent(c *workflow.Component, req editRequest) (int, any
 	// The workflows that use the component take up the change like any
 	// other change to its file.
 	s.refresh()
-	s.opts.Log("%s changed from the page: %s", c.Path, strings.Join(changed, ", "))
+	s.opts.Log("%s changed from the page: %s", c.Path, what)
 
 	components, uses := s.components()
 	if fresh := components[id]; fresh != nil {
 		return http.StatusOK, map[string]any{"workflow": s.componentView(fresh, uses[id])}
 	}
 	return http.StatusOK, map[string]any{}
+}
+
+// componentSteps adds a step that does its own work to a component made of
+// steps, or removes one. The caller holds s.mu.
+func (s *Server) componentSteps(c *workflow.Component, req stepsRequest) (int, any) {
+	refuse := func(format string, args ...any) (int, any) {
+		return http.StatusUnprocessableEntity, fail(format, args...)
+	}
+	switch {
+	case workflow.FromGit(c.Path):
+		return refuse(fromGit, componentID(c))
+	case len(c.Steps) == 0:
+		return refuse("%s does one piece of work. A service made of steps has steps: and output: in its file.", c.Name)
+	}
+	s.refresh()
+	data, err := os.ReadFile(c.Path)
+	switch {
+	case err != nil:
+		return http.StatusInternalServerError, fail("%v", err)
+	case revision(data) != req.Rev:
+		return http.StatusConflict, fail(stale)
+	}
+	position := func(id string) int {
+		return slices.IndexFunc(c.Steps, func(st workflow.Step) bool { return st.ID == id })
+	}
+	dir := filepath.Dir(c.Path)
+
+	if add := req.Add; add != nil {
+		at := len(c.Steps)
+		switch {
+		case add.After == "trigger":
+			at = 0
+		case add.After != "":
+			if at = position(add.After) + 1; at == 0 {
+				return refuse("there is no step %s to put the new step after", add.After)
+			}
+		}
+		if add.Kind == "" {
+			return refuse("A step of a service does its own work: it asks a model to write or to decide, or sends an HTTP request.")
+		}
+		pairs, made, status, refused := ownWork(dir, add)
+		if status != 0 {
+			return status, refused
+		}
+		undo := func() {
+			for _, rel := range made {
+				os.Remove(filepath.Join(dir, rel))
+			}
+		}
+		text, err := yamledit.Mapping(pairs)
+		if err != nil {
+			undo()
+			return refuse("%v", err)
+		}
+		out, err := yamledit.InsertItem(data, []any{"steps"}, at, text)
+		if err != nil {
+			undo()
+			return refuse("%v", err)
+		}
+		status, answer := s.saveComponent(c, out, fmt.Sprintf("step %s added, an %s step", add.ID, add.Kind))
+		if status != http.StatusOK {
+			undo()
+			// The problems are in the file as it would have been.
+			if f, ok := answer.(failure); ok {
+				for j := range f.Problems {
+					f.Problems[j].Line = 0
+				}
+				answer = f
+			}
+		}
+		return status, answer
+	}
+
+	at := position(req.Remove)
+	if at < 0 {
+		return refuse("there is no step %s to remove", req.Remove)
+	}
+	out, err := yamledit.RemoveItem(data, []any{"steps"}, at)
+	if err != nil {
+		return refuse("%v", err)
+	}
+	return s.saveComponent(c, out, fmt.Sprintf("step %s removed", req.Remove))
 }
 
 // fromGit is the refusal of a change to a component taken from git.
