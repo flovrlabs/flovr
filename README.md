@@ -418,7 +418,7 @@ With `--edit` the page becomes a place to work on the workflows:
 - Browse the market and add a step from one of its services: it is taken from git and pinned in `flovr.lock`.
 - Run the tests of a workflow or of a component and see, for each, which expectations were met.
 - Keep a run that went right as a test. Its request becomes the fixture, saved as a new file in the workflow's folder, and what the run did becomes what to expect: which steps ran, and what a model decided. Text a model wrote is left out unless you ask for it, since it reads differently each time. A test can also be written from nothing, or removed.
-- See under **Changes** what git says has changed since the last commit.
+- Click the status in the top bar, which says whether the files are saved and committed, to see what git says has changed since the last commit.
 
 A change on the page is in one of three states, and the page says which. Unsaved, it is on the page only, and the server runs the file as it is. Saved, it is written to the file and live at once: the next request or scheduled run uses it. Committed, it is in git's history, which flovr leaves to you; until then **Changes** shows it as not committed.
 

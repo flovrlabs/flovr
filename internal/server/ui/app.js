@@ -27,6 +27,7 @@ const ICONS = {
   moon: ["M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"],
   sun: ["M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M12 2.5v2.2", "M12 19.3v2.2", "M2.5 12h2.2", "M19.3 12h2.2", "M5.3 5.3l1.6 1.6", "M17.1 17.1l1.6 1.6", "M5.3 18.7l1.6-1.6", "M17.1 6.9l1.6-1.6"],
   runs: ["M4 6h16", "M4 12h10", "M4 18h13"],
+  file: ["M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5", "M9 13h6", "M9 17h4"],
   tests: ["M9 3h6", "M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"],
   chev: ["M6 9l6 6 6-6"],
   search: ["M18 11a7 7 0 1 1-14 0 7 7 0 0 1 14 0z", "m20 20-3.5-3.5"],
@@ -552,7 +553,7 @@ function paintHome() {
     homeUi.rows.replaceChildren(el("p", { class: "hempty" }, none));
     return;
   }
-  const head = services ? ["Service", "Made of", "Takes", "Gives back", "Used by", "Last test"] : ["Workflow", "Starts on", "Steps", "Last run", "Recent runs", "Tests"];
+  const head = services ? ["Service", "Made of", "Takes", "Gives back", "Used by", "Last test"] : ["Workflow", "Last run", "Tests"];
   homeUi.rows.replaceChildren(...[
     el("div", { class: "hbox" }, el("table", { class: "htab" },
       el("thead", {}, el("tr", {}, head.map((h) => el("th", { scope: "col" }, h)))),
@@ -663,18 +664,12 @@ function testsWord(x) {
 function workflowRow(x) {
   const href = "#/w/" + encodeURIComponent(x.name);
   const last = latestRun(x.name);
-  const recent = state.runs.filter((r) => r.workflow === x.name && !isTestRun(r)).slice(0, 8).reverse();
-  const ok = recent.filter((r) => r.status === "ok").length;
   return homeRow(href, [
-    el("td", { class: "hmain" }, el("a", { href, class: "hname", "data-focus": "h:" + x.name }, x.name), flagFor(x), el("div", { class: "hpath mono" }, folderOf(x.path))),
-    el("td", {}, x.trigger ? el("span", { class: "hpill mono" }, icon(isWebhook(x) ? "trigger" : "clock", 12), x.trigger) : hnone("No trigger · flovr run")),
-    el("td", {}, stepTiles(x.steps)),
+    el("td", { class: "hmain" }, el("a", { href, class: "hname", "data-focus": "h:" + x.name, title: x.path }, x.name), flagFor(x),
+      el("div", { class: "hpath mono" }, x.trigger || "No trigger · flovr run")),
     el("td", {}, last
       ? [hstat(last.status, last.status === "failed" ? outcome(last) : last.status === "running" ? "Running" : "Succeeded in " + duration(last.ms)), el("div", { class: "hwhen" }, when(last.started))]
       : hnone(x.trigger ? "No runs yet" : "Not served")),
-    el("td", {}, recent.length
-      ? el("div", { class: "hrecent" }, el("span", { class: "hbars", "aria-hidden": "true" }, recent.map((r) => el("i", { class: r.status }))), el("span", { class: "hcount" }, ok + " of " + recent.length + " ok"))
-      : hnone("·")),
     el("td", {}, testsWord(x)),
   ]);
 }
@@ -1049,7 +1044,6 @@ function resultOf(node, ran, status, done) {
 function renderCanvas(moved) {
   const canvas = $("canvas");
   const { w, run, auto } = view;
-  if (selected.changes && state.editable && !isComp(w)) return renderChanges(w);
   const edited = editedNodes(w);
   const old = canvas.querySelector(".scroller");
   const keep = old && !moved ? [old.scrollLeft, old.scrollTop] : null;
@@ -1323,6 +1317,7 @@ function renderInspector(w, run, moved) {
   let parts;
   const source = testing && selected.test !== "-" ? state.runs.find((r) => r.run === selected.test) : null;
   if (drafting) parts = [header("workflow", "plus", "New workflow", "and its first step", true)];
+  else if (selected.changes && state.editable && !comp && !editing(w)) parts = changesDetails(w);
   else if (testing) parts = [header("workflow", "plus", selected.test === "-" ? "New test" : "Keep as a test",
     selected.test === "-" ? "of " + w.name : "from the run at " + (source ? when(source.started) : selected.test) + " of " + w.name, true)];
   else if (adding) parts = [header("workflow", "plus", "Add a step", "to " + w.name, true)];
@@ -1429,9 +1424,9 @@ function runRow(r) {
       onclick: () => go({ run: r.run, node: null }),
     },
     statusMark(test ? V.mark : r.status, 11),
-    el("span", { class: "name" }, test ? r.test : when(r.started)),
+    el("span", { class: "name" }, test ? r.test : r.status === "failed" ? outcome(r) : r.status === "running" ? "Running" : "Succeeded"),
     el("span", { class: "aside" }, r.status === "running" ? "running" : test && verdictOf(r) === "unrun" ? "" : duration(r.ms)),
-    el("span", { class: "sub" }, test ? testOutcome(r) + " · " + when(r.started) : outcome(r)));
+    el("span", { class: "sub" }, test ? testOutcome(r) + " · " + when(r.started) : when(r.started)));
 }
 
 // backTo is the way from a run back to the list it was picked from.
@@ -2264,7 +2259,7 @@ function changesChip(w) {
       type: "button", class: "chip changes" + (selected.changes ? " on" : ""), "data-focus": "changes",
       "aria-pressed": selected.changes ? "true" : "false",
       title: "Show what changed in the workflow files, as git sees it" + (state.commit ? ". Running " + state.commit : ""),
-      onclick: () => { if (saved) st.notice = null; go({ changes: !selected.changes }); },
+      onclick: () => { if (saved) st.notice = null; go({ changes: !selected.changes, node: null, edit: null, add: null, test: null, list: null, run: null }); },
     },
     el("span", { class: "dot " + (unsaved || uncommitted ? "edit" : "ok") }),
     unsaved ? "Not saved" : uncommitted ? "Saved · not committed" : "Saved");
@@ -4162,12 +4157,8 @@ function testsSection(w, title = "Tests") {
   }
   const v = roundView(w.name);
   return section(title,
-    el("p", { class: "muted" }, state.replay
-      ? "Tests get the answers recorded with flovr test --record, so they check the workflow but not the models, and cost nothing. No HTTP request is sent. They run the saved file."
-      : "Tests call the AI models for real, so they check what the model actually answers. No HTTP request is sent. They run the saved file."),
-    canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) ? startButton(w, null, "Run all tests", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null)
+    canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) ? startButton(w, null, "Run all", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null)
       : el("p", { class: "muted small" }, "Tests cannot run while the file has a problem."),
-    canAddTest(w) ? el("p", { class: "muted small" }, "To keep a run as a test, open it and choose Keep as a test.") : null,
     unsavedNote(w),
     testErrorNotice(w),
     el("ul", { class: "tcases" }, cases.map((c, i) => testCase(w, c, i, v))));
@@ -4191,8 +4182,14 @@ function testCase(w, c, i, v) {
       onclick: () => { if (!(testsOf(w.name).starting || roundActive(w.name))) startTests(w.name, i); },
     }, icon("run", 11), "Run") : null;
   const checks = finished ? finished.checks || [] : [];
-  return el("li", { class: "tcase " + (verdict ? rowTone(verdict) : "") },
-    el("div", { class: "thead" }, statusMark(V ? V.mark : "pending", 12), el("span", { class: "tname" }, c.name), run),
+  // A test shows its name and how it went; what it expects opens on a click,
+  // and by itself when it did not pass.
+  const key = w.name + "|" + c.name;
+  const more = el("details", { class: "tmore" });
+  more.open = key in openCases ? openCases[key] : verdict === "unmet" || verdict === "broke";
+  more.addEventListener("toggle", () => { openCases[key] = more.open; });
+  return el("li", { class: "tcase " + (verdict ? rowTone(verdict) : "") }, append(more, [
+    el("summary", { class: "thead" }, statusMark(V ? V.mark : "pending", 12), el("span", { class: "tname" }, c.name), run),
     el("div", { class: "tfix mono" }, caseInput(w, c)),
     el("div", { class: "tlast" }, line, open ? [" · ", open] : null),
     finished && verdict === "unmet" ? el("div", { class: "tlast bad" }, "Not met: " + unmetOf(finished).map((x) => x.key).join(", ")) : null,
@@ -4205,8 +4202,10 @@ function testCase(w, c, i, v) {
         el("span", { class: "ek mono" }, got ? el("span", { class: "sr" }, got.failure ? "Not met: " : "Met: ") : null, e.key),
         el("span", { class: "ew mono" }, want));
     })),
-    canAddTest(w) ? removeTestButton(w, c, i) : null);
+    canAddTest(w) ? removeTestButton(w, c, i) : null]));
 }
+
+const openCases = {};   // "workflow|test" -> whether its expectations are shown
 
 // ---- writing tests: from a run, or from nothing ----
 //
@@ -4762,25 +4761,27 @@ function diffLines(text) {
   return out;
 }
 
-function renderChanges(w) {
+// changesDetails is the panel the status opens: where the files are, saved
+// and live and committed or not, and what git says has changed in them.
+function changesDetails(w) {
   const c = changesCache[w.name] || { state: "loading" };
-  // Said only over changes there are.
-  let lede = null;
+  const close = el("button", { type: "button", class: "x", "aria-label": "Close the changes", title: "Close (Esc)", "data-focus": "close-changes", onclick: () => go({ changes: false }) }, icon("close", 16));
+  const head = header("workflow", "file", "Changes", w.path, false, close);
   let content;
   if (c.state === "error") {
-    content = [el("p", { class: "empty" }, "Could not read the changes: " + c.error + ". ",
+    content = [el("p", { class: "muted" }, "Could not read the changes: " + c.error + ". ",
       el("button", { type: "button", class: "linkbtn", onclick: () => { changesCache[w.name] = { state: "loading" }; shown = ""; render(); } }, "Try again"))];
   } else if (c.state === "loading" || !c.data) {
-    content = [el("p", { class: "empty" }, "Reading the changes…")];
+    content = [el("p", { class: "muted" }, "Reading the changes…")];
   } else if (c.data.git === false) {
-    content = [el("p", { class: "empty" }, "This folder is not in a git repository, so there is no diff to show. Edits are still written to the file.")];
+    content = [el("p", { class: "muted" }, "This folder is not in a git repository, so there is no diff to show. Edits are still written to the file.")];
   } else if (!c.data.files || !c.data.files.length) {
-    content = [el("p", { class: "empty" }, "No uncommitted changes in this workflow's files. What the page shows, and the server runs, is what the last commit says.")];
+    content = [el("ul", { class: "cstates" }, el("li", { class: "ok" }, statusMark("ok", 11), "Saved, and the server runs it"), el("li", { class: "ok" }, statusMark("ok", 11), "Committed"))];
   } else {
     const lines = diffLines(c.data.diff || "");
     const added = lines.filter((l) => l[0] === "add").length, removed = lines.filter((l) => l[0] === "del").length;
-    lede = el("p", { class: "lede" }, "These changes are saved, and the server already runs them, but they are not committed. Commit them with git when you are happy with them.");
     content = [
+      el("ul", { class: "cstates" }, el("li", { class: "ok" }, statusMark("ok", 11), "Saved, and the server runs it"), el("li", { class: "todo" }, el("span", { class: "mark todo" }), "Not committed yet")),
       el("div", { class: "files-head" },
         el("h2", {}, plural(c.data.files.length, "file"), " changed"),
         el("span", { class: "tally" }, el("b", { class: "plus" }, "+" + added), el("b", { class: "minus" }, "−" + removed))),
@@ -4790,14 +4791,7 @@ function renderChanges(w) {
         lines.map(([kind, line]) => el("span", { class: "dl " + kind }, line + "\n"))) : null,
     ];
   }
-  $("canvas").replaceChildren(...[
-    problemBanner(w),
-    el("div", { class: "hint changesbar" },
-      el("strong", {}, "Changes in " + w.name),
-      el("span", {}, "as git sees them"),
-      el("button", { type: "button", class: "ghost", "data-focus": "close-changes", onclick: () => go({ changes: false }) }, "Back to the drawing", el("kbd", {}, "Esc"))),
-    el("div", { class: "scroller" }, el("div", { class: "changes-wrap" }, el("div", { class: "changes" }, lede, content))),
-  ].filter(Boolean));
+  return [head, section("", problemBanner(w), content)];
 }
 
 // ---- the node editor ----
@@ -5099,7 +5093,7 @@ let dragRef = null;     // the key being dragged: { path, source }
 const stepTests = {};   // "workflow|step" -> { state: running | done | error, run, at, rev, unsaved, result, error }
 
 const canOpen = (w, id) => !!w && !!state.editable && !w.problem && !w.draft && !isComp(w) && !!nodeOf(w, id);
-function openEditor(id) { if (view && canOpen(view.w, id)) go({ node: id, edit: id }); }
+function openEditor(id) { if (view && canOpen(view.w, id)) go({ node: id, edit: id, changes: false }); }
 // Closing the editor leaves the step too: it has no other view to fall back to.
 // A save the editor already said was done is not said again behind it.
 function closeEditor() {

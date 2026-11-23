@@ -1886,3 +1886,19 @@ body.ned-open .inspector { display: none; }
   body.ned-open .app { grid-template-columns: 56px minmax(0, 1fr) 0; }
   .nedback { width: calc(100vw - 56px); }
 }
+
+/* Adding a step: the plus says where, so the choices come first. */
+.addform > .field:first-child:not(:has(.conflict:not([hidden]))) { display: none; }
+.choice .ctext > .cin, .choice .ctext .ckind { display: none; }
+
+/* A test: its name and how it went; the rest on a click. */
+.tmore > summary { list-style: none; cursor: pointer; }
+.tmore > summary::-webkit-details-marker { display: none; }
+.tmore:not([open]) > summary { margin-bottom: 0; }
+
+/* Changes, in the panel. */
+.cstates { display: grid; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
+.cstates li { display: flex; align-items: center; gap: 10px; }
+.cstates .mark.todo { width: 16px; height: 16px; box-sizing: border-box; border: 1.5px dashed var(--warn, var(--muted)); border-radius: 50%; }
+.inspector .diff { max-height: none; margin: 12px 0 0; font-size: 12px; }
+.inspector .files { margin: 8px 0 0; padding: 0; list-style: none; }
