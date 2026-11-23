@@ -46,6 +46,10 @@ type casesRequest struct {
 type draftView struct {
 	Fixture any          `json:"fixture"`
 	Expect  []draftCheck `json:"expect"`
+	// Failed is the step a failed run stopped at. What such a run did is
+	// not what to expect, so its draft is where to write what should have
+	// happened.
+	Failed string `json:"failed,omitempty"`
 }
 
 // draftCheck is an expectation that a run would meet.
@@ -254,8 +258,8 @@ func (s *Server) draft(req casesRequest) (int, any) {
 	switch {
 	case !ok || run.Workflow != w.Name:
 		return http.StatusNotFound, fail("%s has no run %s", w.Name, req.Draft)
-	case run.Status != "ok":
-		return http.StatusUnprocessableEntity, fail("Only a run that succeeded can become a test: what a failed run did is not what to expect.")
+	case run.Status == running:
+		return http.StatusUnprocessableEntity, fail("The run has not finished yet.")
 	case run.Trigger == nil:
 		return http.StatusUnprocessableEntity, fail("The run's record does not hold the event that started it.")
 	}
@@ -267,10 +271,21 @@ func (s *Server) draft(req casesRequest) (int, any) {
 	for _, st := range w.Steps {
 		at := slices.IndexFunc(run.Steps, func(r Step) bool { return r.ID == st.ID })
 		if at < 0 {
-			// The step was added after the run.
+			// The step was added after the run, or a failed run did not
+			// get to it: whether it should run is for the writer to say.
+			if run.Status == "failed" {
+				add(st.ID, workflow.Called, false)
+			}
 			continue
 		}
 		done := run.Steps[at]
+		if done.Status == "failed" {
+			// The step should have worked; what it should have put out is
+			// added by hand.
+			view.Failed = st.ID
+			add(st.ID, workflow.Called, true)
+			continue
+		}
 		if done.Status == "skipped" {
 			add(st.ID, workflow.Skipped, true)
 			continue

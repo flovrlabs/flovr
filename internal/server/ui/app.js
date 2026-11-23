@@ -4303,17 +4303,20 @@ const canAddTest = (w) => !!w && state.editable && !w.problem && !w.component;
 const testMode = (w) => canAddTest(w) && !!selected.test;
 const keepKey = (name, source) => name + "|" + source;
 const keepFor = (w) => (selected.test && w ? keeps[keepKey(w.name, selected.test)] || null : null);
-// An ordinary run that succeeded. A test's own run is not offered: its test and
+// An ordinary run that has finished: one that did the right thing is kept as
+// it went, one that failed with what should have happened written in. A test's own run is not offered: its test and
 // its fixture are already files, and keeping it would only copy them.
-const canKeep = (w, run) => canAddTest(w) && !!run && !isTestRun(run) && run.status === "ok";
+const canKeep = (w, run) => canAddTest(w) && !!run && !isTestRun(run) && (run.status === "ok" || run.status === "failed") && run.trigger !== undefined;
 
 function openKeep(runId) { go({ test: runId, node: null }); }
 function openNewTest() { go({ test: "-", run: null, node: null }); }
 
 function keepOffer(run) {
   return el("div", { class: "keepoffer" },
-    el("button", { type: "button", class: "btn primary", "data-focus": "keep", onclick: () => openKeep(run.run) }, icon("plus", 14), "Keep as a test"),
-    el("p", { class: "muted small" }, "Turns this request, and what the workflow did with it, into a test, so that a later change that alters it is caught."));
+    el("button", { type: "button", class: "btn" + (run.status === "failed" ? "" : " primary"), "data-focus": "keep", onclick: () => openKeep(run.run) }, icon("plus", 14), "Keep as a test"),
+    el("p", { class: "muted small" }, run.status === "failed"
+      ? "Turns this request into a test of what should have happened, so that the fix is checked from now on."
+      : "Turns this request, and what the workflow did with it, into a test, so that a later change that alters it is caught."));
 }
 
 function newTestButton() {
@@ -4405,6 +4408,7 @@ async function loadKeepDraft(td) {
     const d = r.body.draft;
     td.fixtureText = JSON.stringify(d.fixture === undefined ? {} : d.fixture, null, 2);
     td.items = (d.expect || []).map((e) => ({ id: ++td.seq, key: e.key, text: valueText(e.want), keep: e.keep !== false, hand: false, advice: e.keep !== false, wasStep: false }));
+    td.failed = d.failed || "";
     td.state = "ready";
   } else {
     td.state = "error";
@@ -4537,7 +4541,8 @@ function buildTester(w, td) {
 
   const xhead = el("div", { class: "xhead" }, el("h2", {}, "Expectations"), td.count);
   const lede = el("p", { class: "hint-text xlede" }, fromRun
-    ? "What this run did. Tick what the workflow must keep doing; what is left unticked is not checked."
+    ? td.failed ? "This run failed at " + td.failed + ". Write what should have happened: tick the steps that should run, and add what they should decide or answer."
+      : "What this run did. Tick what the workflow must keep doing; what is left unticked is not checked."
     : "");
   lede.hidden = !fromRun;
   // How keys and values are written is there for whoever asks.
