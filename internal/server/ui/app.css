@@ -1902,3 +1902,24 @@ body.ned-open .inspector { display: none; }
 .cstates .mark.todo { width: 16px; height: 16px; box-sizing: border-box; border: 1.5px dashed var(--warn, var(--muted)); border-radius: 50%; }
 .inspector .diff { max-height: none; margin: 12px 0 0; font-size: 12px; }
 .inspector .files { margin: 8px 0 0; padding: 0; list-style: none; }
+
+/* Runs and Tests: the list has the page, in a column that reads well. */
+.app[data-view="flow"][data-list="runs"], .app[data-view="flow"][data-list="tests"] { grid-template-columns: 56px 0 minmax(0, 1fr); }
+.app[data-list="runs"] .canvas, .app[data-list="tests"] .canvas { display: none; }
+.app[data-list="runs"] .inspector, .app[data-list="tests"] .inspector { border-left: 0; background: var(--canvas); padding: 12px max(18px, calc((100% - 820px) / 2)) 0; }
+.app[data-list="runs"] .inspector > header, .app[data-list="tests"] .inspector > header { border-bottom: 0; background: none; }
+.app[data-list="runs"] .inspector > header .x, .app[data-list="tests"] .inspector > header .x { display: none; }
+.app[data-list="runs"] .runlist { margin: 0; padding: 4px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+
+/* Changes: the command to commit. */
+.commitline { margin-top: 18px; }
+.commitline .cmd { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--chrome); }
+.commitline code { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+
+/* Services, behind one line of the chooser. */
+.cservices > summary { list-style: none; cursor: pointer; }
+.cservices > summary::-webkit-details-marker { display: none; }
+.cservices[open] > summary { margin-bottom: 10px; }
+.xhelp > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.xhelp[open] > summary { margin-bottom: 8px; }
+.xlede[hidden] { display: none; }
