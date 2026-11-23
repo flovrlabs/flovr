@@ -1132,7 +1132,7 @@ function renderCanvas(moved) {
 
   canvas.replaceChildren(...[
     problemBanner(w),
-    run ? runBar(run) : w.draft ? el("div", { class: "strip" }, "This is the workflow as the form describes it. Nothing is written until you make it.") : null,
+    run ? runBar(run) : null,
     scroller,
     el("div", { class: "tools", role: "group", "aria-label": "Zoom" },
       tool("plus", "Zoom in", () => setZoom(scale + 0.1)),
@@ -1331,6 +1331,9 @@ function renderInspector(w, run, moved) {
   else if (canEdit && (dirtyCount(w.name) > 0 || (uiOf(w.name).notice && uiOf(w.name).notice.kind !== "saved"))) parts = pendingDetails(w);
   const open = !!parts;
   $("app").dataset.inspector = open ? "open" : "closed";
+  // A list of runs or of tests is read without the drawing beside it.
+  const wide = !comp && !run && !step && !adding && !testing && !drafting && !onStart && !onEnd && !selected.changes && !editing(w) && (selected.list === "runs" || selected.list === "tests");
+  $("app").dataset.list = wide ? selected.list : "";
   if (!open) {
     hideMaker();
     hideAdder();
@@ -1490,21 +1493,12 @@ function componentDetails(w) {
     w.description ? section("", el("p", { class: "lede" }, w.description)) : null,
     w.source ? section("From git", el("p", {}, mono(w.source)),
       el("p", { class: "muted small" }, "Pinned to a commit in flovr.lock, so it is the same on every machine. It is changed at its source; flovr get -u takes the new commit.")) : null,
-    section("Definition", pairs([
-      w.source ? null : ["File", mono(w.path)],
-      ["Made of", w.gives ? plural(w.steps.length, "step") + " of its own" : "One piece of work: " + (KIND_NAMES[kind] || kind).toLowerCase()],
-      ["Tests", w.tests + (w.tests && !state.editable ? ", run with flovr test" : "")],
-      state.commit ? ["Version", mono(state.commit)] : null,
-    ])),
-    section("Takes", inputsView(w), el("p", { class: "muted small" }, "A step that uses this component fills each in. ", inn)),
+    w.source ? null : section("", el("p", { class: "muted small mono" }, w.path)),
+    section("Takes", inputsView(w), el("p", { class: "small" }, inn)),
     section("Gives back",
       givenNames(w).length ? el("ul", { class: "io", "aria-label": "Gives back" }, givenNames(w).map((n) => el("li", {}, el("span", { class: "ioname mono" }, n)))) : el("p", { class: "muted" }, "Nothing."),
-      el("p", { class: "muted small" }, w.gives ? "What the component says it gives back. " : "A component of one kind of work gives back what that work puts out. ", out)),
-    section("Used by", usedByView(w),
-      el("p", { class: "muted small" }, usesOf(w) ? (state.editable ? "A change here applies to every one of these steps." : "These steps all get what the component does.") : "Nothing depends on it yet, so a change here affects no workflow.")),
-    section(w.gives ? "Steps" : "The work", outline(w),
-      state.editable && !w.problem ? el("p", { class: "muted small" }, "Select the input, a step or the output to edit it. Saved changes are written to " + w.path + ".")
-        : el("p", { class: "muted small" }, "Components are files in git: edit the YAML and commit it.")),
+      el("p", { class: "small" }, out)),
+    section("Used by", usedByView(w)),
     testsSection(w),
   ];
 }
@@ -3038,7 +3032,7 @@ function buildAdder(w) {
   // The chooser: a search box, then the kinds of step in groups.
   const group = "comp" + uid;
   A.search = el("input", { id: "find" + uid, type: "text", class: "in find", placeholder: "What happens next?", autocomplete: "off", spellcheck: "false" });
-  A.search.addEventListener("input", () => { A.query = A.search.value; filterChoices(A); });
+  A.search.addEventListener("input", () => { A.query = A.search.value; if (A.query.trim()) A.services.open = true; filterChoices(A); });
   A.search.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.isComposing) {
       e.preventDefault();
@@ -3065,7 +3059,10 @@ function buildAdder(w) {
   A.mchoices = el("div", { class: "choices", role: "presentation" });
   A.gMarket = el("div", { class: "cgroup" }, el("div", { class: "cgroup-h" }, "From the market"), A.mchoices);
   A.noMatch = el("p", { class: "muted small", hidden: true, role: "status" });
-  A.groups = el("div", { class: "cgroups" }, A.gModel, A.gAct, A.gComp, A.gMarket, A.noMatch);
+  // Services are many, so they wait behind one line until asked for or searched.
+  A.services = el("details", { class: "cservices" }, el("summary", { class: "choice kind-flow" }, kindTile("flow", 38),
+    el("span", { class: "ctext" }, el("span", { class: "chead" }, el("span", { class: "cname" }, "A service")), el("span", { class: "cdesc" }, "One of yours, or one from the market"))), A.gComp, A.gMarket);
+  A.groups = el("div", { class: "cgroups" }, A.gModel, A.gAct, A.services, A.noMatch);
   A.finder = el("div", { class: "finder" }, el("label", { class: "vh", for: "find" + uid }, "Find a kind of step"), A.search);
   // Once a kind is chosen the chooser folds into one line, to be opened again by Change.
   A.summary = el("div", { class: "chosen", hidden: true });
@@ -4157,7 +4154,7 @@ function testsSection(w, title = "Tests") {
   }
   const v = roundView(w.name);
   return section(title,
-    canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) ? startButton(w, null, "Run all", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null)
+    canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) && isComp(w) ? startButton(w, null, "Run all", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null)
       : el("p", { class: "muted small" }, "Tests cannot run while the file has a problem."),
     unsavedNote(w),
     testErrorNotice(w),
@@ -4437,7 +4434,7 @@ function buildTester(w, td) {
   const nameField = el("div", { class: "field" },
     el("div", { class: "lab" }, el("label", { for: nameId }, "Test name")),
     td.nameBox,
-    el("p", { class: "hint-text", id: nameId + "h" }, "Say what the workflow should do with this request. The name also names the fixture file."));
+    el("p", { class: "hint-text", id: nameId + "h" }, "What the workflow should do with this request."));
 
   td.list = el("ul", { class: "xlist", "aria-label": "Expectations" });
   td.count = el("span", { class: "xcount", role: "status" });
@@ -4456,8 +4453,10 @@ function buildTester(w, td) {
   const xhead = el("div", { class: "xhead" }, el("h2", {}, "Expectations"), td.count);
   const lede = el("p", { class: "hint-text xlede" }, fromRun
     ? "What this run did. Tick what the workflow must keep doing; what is left unticked is not checked."
-    : "What the workflow should do with this request: which steps run, what they decide, what it answers.");
-  const help = el("div", { class: "xhelp" },
+    : "");
+  lede.hidden = !fromRun;
+  // How keys and values are written is there for whoever asks.
+  const help = el("details", { class: "xhelp" }, el("summary", {}, "How to write one"),
     el("p", {}, el("strong", {}, "Key"), " is a step id, or an expression over ", mono("trigger"), ", the steps and ", mono("response"), ", such as ", mono("classify.category.value"), " or ", mono("response.status"), "."),
     el("p", {}, el("strong", {}, "Value"), " is read as typed: ", mono("true"), " or ", mono("false"), " is yes or no, a plain number is a number, anything else is text. Put quotes round text that looks like one of those: ", mono("\"200\""), " is the text 200."));
 
@@ -4472,7 +4471,7 @@ function buildTester(w, td) {
   const folder = folderOf(w.path) + "/fixtures/";
   const note = el("div", { class: "notice warn fixnote" },
     el("div", { class: "nhead" }, el("strong", {}, fromRun ? "This is the real request" : "Saved to a file in your repository")),
-    el("p", {}, "Saving writes it to a file in ", mono(folder), ", which belongs in git. Check it for personal data first, and edit it here if it has any."));
+    el("p", {}, "It is saved in ", mono(folder), ", in git. Take out personal data first."));
 
   td.root.replaceChildren(nameField, xhead, lede, td.list, el("div", { class: "xadd" }, td.addBtn), td.keys, help,
     el("h2", { class: "sub" }, "Fixture"), note, td.fixField);
@@ -4761,6 +4760,19 @@ function diffLines(text) {
   return out;
 }
 
+// commitLine is the command that commits a workflow's folder, to copy: flovr
+// leaves git to its user.
+function commitLine(w) {
+  const text = "git add " + folderOf(w.path) + " && git commit -m \"Change " + w.name + "\"";
+  const said = el("span", { class: "sr", role: "status" });
+  const copy = el("button", { type: "button", class: "btn small" }, "Copy");
+  copy.addEventListener("click", () => {
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(text).then(() => { copy.textContent = "Copied"; said.textContent = "Copied the command"; }, () => {});
+  });
+  return el("div", { class: "commitline" }, el("h2", {}, "To commit it"), el("div", { class: "cmd" }, el("code", { class: "mono" }, text), copy, said));
+}
+
 // changesDetails is the panel the status opens: where the files are, saved
 // and live and committed or not, and what git says has changed in them.
 function changesDetails(w) {
@@ -4789,6 +4801,7 @@ function changesDetails(w) {
         el("li", {}, el("span", { class: "badge " + f.change }, CHANGE_WORD[f.change] || f.change), el("span", { class: "mono path" }, f.path)))),
       c.data.diff ? el("pre", { class: "diff", tabindex: "0", "aria-label": "Diff of the changed files" },
         lines.map(([kind, line]) => el("span", { class: "dl " + kind }, line + "\n"))) : null,
+      commitLine(w),
     ];
   }
   return [head, section("", problemBanner(w), content)];
