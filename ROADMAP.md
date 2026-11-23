@@ -31,7 +31,7 @@ The server
 The page
 - [x] The lists of workflows and of services, where the page opens
 - [x] A workflow drawn from left to right, coloured by the run on show
-- [x] An editor of three columns for every node: what it can read, its settings, what it gave
+- [x] A panel beside the drawing for every node: its settings, what it can read, and what it gave in the last run
 - [x] Changes written into the file in place, keeping its comments and order, and only when the result is still valid
 - [x] Steps of each kind added and removed; a new workflow; tests kept from runs, run and read
 - [x] What starts a workflow switched between a request and a schedule; fields of the response added and taken out

@@ -7,7 +7,7 @@ The README shows these:
 | `demo.gif` | The page: a workflow opened, a step looked into, a field added to the response and seen as a one-line git diff, the tests run |
 | `terminal.gif` | `flovr validate` and `flovr test --replay` with no model key |
 | `canvas.png` | triage-ticket drawn and coloured by its last run, dark |
-| `editor.png` | The editor of a step, light |
+| `editor.png` | A step open in the panel beside the drawing, light |
 
 They are made, not drawn: after a change to the page, make them again with
 

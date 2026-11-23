@@ -405,11 +405,11 @@ The page opens on a list of the workflows and one of the services, the component
 
 ![triage-ticket drawn on the page, coloured by its last run: the ticket was classified as an urgent refund, summarized, and sent to billing, while paging on-call was skipped](docs/media/canvas.png)
 
-![The editor of the summarize step: on the left what it can read, in the middle its model, input and prompt, on the right the summary it gave](docs/media/editor.png)
+![The summarize step open in the panel beside the drawing: its model, its input and its prompt](docs/media/editor.png)
 
 With `--edit` the page becomes a place to work on the workflows:
 
-- Open a step, the trigger or the response and change its values in the editor, with what it can read on one side and what it gave on the other. Saving writes only the lines of those values, so comments, blank lines and order in the file stay as they were.
+- Click a step, the trigger or the response and change its values in the panel that opens beside the drawing. Under them is the data it can read, and **Last run** shows what it gave. Saving writes only the lines of those values, so comments, blank lines and order in the file stay as they were.
 - Switch what starts a workflow between a request and a schedule, and add a field to the response's body or take one out. These are written at once, as adding a step is.
 - Make a new workflow: give it a name, say what starts it, and choose a component for its first step. It is written as a folder of that name holding a `workflow.yaml`, in the folder the server was started with, and is served at once.
 - Add a step that asks a model to write or to decide, sends an HTTP request, or uses a component; or remove a step. The components on offer are those in the folders the server was started with, so a workflow can use a component that lives in another workflow's folder.
