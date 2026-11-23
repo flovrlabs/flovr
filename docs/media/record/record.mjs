@@ -67,9 +67,9 @@ try {
     await sleep(500);
     await page.click("button.chip.changes");
     await sleep(3000);
-    await page.click("button", "Back to the drawing");
+    await page.click("button.chip.changes");
     await sleep(600);
-    await page.click("button.btn.primary", "Run tests");
+    await page.click("button.btn.primary", "Test");
     await sleep(3200);
     console.log(`demo: ${await stop()} frames`);
   } finally {

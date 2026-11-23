@@ -1830,3 +1830,75 @@ body.ned-open { overflow: hidden; }
 .ned-addrow .in.drop { outline: 2px dashed var(--accent); }
 .ned-addfield .conflict { margin-top: 6px; }
 .ned-colbody .code { margin-bottom: 10px; }
+
+/* ---- Simple: less on the screen, one place for each thing ---- */
+
+/* The top bar: the views as one switch, then one status and Test. */
+.top { gap: 22px; }
+.tabs { align-self: center; gap: 2px; padding: 3px; border-radius: 10px; background: var(--raised); }
+.tabs button { height: 30px; padding: 0 14px; border-bottom: 0; border-radius: 8px; font-size: 13px; }
+.tabs button[aria-selected="true"] { background: var(--surface); box-shadow: 0 1px 2px color-mix(in srgb, #000 18%, transparent); }
+.tabs .n { display: none; }
+.changes-slot { display: flex; align-items: center; gap: 10px; }
+.changes-slot .btn { height: 34px; padding: 0 16px; border-radius: 9px; }
+.chip.changes { border-color: transparent; background: none; font-weight: 500; }
+.chip.changes:hover, .chip.changes.on { background: var(--raised); color: var(--text); border-color: transparent; }
+.chip.changes .dot.ok { background: var(--run); }
+.live.quiet { color: var(--muted); font-size: 12.5px; }
+.live.quiet:empty { display: none; }
+
+/* A step's editor: a panel at the side of the drawing, in the place of the details. */
+body.ned-open { overflow: auto; }
+body.ned-open .app { grid-template-columns: 56px minmax(0, 1fr) min(440px, 100vw - 56px); }
+body.ned-open .inspector { display: none; }
+.nedback { inset: 52px 0 0 auto; width: min(440px, 100vw - 56px); padding: 0; background: none; z-index: 20; animation: none; }
+.nodeed { border: 0; border-left: 1px solid var(--border); border-radius: 0; box-shadow: none; animation: nedfade 0.12s ease-out; }
+.nodeed:focus-visible { outline: 0; }
+.ned-head { flex-wrap: nowrap; gap: 12px; padding: 14px 16px 10px; border-bottom: 0; }
+.ned-head .tile { width: 36px; height: 36px; border-radius: 9px; }
+.ned-head .grow { display: none; }
+.ned-names { flex: 1 1 auto; }
+.ned-line { display: none; }
+.ned-id { font-size: 16px; }
+.ned-x { border-color: transparent; background: none; color: var(--muted); }
+.ned-cols { display: flex; flex-direction: column; overflow: auto; }
+.ned-col { flex: none; min-height: auto; }
+.ned-mid { order: 1; }
+.ned-midbody { overflow: visible; }
+.ned-panel { padding: 16px 16px 20px; }
+.ned-in { order: 2; border-right: 0; border-top: 1px solid var(--border); background: none; }
+.ned-in[hidden] { display: none; }
+.ned-runpanel { padding: 0; }
+.ned-out { border-left: 0; background: none; }
+.ned-out .ned-fold, .ned-out .ned-cap { display: none; }
+.ned-out .ned-colhead { min-height: 0; border-bottom: 0; padding: 12px 16px 0; }
+.ned-colbody { max-height: none; }
+.ned-cap { display: none; }
+.ned-fold { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0; border: 0; background: none; color: var(--muted); font: 650 12px var(--sans); cursor: pointer; }
+.ned-fold svg { transition: transform 0.15s; }
+.ned-fold[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.ned-col.folded .ned-colfold { display: none; }
+.ned-col.folded .ned-colhead { border-bottom: 0; }
+.ned-note { border: 0; padding: 0 4px; }
+.ned-foot { padding: 10px 16px; }
+.ned-what, .ned-writes { display: none; }
+@media (max-width: 860px) {
+  body.ned-open .app { grid-template-columns: 56px minmax(0, 1fr) 0; }
+  .nedback { width: calc(100vw - 56px); }
+}
+
+/* Adding a step: the plus says where, so the choices come first. */
+.addform > .field:first-child:not(:has(.conflict:not([hidden]))) { display: none; }
+.choice .ctext > .cin, .choice .ctext .ckind { display: none; }
+
+/* A test: its name and how it went; the rest on a click. */
+.tmore > summary { list-style: none; cursor: pointer; }
+.tmore > summary::-webkit-details-marker { display: none; }
+.tmore:not([open]) > summary { margin-bottom: 0; }
+
+/* Changes, in the panel. */
+.cstates { display: grid; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
+.cstates li { display: flex; align-items: center; gap: 10px; }
+.cstates .mark.todo { width: 16px; height: 16px; box-sizing: border-box; border: 1.5px dashed var(--warn, var(--muted)); border-radius: 50%; }
+.inspector .diff { max-height: none; margin: 12px 0 0; font-size: 12px; }
+.inspector .files { margin: 8px 0 0; padding: 0; list-style: none; }
