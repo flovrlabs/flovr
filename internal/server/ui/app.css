@@ -1928,3 +1928,10 @@ body.ned-open .inspector { display: none; }
 .svcsteps { display: flex; align-items: center; gap: 10px; min-height: 44px; margin-top: 8px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .svcsteps input { width: 16px; height: 16px; accent-color: var(--brand); }
 .cservices[hidden] { display: none; }
+
+/* Tests run several times: how often each passed, and against the last commit. */
+.testrow .trepeat { width: auto; height: 34px; margin-left: auto; }
+.trate, .tversus { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--raised); color: var(--muted); font: 500 12px var(--mono); }
+.trate.bad, .tversus.bad { background: var(--failed-soft); color: var(--failed); }
+.tversus.good { color: var(--ok); }
+.tlast.good { color: var(--ok); }

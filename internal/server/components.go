@@ -329,12 +329,12 @@ func componentPrompt(c *workflow.Component, step string) (path, written string, 
 
 // runComponentTest runs one of a component's tests to completion and records
 // it as a run, under the name the page knows the component by.
-func (s *Server) runComponentTest(id string, c *workflow.Component, t workflow.ComponentTest, name string) Run {
+func (s *Server) runComponentTest(id, round string, c *workflow.Component, t workflow.ComponentTest, name string) Run {
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 
 	run := Run{
-		ID: id, Workflow: componentID(c), Source: "test", Test: name, Commit: s.commit(),
+		ID: id, Workflow: componentID(c), Source: "test", Test: name, Round: round, Commit: s.commit(),
 		Started: time.Now(), Status: running, Steps: []Step{},
 	}
 	if input, err := c.Values(t); err == nil {

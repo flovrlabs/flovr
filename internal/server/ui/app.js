@@ -3803,7 +3803,7 @@ function paintMakeBar(b) {
 const rounds = {};      // workflow -> { items: [{ run, test, index, last }], rev, unsaved, told }
 const testState = {};   // workflow -> { starting, error }
 
-const testsOf = (name) => testState[name] || (testState[name] = { starting: false, error: null });
+const testsOf = (name) => testState[name] || (testState[name] = { starting: false, error: null, repeat: 1 });
 const isTestRun = (r) => !!r && r.source === "test";
 const couldNotRun = (r) => isTestRun(r) && verdictOf(r) === "unrun";
 const canTest = (w) => !!w && state.editable && !w.problem && (w.cases || []).length > 0;
@@ -3880,6 +3880,14 @@ function roundSummary(v) {
     const sub = done + " of " + total + " done" + (passed ? ", " + passed + " passed" : "");
     return { title: "Running tests", sub, mark: "running", tone: "running", spoken: sub };
   }
+  if ((v.round.repeat || 1) > 1) {
+    const tests = [...new Set(v.rows.map((r) => r.it.index))];
+    const every = tests.filter((i) => v.rows.filter((r) => r.it.index === i).every((r) => r.verdict === "passed")).length;
+    const title = every === tests.length ? (tests.length === 1 ? "Passed every time" : "All " + tests.length + " passed every time") : tests.length === 1 ? "Did not pass every time" : every + " of " + tests.length + " passed every time";
+    const sub = passed + " of " + total + " runs passed" + (unrun ? ", " + unrun + " could not run" : "");
+    const failed = unmet + broke > 0;
+    return { title, sub, mark: failed ? "failed" : every === tests.length ? "ok" : "skipped", tone: failed ? "failed" : every === tests.length ? "ok" : "unrun", spoken: title + ", " + sub };
+  }
   if (total === 1) {
     const V = VERDICT[v.rows[0].verdict];
     return { title: V.word, sub: "", mark: V.mark, tone: rowTone(v.rows[0].verdict), spoken: V.word };
@@ -3916,15 +3924,15 @@ async function startTests(name, index) {
   render();
   let r = null;
   try {
-    r = await request("POST", "/api/test", index == null ? { workflow: name } : { workflow: name, test: index });
+    r = await request("POST", "/api/test", { workflow: name, ...(index == null ? {} : { test: index }), ...(state.replay || (st.repeat || 1) === 1 ? {} : { repeat: st.repeat }) });
   } catch (err) {
     r = null;
   }
   st.starting = false;
   if (r && r.ok && Array.isArray(r.body.runs)) {
     rounds[name] = {
-      items: r.body.runs.map((x, j) => ({ run: x.run, test: x.test, index: index == null ? j : index, last: null })),
-      rev: w.rev, unsaved: dirtyCount(name), told: false,
+      items: r.body.runs.map((x, j) => ({ run: x.run, test: x.test, index: index == null ? Math.floor(j / (r.body.repeat || 1)) : index, last: null })),
+      repeat: r.body.repeat || 1, rev: w.rev, unsaved: dirtyCount(name), told: false,
     };
     // Whoever pressed the button lands on the results.
     afterRender = () => { const box = document.querySelector('[data-focus="round"]'); if (box) box.focus({ preventScroll: true }); };
@@ -3997,7 +4005,16 @@ function roundBox(w, v) {
   const s = roundSummary(v);
   const clear = el("button", { type: "button", class: "x small", "aria-label": "Clear these results", title: "Clear these results", "data-focus": "round-clear" }, icon("close", 13));
   clear.addEventListener("click", () => clearRound(w.name));
-  const list = v.rows.map((r) => {
+  // A test asked for several times is one line: how often it passed, and
+  // the way to a run that did not.
+  const many = (v.round.repeat || 1) > 1;
+  const shownRows = !many ? v.rows : [...new Set(v.rows.map((r) => r.it.index))].map((i) => {
+    const mine = v.rows.filter((r) => r.it.index === i);
+    const worst = mine.find((r) => r.verdict === "unmet" || r.verdict === "broke") || mine.find((r) => r.verdict === "running" || r.verdict === "waiting") || mine.find((r) => r.verdict === "unrun") || mine[0];
+    const done = mine.filter((r) => r.verdict === "passed" || r.verdict === "unmet" || r.verdict === "broke");
+    return { ...worst, rate: mine.filter((r) => r.verdict === "passed").length + " of " + (done.length || mine.length) + " passed" };
+  });
+  const list = shownRows.map((r) => {
     const V = VERDICT[r.verdict], tone = rowTone(r.verdict);
     const b = el("button", {
         type: "button", class: "row tr " + tone, "data-focus": "round:" + r.it.run,
@@ -4009,7 +4026,8 @@ function roundBox(w, v) {
       statusMark(V.mark, 11),
       el("span", { class: "name" }, r.it.test),
       // A test that did not pass says why, in a line of its own, which makes the word beside the name unnecessary.
-      r.run && (r.verdict === "unmet" || r.verdict === "broke" || r.verdict === "unrun") ? el("span", { class: "sub" }, testOutcome(r.run)) : el("span", { class: "aside" }, V.short));
+      r.rate ? el("span", { class: "aside" }, r.rate) : null,
+      r.run && (r.verdict === "unmet" || r.verdict === "broke" || r.verdict === "unrun") ? el("span", { class: "sub" }, testOutcome(r.run)) : r.rate ? null : el("span", { class: "aside" }, V.short));
     b.addEventListener("click", () => { if (r.run) go({ run: r.run.run, node: null }); });
     return b;
   });
@@ -4151,6 +4169,38 @@ function latestTestRun(name, test) {
   return best;
 }
 
+// sameRound are the runs a test got in the round of the given run: several
+// when each test was asked for several times, the run alone otherwise.
+function sameRound(run) {
+  if (!run || !run.round) return run ? [run] : [];
+  return state.runs.filter((r) => r.workflow === run.workflow && r.test === run.test && r.round === run.round);
+}
+
+// tally counts how the runs of a test went. Runs that could not run say
+// nothing about the workflow, and are left out of the rate.
+function tally(runs) {
+  const verdicts = runs.map(verdictOf);
+  const n = (v) => verdicts.filter((x) => x === v).length;
+  const passed = n("passed"), failed = n("unmet") + n("broke");
+  return { passed, failed, counted: passed + failed, active: n("running") > 0, rate: passed + failed ? passed / (passed + failed) : null };
+}
+
+const cleanCommit = (r) => !!r.commit && !/uncommitted/.test(r.commit);
+
+// against compares how a test just went with how it went the last time it
+// ran on committed files, when the files have changed since: what the change
+// made better or worse. It is null when there is nothing to compare.
+function against(name, test, now) {
+  if (!now.length || now.every(cleanCommit) || tally(now).rate == null) return null;
+  const mine = new Set(now.map((r) => r.run));
+  const base = state.runs.find((r) => r.workflow === name && isTestRun(r) && r.test === test && !mine.has(r.run) && r.status !== "running" && cleanCommit(r) && r.started < now[0].started);
+  if (!base) return null;
+  const was = tally(sameRound(base)), is = tally(now);
+  if (was.rate == null || was.rate === is.rate) return null;
+  const said = was.counted > 1 ? "passed " + was.passed + " of " + was.counted : was.passed ? "passed" : "did not pass";
+  return { worse: is.rate < was.rate, text: (is.rate < was.rate ? "Worse than at " : "Better than at ") + base.commit + ", where it " + said };
+}
+
 // testsSection lists the tests under the given heading: "Tests" with a
 // component's details, none in the list of a workflow's tests.
 function testsSection(w, title = "Tests") {
@@ -4168,24 +4218,42 @@ function testsSection(w, title = "Tests") {
   }
   const v = roundView(w.name);
   return section(title,
-    canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) && isComp(w) ? startButton(w, null, "Run all", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null)
+    canTest(w) || canAddTest(w) ? el("div", { class: "testrow" }, canTest(w) && isComp(w) ? startButton(w, null, "Run all", "ov:test-all", { primary: true }) : null, canAddTest(w) ? newTestButton(w) : null, canTest(w) ? repeatPick(w) : null)
       : el("p", { class: "muted small" }, "Tests cannot run while the file has a problem."),
     unsavedNote(w),
     testErrorNotice(w),
     el("ul", { class: "tcases" }, cases.map((c, i) => testCase(w, c, i, v))));
 }
 
+// repeatPick chooses how many times each test runs. A model can answer
+// differently each time, so one run is one sample; recorded answers are the
+// same every time, so there it is not offered.
+function repeatPick(w) {
+  if (state.replay) return null;
+  const st = testsOf(w.name);
+  const pick = el("select", { class: "in trepeat", "aria-label": "How many times each test runs", "data-focus": "t-repeat" },
+    [1, 3, 5, 10].map((n) => el("option", { value: n }, n === 1 ? "Each test once" : "Each test " + n + " times")));
+  pick.value = String(st.repeat || 1);
+  pick.addEventListener("change", () => { st.repeat = Number(pick.value); });
+  return pick;
+}
+
 function testCase(w, c, i, v) {
   const item = v ? v.rows.find((r) => r.it.index === i && (r.verdict === "waiting" || r.verdict === "running")) : null;
-  const last = latestTestRun(w.name, c.name);
+  const newest = latestTestRun(w.name, c.name);
+  // Asked for several times, a test is as good as its worst run, which is the one to open.
+  const group = sameRound(newest), count = tally(group);
+  const last = group.find((r) => ["unmet", "broke"].includes(verdictOf(r))) || newest;
   const verdict = item ? item.verdict : last ? verdictOf(last) : null;
   const V = verdict ? VERDICT[verdict] : null;
   const finished = !item && last && last.status !== "running" ? last : null;
   let line;
   if (!verdict) line = "Not run yet";
   else if (item) line = V.word;
+  else if (group.length > 1 && count.counted) line = "Passed " + count.passed + " of " + count.counted + " · " + when(last.started);
   else line = V.word + " · " + when(last.started);
-  const open = last && !item ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ run: last.run, node: null }) }, "Open run") : null;
+  const versus = item ? null : against(w.name, c.name, group);
+  const open = last && !item ? el("button", { type: "button", class: "linkbtn", onclick: () => go({ run: last.run, node: null }) }, group.length > 1 && verdict !== "passed" ? "Open a run that did not pass" : "Open run") : null;
   const run = canTest(w) ? el("button", {
       type: "button", class: "btn small", "data-focus": "ov:test:" + i, "aria-label": "Run test: " + c.name,
       "aria-disabled": testsOf(w.name).starting || roundActive(w.name) ? "true" : "false",
@@ -4200,9 +4268,12 @@ function testCase(w, c, i, v) {
   more.open = key in openCases ? openCases[key] : verdict === "unmet" || verdict === "broke";
   more.addEventListener("toggle", () => { openCases[key] = more.open; });
   return el("li", { class: "tcase " + (verdict ? rowTone(verdict) : "") }, append(more, [
-    el("summary", { class: "thead" }, statusMark(V ? V.mark : "pending", 12), el("span", { class: "tname" }, c.name), run),
+    el("summary", { class: "thead" }, statusMark(V ? V.mark : "pending", 12), el("span", { class: "tname" }, c.name),
+      !item && group.length > 1 && count.counted ? el("span", { class: "trate" + (count.failed ? " bad" : "") }, count.passed + " of " + count.counted) : null,
+      versus ? el("span", { class: "tversus " + (versus.worse ? "bad" : "good"), title: versus.text }, versus.worse ? "worse" : "better") : null, run),
     el("div", { class: "tfix mono" }, caseInput(w, c)),
     el("div", { class: "tlast" }, line, open ? [" · ", open] : null),
+    versus ? el("div", { class: "tlast " + (versus.worse ? "bad" : "good") }, versus.text) : null,
     finished && verdict === "unmet" ? el("div", { class: "tlast bad" }, "Not met: " + unmetOf(finished).map((x) => x.key).join(", ")) : null,
     el("ul", { class: "expects", "aria-label": "Expectations of " + c.name }, (c.expect || []).map((e) => {
       const got = checks.find((x) => x.key === e.key);
@@ -4232,17 +4303,20 @@ const canAddTest = (w) => !!w && state.editable && !w.problem && !w.component;
 const testMode = (w) => canAddTest(w) && !!selected.test;
 const keepKey = (name, source) => name + "|" + source;
 const keepFor = (w) => (selected.test && w ? keeps[keepKey(w.name, selected.test)] || null : null);
-// An ordinary run that succeeded. A test's own run is not offered: its test and
+// An ordinary run that has finished: one that did the right thing is kept as
+// it went, one that failed with what should have happened written in. A test's own run is not offered: its test and
 // its fixture are already files, and keeping it would only copy them.
-const canKeep = (w, run) => canAddTest(w) && !!run && !isTestRun(run) && run.status === "ok";
+const canKeep = (w, run) => canAddTest(w) && !!run && !isTestRun(run) && (run.status === "ok" || run.status === "failed") && run.trigger !== undefined;
 
 function openKeep(runId) { go({ test: runId, node: null }); }
 function openNewTest() { go({ test: "-", run: null, node: null }); }
 
 function keepOffer(run) {
   return el("div", { class: "keepoffer" },
-    el("button", { type: "button", class: "btn primary", "data-focus": "keep", onclick: () => openKeep(run.run) }, icon("plus", 14), "Keep as a test"),
-    el("p", { class: "muted small" }, "Turns this request, and what the workflow did with it, into a test, so that a later change that alters it is caught."));
+    el("button", { type: "button", class: "btn" + (run.status === "failed" ? "" : " primary"), "data-focus": "keep", onclick: () => openKeep(run.run) }, icon("plus", 14), "Keep as a test"),
+    el("p", { class: "muted small" }, run.status === "failed"
+      ? "Turns this request into a test of what should have happened, so that the fix is checked from now on."
+      : "Turns this request, and what the workflow did with it, into a test, so that a later change that alters it is caught."));
 }
 
 function newTestButton() {
@@ -4334,6 +4408,7 @@ async function loadKeepDraft(td) {
     const d = r.body.draft;
     td.fixtureText = JSON.stringify(d.fixture === undefined ? {} : d.fixture, null, 2);
     td.items = (d.expect || []).map((e) => ({ id: ++td.seq, key: e.key, text: valueText(e.want), keep: e.keep !== false, hand: false, advice: e.keep !== false, wasStep: false }));
+    td.failed = d.failed || "";
     td.state = "ready";
   } else {
     td.state = "error";
@@ -4466,7 +4541,8 @@ function buildTester(w, td) {
 
   const xhead = el("div", { class: "xhead" }, el("h2", {}, "Expectations"), td.count);
   const lede = el("p", { class: "hint-text xlede" }, fromRun
-    ? "What this run did. Tick what the workflow must keep doing; what is left unticked is not checked."
+    ? td.failed ? "This run failed at " + td.failed + ". Write what should have happened: tick the steps that should run, and add what they should decide or answer."
+      : "What this run did. Tick what the workflow must keep doing; what is left unticked is not checked."
     : "");
   lede.hidden = !fromRun;
   // How keys and values are written is there for whoever asks.

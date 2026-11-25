@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"time"
@@ -18,6 +19,25 @@ type testRequest struct {
 	// Test is the position of the test to run, counted from 0. All of the
 	// workflow's tests run if it is absent.
 	Test *int `json:"test"`
+	// Repeat is how many times each test runs, 1 if left out. A model can
+	// answer differently each time, so one run of a test is one sample.
+	Repeat int `json:"repeat"`
+}
+
+// maxRepeat is the most times the page may ask for each test.
+const maxRepeat = 20
+
+// repeats is how many times a request asks for each test, or why it cannot.
+func (s *Server) repeats(req testRequest) (int, error) {
+	switch {
+	case req.Repeat == 0 || req.Repeat == 1:
+		return 1, nil
+	case req.Repeat < 0 || req.Repeat > maxRepeat:
+		return 0, fmt.Errorf("A test runs from 1 to %d times.", maxRepeat)
+	case s.opts.Replay:
+		return 0, errors.New("The server answers with recorded answers, which are the same every time, so running a test again shows nothing. Start it without --replay to run tests several times.")
+	}
+	return req.Repeat, nil
 }
 
 // started names a run that a request started.
@@ -49,18 +69,28 @@ func (s *Server) test(req testRequest) (int, any) {
 		tests = tests[*req.Test : *req.Test+1]
 	}
 
-	runs := make([]started, len(tests))
-	for j, t := range tests {
-		runs[j] = started{Run: newID(), Test: testName(t)}
+	repeat, err := s.repeats(req)
+	if err != nil {
+		return http.StatusUnprocessableEntity, fail("%v", err)
+	}
+	// Each test's runs come one after another, then the next test's.
+	round := newID()
+	var runs []started
+	for _, t := range tests {
+		for range repeat {
+			runs = append(runs, started{Run: newID(), Test: testName(t)})
+		}
 	}
 	s.running.Add(1)
 	go func() {
 		defer s.running.Done()
 		for j, t := range tests {
-			s.runTest(runs[j].Run, w, t)
+			for k := range repeat {
+				s.runTest(runs[j*repeat+k].Run, round, w, t)
+			}
 		}
 	}()
-	return http.StatusAccepted, map[string]any{"runs": runs}
+	return http.StatusAccepted, map[string]any{"runs": runs, "round": round, "repeat": repeat}
 }
 
 func testName(t workflow.Test) string {
@@ -72,12 +102,12 @@ func testName(t workflow.Test) string {
 
 // runTest runs one test to completion and records it as a run. The run
 // failed if a step failed or if the test expected something else.
-func (s *Server) runTest(id string, w *workflow.Workflow, t workflow.Test) Run {
+func (s *Server) runTest(id, round string, w *workflow.Workflow, t workflow.Test) Run {
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 
 	run := Run{
-		ID: id, Workflow: w.Name, Source: "test", Test: testName(t), Commit: s.commit(),
+		ID: id, Workflow: w.Name, Source: "test", Test: testName(t), Round: round, Commit: s.commit(),
 		Started: time.Now(), Status: running, Steps: []Step{},
 	}
 	if trigger, err := w.Fixture(t.Fixture); err == nil {
@@ -133,16 +163,25 @@ func (s *Server) testComponent(c *workflow.Component, req testRequest) (int, any
 	case req.Test != nil:
 		tests, names = tests[*req.Test:*req.Test+1], names[*req.Test:*req.Test+1]
 	}
-	runs := make([]started, len(tests))
+	repeat, err := s.repeats(req)
+	if err != nil {
+		return http.StatusUnprocessableEntity, fail("%v", err)
+	}
+	round := newID()
+	var runs []started
 	for j := range tests {
-		runs[j] = started{Run: newID(), Test: names[j]}
+		for range repeat {
+			runs = append(runs, started{Run: newID(), Test: names[j]})
+		}
 	}
 	s.running.Add(1)
 	go func() {
 		defer s.running.Done()
 		for j, t := range tests {
-			s.runComponentTest(runs[j].Run, c, t, names[j])
+			for k := range repeat {
+				s.runComponentTest(runs[j*repeat+k].Run, round, c, t, names[j])
+			}
 		}
 	}()
-	return http.StatusAccepted, map[string]any{"runs": runs}
+	return http.StatusAccepted, map[string]any{"runs": runs, "round": round, "repeat": repeat}
 }

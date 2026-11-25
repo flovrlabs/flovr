@@ -38,6 +38,7 @@ The page
 - [x] A step tried on its own with the data of a past run
 - [x] What git says has changed, under Changes
 - [x] A simpler page: the drawing and little else, one status of the files, a panel beside the drawing for a step, and lists of runs and tests that have the page to themselves
+- [x] Tests to trust: each test run several times from the page with how often it passed, a test compared with how it went on the last commit, and a failed run kept as a test of what should have happened
 - [x] Light and dark
 
 Services
@@ -55,15 +56,7 @@ Services
 - [x] Tag 0.1.0, which builds the binaries
 - [x] Publish the market's list with the example services, pinned to the release
 
-## Next: 0.2, tests to trust
-
-A test that calls a model for real is one sample of what the model does. This release is about knowing what a test result means.
-
-- [ ] The pass rates of repeated tests on the page
-- [ ] Compare a round of tests with the last one at the commit, and show what got worse
-- [ ] Keep a run that failed as a test, writing what should have happened
-
-## Then: 0.3, run and debug from the page
+## Next: 0.3, run and debug from the page
 
 - [ ] Run again with the same input, or from a step on, reusing what the steps before it gave
 - [ ] A form to run a workflow now, built from its trigger's schema; the next times a schedule fires

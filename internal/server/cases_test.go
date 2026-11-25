@@ -89,7 +89,14 @@ func TestTestIsDraftedFromARun(t *testing.T) {
 	srv.opts.Model = offline{}
 	var failed Run
 	json.Unmarshal(post(srv, "/tickets?wait=true", "", ticket).Body.Bytes(), &failed)
-	if rec := casesOf(t, srv, "triage-ticket", `"draft": "`+failed.ID+`"`); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Only a run that succeeded") {
+	// A run that failed is drafted from too: the step it stopped at should
+	// have run, and whether the steps after it should is left to the writer.
+	rec = casesOf(t, srv, "triage-ticket", `"draft": "`+failed.ID+`"`)
+	var fromFailed struct{ Draft draftView }
+	json.Unmarshal(rec.Body.Bytes(), &fromFailed)
+	d := fromFailed.Draft
+	if rec.Code != http.StatusOK || d.Failed != "classify" || d.Fixture == nil || len(d.Expect) != 4 ||
+		d.Expect[0] != (draftCheck{"classify", "called", true}) || d.Expect[1] != (draftCheck{"summarize", "called", false}) {
 		t.Errorf("draft from a failed run: status = %d, body %s", rec.Code, rec.Body)
 	}
 }
