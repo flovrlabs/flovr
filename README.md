@@ -220,6 +220,8 @@ For `do`, flovr reads the page as a list of what can be used on it, the buttons,
 
 `flovr test --record` keeps what the model picked, and `--replay` then runs the test with no model, in about the time the page takes; a page that has changed has no recorded answer, and is recorded again. [uitests/](uitests) holds such a test of flovr's own page, run with `sh uitests/run.sh`.
 
+To watch a test, set `FLOVR_BROWSER_SHOW=1`: the browser opens in a window, and each thing is marked for a moment before it is used. `FLOVR_BROWSER_SHOTS=<folder>` keeps a picture of each instead.
+
 This is new and may change. It needs Chrome or Chromium on the machine, and `CHROME` names another browser of the kind. It clicks; it does not yet type into a box, choose from a list or scroll, and it reads pages, not other kinds of app.
 
 ### Timeouts and retries

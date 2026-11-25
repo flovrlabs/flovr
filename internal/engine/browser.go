@@ -148,6 +148,8 @@ func (e *Engine) browser(ctx context.Context, s *workflow.BrowserStep, env *expr
 			return nil, "", fmt.Errorf("found nothing on the page to use for: %s. The page shows: %s", goal, listed(page))
 		}
 		el := page.Elements[n-1]
+		confidence, _ := answer["confidence"].(float64)
+		session.Point(ctx, n, fmt.Sprintf("To do: %s\nUses: %s: %s  (%.0f%% sure, chosen from %d things on the page)", goal, el.Role, el.Name, confidence*100, len(page.Elements)))
 		if err := session.Click(ctx, n); err != nil {
 			return nil, "", fmt.Errorf("could not use %s: %s: %w", el.Role, el.Name, err)
 		}
@@ -157,6 +159,14 @@ func (e *Engine) browser(ctx context.Context, s *workflow.BrowserStep, env *expr
 		}
 	}
 
+	switch {
+	case goal == "":
+		session.Point(ctx, 0, "Opened "+page.Title)
+	case s.Until != "":
+		session.Point(ctx, 0, fmt.Sprintf("Done: %s\nThe page is as until says: %s", goal, s.Until))
+	default:
+		session.Point(ctx, 0, "Done: "+goal)
+	}
 	detail := "opened"
 	if goal != "" {
 		detail = "used " + said(used)

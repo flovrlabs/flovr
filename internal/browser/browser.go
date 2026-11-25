@@ -4,6 +4,7 @@ package browser
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,13 @@ type Session struct {
 	cmd  *exec.Cmd
 	dir  string // its profile, removed when it closes
 	conn *websocket.Conn
+
+	// For a person to follow what the steps do: show opens the browser in a
+	// window and waits a moment before each thing is used, and shots is a
+	// folder that gets a picture of the page each time.
+	show  bool
+	shots string
+	shot  int
 
 	mu      sync.Mutex
 	next    int
@@ -88,15 +96,21 @@ func Open(ctx context.Context) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	// FLOVR_BROWSER_SHOW opens the browser in a window, to watch the steps;
+	// FLOVR_BROWSER_SHOTS names a folder for a picture of each thing used.
+	show, shots := os.Getenv("FLOVR_BROWSER_SHOW") != "", os.Getenv("FLOVR_BROWSER_SHOTS")
 	// Port 0 lets Chrome pick a free port, which it writes to a file.
-	cmd := exec.Command(path, "--headless=new", "--remote-debugging-port=0", "--user-data-dir="+dir,
-		"--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--disable-gpu",
-		"--window-size=1440,900", "about:blank")
+	args := []string{"--remote-debugging-port=0", "--user-data-dir=" + dir,
+		"--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--window-size=1440,900", "about:blank"}
+	if !show {
+		args = append([]string{"--headless=new", "--disable-gpu"}, args...)
+	}
+	cmd := exec.Command(path, args...)
 	if err := cmd.Start(); err != nil {
 		os.RemoveAll(dir)
 		return nil, fmt.Errorf("could not start %s: %w", path, err)
 	}
-	s := &Session{cmd: cmd, dir: dir, waiting: map[int]chan reply{}, done: make(chan struct{})}
+	s := &Session{cmd: cmd, dir: dir, show: show, shots: shots, waiting: map[int]chan reply{}, done: make(chan struct{})}
 
 	var target string
 	deadline := time.Now().Add(15 * time.Second)
@@ -314,6 +328,49 @@ func (s *Session) Click(ctx context.Context, n int) error {
 	}
 	s.settle(ctx)
 	return nil
+}
+
+// Watched reports whether someone follows what the steps do, in a window or
+// in pictures.
+func (s *Session) Watched() bool { return s.show || s.shots != "" }
+
+// Point shows a person what is about to be used: it marks the element that
+// the last Look numbered n, or none for n of 0, and says caption at the foot
+// of the page. The mark is gone once the page is used.
+func (s *Session) Point(ctx context.Context, n int, caption string) {
+	if !s.Watched() {
+		return
+	}
+	text, _ := json.Marshal(caption)
+	s.eval(ctx, fmt.Sprintf(`(() => {
+  document.querySelectorAll("[data-flovr-mark]").forEach((m) => m.remove());
+  const add = (css, text) => { const d = document.createElement("div"); d.dataset.flovrMark = "1"; d.textContent = text || ""; Object.assign(d.style, css); document.documentElement.appendChild(d); };
+  const e = (window.__flovr || [])[%d];
+  if (e) {
+    e.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const r = e.getBoundingClientRect();
+    add({ position: "fixed", left: r.left - 5 + "px", top: r.top - 5 + "px", width: r.width + 10 + "px", height: r.height + 10 + "px", boxSizing: "border-box", border: "3px solid #f43f5e", borderRadius: "10px", boxShadow: "0 0 0 4px rgba(244,63,94,0.3)", zIndex: "2147483647", pointerEvents: "none" });
+  }
+  add({ position: "fixed", left: "0", right: "0", bottom: "0", padding: "12px 18px", background: "#111827", color: "#ffffff", font: "500 15px/1.4 system-ui, sans-serif", zIndex: "2147483647", pointerEvents: "none", whiteSpace: "pre-wrap" }, %s);
+})()`, n-1, text), nil)
+	if s.shots != "" {
+		if raw, err := s.call(ctx, "Page.captureScreenshot", map[string]any{"format": "png"}); err == nil {
+			var got struct {
+				Data string `json:"data"`
+			}
+			if json.Unmarshal(raw, &got) == nil {
+				if png, err := base64.StdEncoding.DecodeString(got.Data); err == nil {
+					s.shot++
+					os.MkdirAll(s.shots, 0o755)
+					os.WriteFile(filepath.Join(s.shots, fmt.Sprintf("%03d.png", s.shot)), png, 0o644)
+				}
+			}
+		}
+	}
+	if s.show {
+		time.Sleep(1200 * time.Millisecond)
+	}
+	s.eval(ctx, `document.querySelectorAll("[data-flovr-mark]").forEach((m) => m.remove())`, nil)
 }
 
 // Close ends the browser and removes its profile.
