@@ -23,6 +23,7 @@ const ICONS = {
   decide: ["M6 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M6 16a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M18 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", "M6 8v8", "M18 11a6 6 0 0 1-6 6H8"],
   ai: ["M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z", "M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"],
   http: ["M22 2 11 13", "M22 2 15 22l-4-9-9-4z"],
+  browser: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", "M3 12h18", "M12 3c2.6 2.6 3.6 5.6 3.6 9s-1 6.4-3.6 9c-2.6-2.6-3.6-5.6-3.6-9s1-6.4 3.6-9z"],
   flow: ["M21 8 12 3 3 8v8l9 5 9-5z", "M3 8l9 5 9-5", "M12 13v8"],
   moon: ["M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"],
   sun: ["M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M12 2.5v2.2", "M12 19.3v2.2", "M2.5 12h2.2", "M19.3 12h2.2", "M5.3 5.3l1.6 1.6", "M17.1 17.1l1.6 1.6", "M5.3 18.7l1.6-1.6", "M17.1 6.9l1.6-1.6"],
@@ -55,12 +56,13 @@ const ICONS = {
   open: ["M8 16 16 8", "M9.5 8H16v6.5"],
 };
 
-const KIND_LABEL = { trigger: "Trigger", decide: "Decide", ai: "AI", http: "HTTP", flow: "Flow", response: "Response", input: "Input", output: "Output" };
+const KIND_LABEL = { trigger: "Trigger", decide: "Decide", ai: "AI", http: "HTTP", browser: "Browser", flow: "Flow", response: "Response", input: "Input", output: "Output" };
 const KIND_NAMES = {
   trigger: "Trigger: starts the workflow",
   decide: "Decision step: a model answers typed questions",
   ai: "AI step: a model writes structured output",
   http: "HTTP step: sends a request",
+  browser: "Browser step: uses a web page as a person would",
   flow: "Flow step: runs a component made of steps",
   response: "Response: answers the caller",
   input: "Component input: what a step gives the component",
@@ -5229,6 +5231,7 @@ function aboutStep(step) {
   if (step.kind === "decide") return "Asks a decision model typed questions and gets probabilities back";
   if (step.kind === "ai") return "Asks a model to write structured output";
   if (step.kind === "flow") return "Runs the " + (step.component || "") + " component, made of " + plural((step.inner || []).length, "step");
+  if (step.kind === "browser") return "Uses a web page in a browser, picking what to use with a decision model";
   if (step.kind === "http") return step.component ? "Sends a request, as the " + step.component + " component describes" : "Sends an HTTP request";
   return KIND_NAMES[step.kind] || step.kind;
 }

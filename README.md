@@ -166,6 +166,7 @@ Steps run in the order they are written. Each has an `id`, an optional `when`, a
 | `decide` | Asks a decision model typed questions about `input`. It answers with probabilities and writes no text, which makes it fast and cheap | per question: `value`, and `probability` (yes/no), or `confidence` and `probabilities` (choice), plus `score` (score) |
 | `http` | Sends a request: `method`, `url`, optional `headers` and `body` | `status` and `body` |
 | `use` | Runs a component, giving it the values under `with` | what the component gives back |
+| `browser` | Uses a web page in a browser, as a person would: opens `open`, then does `do`. New, and may change | `url`, `title`, `text` and `used` |
 
 A `decide` question is yes/no unless it has `choice` (a mapping of answer to meaning) or `score` (a list of levels from lowest to highest). `yes_if` and `no_if` tell a yes/no question what each answer means.
 
@@ -190,6 +191,36 @@ ollama pull llama3.2
 ```
 
 flovr reaches Ollama at `127.0.0.1:11434`, or where `OLLAMA_HOST` says, and asks for an answer that fits the schema. A small model fits it less often than a large one, which `flovr test --repeat` shows. A `decide` step still needs OpenRouter.
+
+### Using a web page
+
+A `browser` step tests a web page the way a person following a test case does: the file says what to do, in words, and what the page must show after. It names no selectors, so the test does not break when the page is laid out anew or a class is renamed.
+
+```yaml
+steps:
+  - id: open
+    browser:
+      open: ${env.SHOP_URL}
+
+  - id: pay
+    browser:
+      model: openrouter/cloudflare/clef
+      do: Go to the cart and pay for what is in it
+      until: page.title == "Receipt"
+      max: 4
+
+tests:
+  - name: a cart can be paid for
+    fixture: fixtures/start.json
+    expect:
+      pay.text.contains("Thank you"): true
+```
+
+For `do`, flovr reads the page as a list of what can be used on it, the buttons, links and boxes on the screen, and a decision model picks one. The model writes nothing: it can only choose from what is there. `until` is a condition on the page, read as `page.url`, `page.title` and `page.text`; the step goes on using one thing after another until it holds, and fails after `max` things, 3 if left out, saying what it used. Without `until` the step uses one thing. Whether the step did what was wanted is for `until` and the test's `expect` to say, never for the model. One browser serves all the browser steps of a run, so a step goes on from the page the last one left.
+
+`flovr test --record` keeps what the model picked, and `--replay` then runs the test with no model, in about the time the page takes; a page that has changed has no recorded answer, and is recorded again. [uitests/](uitests) holds such a test of flovr's own page, run with `sh uitests/run.sh`.
+
+This is new and may change. It needs Chrome or Chromium on the machine, and `CHROME` names another browser of the kind. It clicks; it does not yet type into a box, choose from a list or scroll, and it reads pages, not other kinds of app.
 
 ### Timeouts and retries
 

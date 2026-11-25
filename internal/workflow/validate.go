@@ -131,7 +131,7 @@ func (c *checker) steps(steps []Step, given string) []string {
 			}
 		}
 		kinds := 0
-		for _, present := range []bool{s.AI != nil, s.Decide != nil, s.HTTP != nil, s.Use != ""} {
+		for _, present := range []bool{s.AI != nil, s.Decide != nil, s.HTTP != nil, s.Browser != nil, s.Use != ""} {
 			if present {
 				kinds++
 			}
@@ -139,17 +139,19 @@ func (c *checker) steps(steps []Step, given string) []string {
 		base := []any{"steps", i}
 		switch {
 		case kinds > 1:
-			c.addf(line, "%s: a step can have only one of ai, decide, http, use", label)
+			c.addf(line, "%s: a step can have only one of ai, decide, http, browser, use", label)
 		case s.AI != nil:
 			c.ai(base, label, s.AI, env)
 		case s.Decide != nil:
 			c.decide(base, label, s.Decide, env)
 		case s.HTTP != nil:
 			c.http(base, label, s.HTTP, env)
+		case s.Browser != nil:
+			c.browser(base, label, s.Browser, env)
 		case s.Use != "":
 			steps[i].component = c.use(base, label, s, env)
 		default:
-			c.addf(line, "%s: needs one of ai, decide, http, use", label)
+			c.addf(line, "%s: needs one of ai, decide, http, browser, use", label)
 		}
 		if s.With != nil && s.Use == "" {
 			c.addf(c.under(base, "with"), "%s: with is only for a step that has use", label)
@@ -169,6 +171,9 @@ func (c *checker) steps(steps []Step, given string) []string {
 				c.shapes[s.ID] = comp.shape()
 			} else {
 				c.shapes[s.ID] = outputShape(c.path, c.files, s.AI, s.Decide, s.HTTP)
+				if s.Browser != nil {
+					c.shapes[s.ID] = &shape{fields: map[string]*shape{"url": single(), "title": single(), "text": single(), "used": nil}}
+				}
 			}
 		}
 	}
@@ -345,6 +350,46 @@ func (c *checker) options(line int, label string, opts []ai.Option) {
 			c.addf(line, "%s lists %q twice", label, o.Name)
 		}
 		seen[o.Name] = true
+	}
+}
+
+func (c *checker) browser(base []any, label string, s *BrowserStep, env *expr.Env) {
+	at := func(field string) int { return c.under(base, "browser", field) }
+	if s.Open == "" && s.Do == "" {
+		c.addf(c.under(base, "browser"), "%s: browser needs open, an address to open, or do, what to do on the page", label)
+	}
+	if err := env.Check(s.Open); err != nil {
+		c.addf(at("open"), "%s: browser.open: %v", label, err)
+	}
+	if err := env.Check(s.Do); err != nil {
+		c.addf(at("do"), "%s: browser.do: %v", label, err)
+	}
+	switch provider, _, err := ai.SplitModel(s.Model); {
+	case s.Do == "" && s.Model != "":
+		c.addf(at("model"), "%s: browser.model is only for a step with do: opening a page asks no model", label)
+	case s.Do == "":
+	case s.Model == "":
+		c.addf(at("model"), "%s: browser.model is required with do: a decision model picks what to use on the page", label)
+	case err != nil:
+		c.addf(at("model"), "%s: browser.model %v", label, err)
+	case !slices.Contains(ai.DecideProviders, provider):
+		c.addf(at("model"), "%s: browser.model must be a decision model, which come from %s", label, strings.Join(ai.DecideProviders, ", "))
+	}
+	switch {
+	case s.Until == "":
+	case s.Do == "":
+		c.addf(at("until"), "%s: browser.until is only for a step with do: it says when do is done", label)
+	default:
+		page, err := expr.Vars("page")
+		if err == nil {
+			err = page.CheckCondition(s.Until)
+		}
+		if err != nil {
+			c.addf(at("until"), "%s: browser.until: %v", label, err)
+		}
+	}
+	if s.Max < 0 || s.Max > MaxActions {
+		c.addf(at("max"), "%s: browser.max must be from 1 to %d", label, MaxActions)
 	}
 }
 

@@ -62,6 +62,8 @@ type Engine struct {
 	// StubHTTP makes http steps prepare their request but not send it. Later
 	// steps see an empty 200 response.
 	StubHTTP bool
+
+	pages *pages // the browser its browser steps share during a run
 }
 
 // Response is what a workflow that has respond answers its caller with.
@@ -85,6 +87,8 @@ func (e *Engine) run(ctx context.Context, w *workflow.Workflow, trigger any) (ma
 	if err := w.CheckTrigger(trigger); err != nil {
 		return vars, nil, err
 	}
+	e, closePages := e.withPages()
+	defer closePages()
 	var ids []string
 	for _, s := range w.Steps {
 		env, err := expr.NewEnv(ids)
@@ -118,6 +122,8 @@ func (e *Engine) run(ctx context.Context, w *workflow.Workflow, trigger any) (ma
 // condition says; wouldRun says what the condition gives, and is true for a
 // step without one.
 func (e *Engine) RunStep(ctx context.Context, w *workflow.Workflow, i int, trigger any, earlier map[string]any) (res StepResult, wouldRun bool) {
+	e, closePages := e.withPages()
+	defer closePages()
 	s := w.Steps[i]
 	vars := map[string]any{"trigger": trigger, "env": e.Env}
 	var ids []string
@@ -210,6 +216,8 @@ func (e *Engine) use(ctx context.Context, s workflow.Step, env *expr.Env, vars m
 // of what called it. For a component made of steps it also returns what each
 // step did and everything its expressions could see by the end.
 func (e *Engine) call(ctx context.Context, c *workflow.Component, input map[string]any) (out any, detail string, inner []StepResult, vars map[string]any, err error) {
+	e, closePages := e.withPages()
+	defer closePages()
 	vars = map[string]any{"input": input, "env": e.Env}
 	if err := c.Input.Check(input); err != nil {
 		return nil, "", nil, vars, fmt.Errorf("input of %s: %w", c.Name, err)

@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/workflow.json
+# A test of flovr's own page, written as what a person would do on it.
+# uitests/run.sh serves the examples and runs it.
+flovr: 1
+name: flovr-page
+
+trigger:
+  manual: true
+
+steps:
+  - id: open
+    browser:
+      open: ${env.FLOVR_PAGE}
+
+  - id: tests
+    browser:
+      model: openrouter/cloudflare/clef
+      do: Open the moderate-comment workflow and show the list of its tests
+      until: page.url.contains("moderate-comment") && page.text.contains("spam is refused")
+      max: 4
+
+  - id: step
+    browser:
+      model: openrouter/cloudflare/clef
+      do: Go back to the drawing of the workflow, in the Editor view, and open its step named check
+      until: page.text.contains("Questions")
+      max: 4
+
+tests:
+  - name: a workflow's tests and steps can be reached
+    fixture: fixtures/start.json
+    expect:
+      tests.url.contains("moderate-comment"): true
+      step.text.contains("allowed"): true

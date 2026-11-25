@@ -66,6 +66,8 @@ type Step struct {
 	AI     *AIStep     `yaml:"ai"`
 	Decide *DecideStep `yaml:"decide"`
 	HTTP   *HTTPStep   `yaml:"http"`
+	// Browser uses a web page as a person would. It is new, and may change.
+	Browser *BrowserStep `yaml:"browser"`
 
 	// Use is the path of a component that the step runs, and With the input
 	// it gives the component.
@@ -90,6 +92,8 @@ func (s Step) Kind() string {
 		return "decide"
 	case s.HTTP != nil:
 		return "http"
+	case s.Browser != nil:
+		return "browser"
 	case s.component != nil:
 		return s.component.Kind()
 	}
@@ -98,6 +102,29 @@ func (s Step) Kind() string {
 
 // Component is the component the step uses, or nil if it uses none.
 func (s Step) Component() *Component { return s.component }
+
+// BrowserStep uses a web page in a browser of this machine. It opens Open,
+// if given; then, for Do, a decision model picks what to use on the page from
+// a list of what is there, one thing at a time, until the page is as Until
+// says or Max things were used. The model writes nothing: it only chooses.
+// One browser serves all the browser steps of a run, so a step goes on from
+// the page the last one left.
+type BrowserStep struct {
+	Model string `yaml:"model"`
+	Open  string `yaml:"open"`
+	Do    string `yaml:"do"`
+	// Until is a condition on the page, read as page.url, page.title and
+	// page.text. Without it the step uses one thing and is done.
+	Until string `yaml:"until"`
+	Max   int    `yaml:"max"`
+}
+
+// MaxActions is the most things a browser step may use on its way, and
+// DefaultActions how many it may when it does not say.
+const (
+	MaxActions     = 10
+	DefaultActions = 3
+)
 
 // DecideStep asks a decision model typed questions about its input. The model
 // answers with probabilities instead of writing text.
@@ -430,6 +457,9 @@ func (s Step) expressions() []string {
 		exprs = append(exprs, s.When)
 	}
 	exprs = append(exprs, placeholders(s.AI, s.Decide, s.HTTP)...)
+	if s.Browser != nil {
+		exprs = append(exprs, expr.Placeholders([]any{s.Browser.Open, s.Browser.Do})...)
+	}
 	return append(exprs, expr.Placeholders(s.With)...)
 }
 

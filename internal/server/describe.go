@@ -152,6 +152,26 @@ func (d describer) step(s workflow.Step, base []any, reads, outputs []string) st
 			edit(fieldView{Label: name, Group: "Headers", Path: at("http", "headers", name), Value: s.HTTP.Headers[name]})
 		}
 		texts("Body", "", at("http", "body"), s.HTTP.Body)
+	case s.Browser != nil:
+		b := s.Browser
+		step.Subtitle = b.Do
+		if b.Do == "" {
+			step.Subtitle = "Opens " + b.Open
+		}
+		if b.Open != "" {
+			add("opens", b.Open)
+			edit(fieldView{Label: "Opens", Path: at("browser", "open"), Value: b.Open})
+		}
+		if b.Do != "" {
+			add("does", b.Do)
+			add("model", b.Model)
+			edit(fieldView{Label: "Does", Path: at("browser", "do"), Value: b.Do})
+			edit(fieldView{Label: "Model", Path: at("browser", "model"), Value: b.Model})
+		}
+		if b.Until != "" {
+			add("until", b.Until)
+			edit(fieldView{Label: "Until", Path: at("browser", "until"), Value: b.Until, Kind: kindExpression})
+		}
 	}
 	return step
 }

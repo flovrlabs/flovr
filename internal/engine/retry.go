@@ -119,6 +119,8 @@ func (e *Engine) try(ctx context.Context, f files, s workflow.Step, env *expr.En
 		out, detail, err = e.decide(limited, s.Decide, env, vars)
 	case s.HTTP != nil:
 		out, detail, err = e.http(limited, s.HTTP, env, vars)
+	case s.Browser != nil:
+		out, detail, err = e.browser(limited, s.Browser, env, vars)
 	case s.Component() != nil:
 		out, detail, inner, err = e.use(limited, s, env, vars)
 	}
