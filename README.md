@@ -218,11 +218,27 @@ tests:
 
 For `do`, flovr reads the page as a list of what can be used on it, the buttons, links and boxes on the screen, and a decision model picks one. The model writes nothing: it can only choose from what is there. `until` is a condition on the page, read as `page.url`, `page.title` and `page.text`; the step goes on using one thing after another until it holds, and fails after `max` things, 3 if left out, saying what it used. Without `until` the step uses one thing. Whether the step did what was wanted is for `until` and the test's `expect` to say, never for the model. One browser serves all the browser steps of a run, so a step goes on from the page the last one left.
 
-`flovr test --record` keeps what the model picked, and `--replay` then runs the test with no model, in about the time the page takes; a page that has changed has no recorded answer, and is recorded again. [uitests/](uitests) holds such a test of flovr's own page, run with `sh uitests/run.sh`.
+A step types as well, with what the file gives it under `fill`:
+
+```yaml
+  - id: sign_in
+    browser:
+      model: openrouter/cloudflare/clef
+      do: Sign in
+      fill:
+        email: dana@example.org
+        password: ${env.SHOP_PASSWORD}
+      until: page.text.contains("Signed in")
+      max: 4
+```
+
+Each text has a name, and the model picks which box takes which by the names: it is offered "type the password into the box Password", and is never shown the text itself, so a password does not reach the model or the recorded answers. Each text is typed once.
+
+`flovr test --record` keeps what the model picked, and `--replay` then runs the test with no model, in about the time the page takes; a page that has changed has no recorded answer, and is recorded again. [uitests/](uitests) holds such tests of flovr's own page, one of which fills in a form, run with `sh uitests/run.sh`.
 
 To watch a test, set `FLOVR_BROWSER_SHOW=1`: the browser opens in a window, and each thing is marked for a moment before it is used. `FLOVR_BROWSER_SHOTS=<folder>` keeps a picture of each instead.
 
-This is new and may change. It needs Chrome or Chromium on the machine, and `CHROME` names another browser of the kind. It clicks; it does not yet type into a box, choose from a list or scroll, and it reads pages, not other kinds of app.
+This is new and may change. It needs Chrome or Chromium on the machine, and `CHROME` names another browser of the kind. It clicks and types; it does not yet choose from a list or scroll, and it reads pages, not other kinds of app.
 
 ### Timeouts and retries
 

@@ -168,6 +168,9 @@ func (d describer) step(s workflow.Step, base []any, reads, outputs []string) st
 			edit(fieldView{Label: "Does", Path: at("browser", "do"), Value: b.Do})
 			edit(fieldView{Label: "Model", Path: at("browser", "model"), Value: b.Model})
 		}
+		for _, name := range slices.Sorted(maps.Keys(b.Fill)) {
+			edit(fieldView{Label: name, Group: "Types", Path: at("browser", "fill", name), Value: b.Fill[name]})
+		}
 		if b.Until != "" {
 			add("until", b.Until)
 			edit(fieldView{Label: "Until", Path: at("browser", "until"), Value: b.Until, Kind: kindExpression})

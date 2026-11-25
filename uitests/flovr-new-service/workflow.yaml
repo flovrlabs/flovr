@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flovrlabs/flovr/main/schema/workflow.json
+# A test of flovr's own page that fills in a form: a new service is made
+# from the page. uitests/run.sh serves the examples and runs it.
+flovr: 1
+name: flovr-new-service
+
+trigger:
+  manual: true
+
+steps:
+  - id: open
+    browser:
+      open: ${env.FLOVR_PAGE}
+
+  - id: form
+    browser:
+      model: openrouter/cloudflare/clef
+      do: Go to the services and start making a new service
+      until: page.text.contains("What it does")
+      max: 3
+
+  - id: make
+    browser:
+      model: openrouter/cloudflare/clef
+      do: Fill in the form for a new service that sends an HTTP request, then make the service
+      fill:
+        name: ping
+        description: Tells a channel that something happened
+        input_name: address
+        url: https://example.com/hook
+      until: page.url.contains("ping")
+      max: 6
+
+tests:
+  - name: a service is made from its form
+    fixture: fixtures/start.json
+    expect:
+      form.text.contains("What it takes"): true
+      make.text.contains("ping"): true
+      make.text.contains("address"): true

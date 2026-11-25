@@ -5,6 +5,7 @@
 #
 #   sh uitests/run.sh            the decisions recorded in answers.jsonl, no model called
 #   sh uitests/run.sh --record   asks the decision model again and keeps its answers; needs OPENROUTER_API_KEY, costs a little
+#   sh uitests/run.sh --record flovr-page   one test alone, by the name of its folder
 #
 # It needs Go, git and Chrome or Chromium (CHROME names another browser of the
 # kind), and serves on 127.0.0.1:18086 (UITEST_PORT changes it).
@@ -45,8 +46,9 @@ until curl -fs "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; do
 	sleep 0.2
 done
 
+# One test alone, by the name of its folder, or all of them.
 failed=0
-for dir in "$here"/*/; do
+for dir in "$here"/${2:-*}/; do
 	FLOVR_PAGE="http://127.0.0.1:$port/?key=$key#/workflows" "$work/flovr" test "$mode" "$dir" || failed=1
 done
 exit $failed
