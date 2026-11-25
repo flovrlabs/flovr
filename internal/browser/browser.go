@@ -278,6 +278,8 @@ type Element struct {
 	N    int    `json:"n"` // counted from 1 in the order of the page
 	Role string `json:"role"`
 	Name string `json:"name"`
+	// Text says that text can be typed into it: a box of a form.
+	Text bool `json:"text,omitempty"`
 }
 
 // Page is a page as a browser step sees it.
@@ -298,12 +300,13 @@ const look = `(() => {
     if (r.width < 2 || r.height < 2 || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue;
     if (e.disabled || e.getAttribute("aria-disabled") === "true" || e.closest("[hidden], [inert]") || getComputedStyle(e).visibility === "hidden") continue;
     const role = e.getAttribute("role") || { A: "link", BUTTON: "button", SELECT: "select", TEXTAREA: "textbox", SUMMARY: "toggle" }[e.tagName] || (e.type === "checkbox" ? "checkbox" : e.type === "radio" ? "radio" : e.type === "submit" || e.type === "button" ? "button" : "textbox");
-    const label = e.id ? document.querySelector('label[for="' + CSS.escape(e.id) + '"]') : e.closest("label");
+    const label = e.id && document.querySelector('label[for="' + CSS.escape(e.id) + '"]') || e.closest("label");
     let name = e.getAttribute("aria-label") || (label && label.innerText) || e.innerText || e.value && role === "button" && e.value || e.getAttribute("placeholder") || e.getAttribute("title") || e.getAttribute("name") || "";
     name = name.replace(/\s+/g, " ").trim().slice(0, 100);
     if (e.getAttribute("aria-selected") === "true" || e.getAttribute("aria-pressed") === "true" || e.checked) name += " (on)";
+    const text = e.tagName === "TEXTAREA" || e.tagName === "INPUT" && ["text", "email", "password", "search", "tel", "url", "number", ""].includes((e.getAttribute("type") || "").toLowerCase()) && !e.readOnly;
     els.push(e);
-    rows.push({ n: els.length, role, name });
+    rows.push({ n: els.length, role, name, text });
   }
   window.__flovr = els;
   return { url: location.href, title: document.title, text: document.body.innerText.replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim().slice(0, 4000), elements: rows };
@@ -325,6 +328,30 @@ func (s *Session) Click(ctx context.Context, n int) error {
 	}
 	if !ok {
 		return errors.New("the element is no longer on the page")
+	}
+	s.settle(ctx)
+	return nil
+}
+
+// Type puts text into the box that the last Look numbered n, in the place of
+// what it held, as typing it would.
+func (s *Session) Type(ctx context.Context, n int, text string) error {
+	var ok bool
+	expr := fmt.Sprintf(`(() => { const e = (window.__flovr || [])[%d]; if (!e || !e.isConnected) return false; e.scrollIntoView({ block: "nearest", inline: "nearest" }); e.focus(); if (e.select) e.select(); return document.activeElement === e; })()`, n-1)
+	if err := s.eval(ctx, expr, &ok); err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("the box is no longer on the page, or cannot be typed into")
+	}
+	// What is selected is replaced; an empty text only clears the box.
+	if text == "" {
+		if _, err := s.call(ctx, "Input.dispatchKeyEvent", map[string]any{"type": "keyDown", "key": "Delete", "code": "Delete", "windowsVirtualKeyCode": 46}); err != nil {
+			return err
+		}
+		s.call(ctx, "Input.dispatchKeyEvent", map[string]any{"type": "keyUp", "key": "Delete", "code": "Delete", "windowsVirtualKeyCode": 46})
+	} else if _, err := s.call(ctx, "Input.insertText", map[string]any{"text": text}); err != nil {
+		return err
 	}
 	s.settle(ctx)
 	return nil

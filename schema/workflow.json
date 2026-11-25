@@ -169,6 +169,12 @@
         "model": { "description": "With do: the decision model that picks what to use on the page.", "$ref": "#/$defs/model" },
         "open": { "description": "An address to open first.", "type": "string" },
         "do": { "description": "What to do on the page, in words. The model picks one thing to use at a time from what is on the page.", "type": "string" },
+        "fill": {
+          "description": "With do: texts the step may type into boxes of the page, by name. The model picks which box takes which by their names and is not shown the texts.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "type": "string" }
+        },
         "until": { "description": "With do: a condition on the page, read as page.url, page.title and page.text, that says when it is done. Without it the step uses one thing.", "$ref": "#/$defs/expression" },
         "max": { "description": "With until: the most things it may use, 3 if left out.", "type": "integer", "minimum": 1, "maximum": 10 }
       }

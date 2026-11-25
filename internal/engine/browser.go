@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -101,6 +103,15 @@ func (e *Engine) browser(ctx context.Context, s *workflow.BrowserStep, env *expr
 		}
 	}
 
+	// What the step may type, by name, and which of it is still to be typed.
+	fill := map[string]string{}
+	for name, tmpl := range s.Fill {
+		if fill[name], err = env.EvalString(tmpl, vars); err != nil {
+			return nil, "", fmt.Errorf("fill.%s: %w", name, err)
+		}
+	}
+	left := slices.Sorted(maps.Keys(fill))
+
 	used := []any{}
 	page, err := session.Look(ctx)
 	if err != nil {
@@ -124,16 +135,32 @@ func (e *Engine) browser(ctx context.Context, s *workflow.BrowserStep, env *expr
 		if len(page.Elements) == 0 {
 			return nil, "", errors.New("the page has nothing to use: no button, link or box is on the screen")
 		}
+		// A box is offered once for each text still to be typed, by the
+		// text's name; with nothing left to type it can only be clicked.
 		options := []ai.Option{{Name: "none", Meaning: "Nothing on this page helps to do it"}}
 		for _, el := range page.Elements {
-			options = append(options, ai.Option{Name: "e" + strconv.Itoa(el.N), Meaning: el.Role + ": " + el.Name})
+			at := "e" + strconv.Itoa(el.N)
+			// A list to choose from cannot be used yet: a click does not choose.
+			if el.Role == "select" {
+				continue
+			}
+			if el.Text && len(left) > 0 {
+				for _, name := range left {
+					options = append(options, ai.Option{Name: at + "_" + name, Meaning: "type the " + name + " into " + el.Role + ": " + el.Name})
+				}
+				continue
+			}
+			options = append(options, ai.Option{Name: at, Meaning: el.Role + ": " + el.Name})
 		}
 		state := map[string]any{"to do": goal, "page": page.Title, "already used, in order": "nothing yet"}
+		if len(left) > 0 {
+			state["still to type"] = left
+		}
 		if len(used) > 0 {
 			state["already used, in order"] = used
 		}
 		resp, err := e.Model.Decide(ctx, ai.DecideRequest{Model: s.Model, State: state, Questions: map[string]ai.Question{"use": {
-			Ask:     "A person is on a web page and has something to do. Which one thing on the page should they use next? Do not use again what was already used, unless nothing else helps.",
+			Ask:     "A person is on a web page and has something to do. Which one thing on the page should they use next? Type what is still to type into the boxes it belongs in before sending a form. Do not use again what was already used, unless nothing else helps.",
 			Kind:    ai.Choice,
 			Options: options,
 		}}})
@@ -143,17 +170,29 @@ func (e *Engine) browser(ctx context.Context, s *workflow.BrowserStep, env *expr
 		model = resp.Model
 		answer, _ := resp.Answers["use"].(map[string]any)
 		pick, _ := answer["value"].(string)
-		n, _ := strconv.Atoi(strings.TrimPrefix(pick, "e"))
-		if pick == "none" || n < 1 || n > len(page.Elements) {
+		number, typed, typing := strings.Cut(strings.TrimPrefix(pick, "e"), "_")
+		n, _ := strconv.Atoi(number)
+		if pick == "none" || n < 1 || n > len(page.Elements) || (typing && !slices.Contains(left, typed)) {
 			return nil, "", fmt.Errorf("found nothing on the page to use for: %s. The page shows: %s", goal, listed(page))
 		}
 		el := page.Elements[n-1]
 		confidence, _ := answer["confidence"].(float64)
-		session.Point(ctx, n, fmt.Sprintf("To do: %s\nUses: %s: %s  (%.0f%% sure, chosen from %d things on the page)", goal, el.Role, el.Name, confidence*100, len(page.Elements)))
-		if err := session.Click(ctx, n); err != nil {
+		what := el.Role + ": " + el.Name
+		if typing {
+			// The text itself is not said: it may be a password.
+			what = "typed the " + typed + " into " + what
+		}
+		session.Point(ctx, n, fmt.Sprintf("To do: %s\nUses: %s  (%.0f%% sure, chosen from %d choices)", goal, what, confidence*100, len(options)-1))
+		if typing {
+			err = session.Type(ctx, n, fill[typed])
+			left = slices.DeleteFunc(left, func(name string) bool { return name == typed })
+		} else {
+			err = session.Click(ctx, n)
+		}
+		if err != nil {
 			return nil, "", fmt.Errorf("could not use %s: %s: %w", el.Role, el.Name, err)
 		}
-		used = append(used, el.Role+": "+el.Name)
+		used = append(used, what)
 		if page, err = session.Look(ctx); err != nil {
 			return nil, "", err
 		}

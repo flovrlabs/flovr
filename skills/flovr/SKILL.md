@@ -79,12 +79,12 @@ Each step has an `id` (letters, digits, underscores; not `trigger`, `env`, `resp
 | `decide` | `model` (an openrouter decision model), `input`, `questions` | per question `value`, and `probability` (yes/no) or `confidence` and `probabilities` (choice, score), plus `score` for a score |
 | `http` | `method`, `url`, optional `headers` and `body` | `status` and `body` |
 | `use` | the folder of a component, and `with` for its input | what the component gives back |
-| `browser` | `open` (an address), or `model` and `do` (what to do on the page, in words), with `until` (a condition on `page.url`, `page.title`, `page.text`) and `max` | `url`, `title`, `text`, `used` |
+| `browser` | `open` (an address), or `model` and `do` (what to do on the page, in words), with `fill` (texts it may type, by name), `until` (a condition on `page.url`, `page.title`, `page.text`) and `max` | `url`, `title`, `text`, `used` |
 
 - A `decide` question is yes/no unless it has `choice` (answer: meaning) or `score` (a list of levels from lowest to highest). `yes_if` and `no_if`, given together, say what each answer of a yes/no question means.
 - Models are `provider/model`, with providers `anthropic`, `openai`, `openrouter` and `ollama` (a model on this machine, no key). Decision models come from `openrouter` only.
 - Put each prompt in a file and each output schema in a file next to the workflow. A schema with `"additionalProperties": false` and `required` keeps answers tight.
-- A `browser` step uses a web page as a person would, with no selectors: a decision model picks what to click from what is on the page, and `until` and the test's `expect` say whether it worked. It clicks only, and is new.
+- A `browser` step uses a web page as a person would, with no selectors: a decision model picks what to click from what is on the page, and `until` and the test's `expect` say whether it worked. It types the texts under `fill` into the boxes they belong in, and the model is never shown them, so secrets go there as `${env.NAME}`. It cannot choose from a list yet, and is new.
 - `timeout` limits each try. `retry: 2`, or `retry: {times: 2, wait: 2s, on: [rate-limit, unavailable, timeout, invalid-answer]}`, tries again after those failures only. Do not add `retry` to an `http` step that must not run twice, such as a payment.
 
 ## Expressions

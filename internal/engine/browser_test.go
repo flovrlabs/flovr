@@ -54,6 +54,13 @@ func shop(t *testing.T) string {
 				<button onclick="document.title = 'Receipt'; document.querySelector('h1').textContent = 'Thank you'">Pay now</button>`)
 			return
 		}
+		if r.URL.Path == "/login" {
+			fmt.Fprint(w, `<title>Sign in</title><h1>Sign in</h1>
+				<label>Email <input type="email" id="email"></label>
+				<label>Password <input type="password" id="password"></label>
+				<button onclick="document.querySelector('h1').textContent = email.value === 'dana@example.org' && password.value === 'hunter2' ? 'Signed in as ' + email.value : 'Wrong email or password'">Sign in</button>`)
+			return
+		}
 		fmt.Fprint(w, `<title>Shop</title><h1>Shop</h1><a href="/cart">Go to the cart</a> <a href="/help">Help</a>`)
 	}))
 	t.Cleanup(site.Close)
@@ -130,5 +137,58 @@ func TestABrowserStepSaysWhyItStopped(t *testing.T) {
 				t.Errorf("err = %v, want one holding %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestABrowserStepTypesWhatTheFileGivesIt(t *testing.T) {
+	site := shop(t)
+	w := browserFlow(t, `  - id: login
+    browser:
+      open: ${env.SITE}/login
+      model: openrouter/cloudflare/clef
+      do: Sign in
+      fill:
+        email: dana@example.org
+        password: ${env.SHOP_PASSWORD}
+      until: page.text.contains("Signed in") || page.text.contains("Wrong")
+      max: 4
+`)
+	model := &chooser{words: []string{"type the email into textbox: Email", "type the password into textbox: Password", "button: Sign in"}}
+	var result StepResult
+	eng := &Engine{Model: model, Env: map[string]string{"SITE": site, "SHOP_PASSWORD": "hunter2"}, OnStep: func(r StepResult) { result = r }}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if _, err := eng.Run(ctx, w, map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := result.Output.(map[string]any)
+	if !strings.Contains(fmt.Sprint(out["text"]), "Signed in as dana@example.org") {
+		t.Errorf("the page shows %v", out["text"])
+	}
+	if got := fmt.Sprint(out["used"]); got != "[typed the email into textbox: Email typed the password into textbox: Password button: Sign in]" {
+		t.Errorf("used = %s", got)
+	}
+	// The model is offered each box once for each text, by the text's name,
+	// and is never shown a text: a password does not reach it.
+	first := model.asked[0]
+	var offered []string
+	for _, o := range first.Questions["use"].Options {
+		offered = append(offered, o.Name)
+	}
+	if got := strings.Join(offered, " "); got != "none e1_email e1_password e2_email e2_password e3" {
+		t.Errorf("offered at first: %s", got)
+	}
+	for _, req := range model.asked {
+		if text := fmt.Sprint(req.State, req.Questions); strings.Contains(text, "hunter2") || strings.Contains(text, "dana@example.org") {
+			t.Errorf("the model was shown a text to type: %s", text)
+		}
+	}
+	// What was typed is not offered again: the last question has the boxes to click only.
+	last := model.asked[len(model.asked)-1]
+	if fmt.Sprint(last.State.(map[string]any)["still to type"]) != "<nil>" || len(last.Questions["use"].Options) != 4 {
+		t.Errorf("the last question: %+v", last)
+	}
+	if strings.Contains(result.Detail, "hunter2") {
+		t.Errorf("the detail holds the password: %s", result.Detail)
 	}
 }

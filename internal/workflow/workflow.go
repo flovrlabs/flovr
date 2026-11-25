@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -113,6 +114,10 @@ type BrowserStep struct {
 	Model string `yaml:"model"`
 	Open  string `yaml:"open"`
 	Do    string `yaml:"do"`
+	// Fill holds, by name, the texts the step may type into boxes of the
+	// page on its way. The model chooses which box takes which by their
+	// names; it is not shown the texts, so a password does not reach it.
+	Fill map[string]string `yaml:"fill"`
 	// Until is a condition on the page, read as page.url, page.title and
 	// page.text. Without it the step uses one thing and is done.
 	Until string `yaml:"until"`
@@ -459,6 +464,9 @@ func (s Step) expressions() []string {
 	exprs = append(exprs, placeholders(s.AI, s.Decide, s.HTTP)...)
 	if s.Browser != nil {
 		exprs = append(exprs, expr.Placeholders([]any{s.Browser.Open, s.Browser.Do})...)
+		for _, name := range slices.Sorted(maps.Keys(s.Browser.Fill)) {
+			exprs = append(exprs, expr.Placeholders(s.Browser.Fill[name])...)
+		}
 	}
 	return append(exprs, expr.Placeholders(s.With)...)
 }

@@ -61,7 +61,8 @@ Services
 
 A test of a page written as what a person would do, that does not break when the page is laid out anew. The browser step is the start of it.
 
-- [ ] Type into a box, choose from a list, and scroll
+- [x] Type into a box what the file gives, without showing it to the model
+- [ ] Choose from a list, and scroll
 - [ ] Ask about the page as a decide step asks, with yes or no and how sure
 - [ ] Stop and say so when the model is not sure what to use
 - [ ] Say what changed on a page since the answers were recorded, and record again only that

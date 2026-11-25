@@ -391,6 +391,17 @@ func (c *checker) browser(base []any, label string, s *BrowserStep, env *expr.En
 	if s.Max < 0 || s.Max > MaxActions {
 		c.addf(at("max"), "%s: browser.max must be from 1 to %d", label, MaxActions)
 	}
+	if len(s.Fill) > 0 && s.Do == "" {
+		c.addf(at("fill"), "%s: browser.fill is only for a step with do: it holds what do may type", label)
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.Fill)) {
+		if !idRE.MatchString(name) {
+			c.addf(c.under(base, "browser", "fill", name), "%s: browser.fill: the name %q may contain only letters, digits and underscores, and must not start with a digit", label, name)
+		}
+		if err := env.Check(s.Fill[name]); err != nil {
+			c.addf(c.under(base, "browser", "fill", name), "%s: browser.fill.%s: %v", label, name, err)
+		}
+	}
 }
 
 func (c *checker) http(base []any, label string, s *HTTPStep, env *expr.Env) {
