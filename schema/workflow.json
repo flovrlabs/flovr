@@ -80,6 +80,7 @@
         "ai": { "$ref": "#/$defs/ai" },
         "decide": { "$ref": "#/$defs/decide" },
         "http": { "$ref": "#/$defs/http" },
+        "browser": { "$ref": "#/$defs/browser" },
         "use": { "description": "The folder of a component, relative to this file, or a component in git as host/owner/repo[/dir]@ref.", "type": "string" },
         "with": { "description": "The values the component takes, by name.", "type": "object", "additionalProperties": { "$ref": "#/$defs/value" } },
         "timeout": { "description": "How long each try of the step may take.", "$ref": "#/$defs/duration" },
@@ -89,6 +90,7 @@
         { "required": ["ai"] },
         { "required": ["decide"] },
         { "required": ["http"] },
+        { "required": ["browser"] },
         { "required": ["use"] }
       ]
     },
@@ -156,6 +158,19 @@
         "url": { "type": "string" },
         "headers": { "type": "object", "additionalProperties": { "type": "string" } },
         "body": { "$ref": "#/$defs/value" }
+      }
+    },
+    "browser": {
+      "description": "Uses a web page in a browser of this machine, as a person would. New, and may change. Later steps read url, title, text and used.",
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [ { "required": ["open"] }, { "required": ["do", "model"] } ],
+      "properties": {
+        "model": { "description": "With do: the decision model that picks what to use on the page.", "$ref": "#/$defs/model" },
+        "open": { "description": "An address to open first.", "type": "string" },
+        "do": { "description": "What to do on the page, in words. The model picks one thing to use at a time from what is on the page.", "type": "string" },
+        "until": { "description": "With do: a condition on the page, read as page.url, page.title and page.text, that says when it is done. Without it the step uses one thing.", "$ref": "#/$defs/expression" },
+        "max": { "description": "With until: the most things it may use, 3 if left out.", "type": "integer", "minimum": 1, "maximum": 10 }
       }
     },
     "retry": {

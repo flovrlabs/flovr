@@ -1935,3 +1935,8 @@ body.ned-open .inspector { display: none; }
 .trate.bad, .tversus.bad { background: var(--failed-soft); color: var(--failed); }
 .tversus.good { color: var(--ok); }
 .tlast.good { color: var(--ok); }
+
+/* A browser step: its own colour, and the shape of a step that does its own work. */
+.kind-browser { --kind: #0d9488; --kt: #115e59; }
+:root[data-theme="dark"] .kind-browser { --kt: #99f6e4; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kind-browser { --kt: #99f6e4; } }

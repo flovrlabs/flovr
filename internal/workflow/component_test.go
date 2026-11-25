@@ -356,7 +356,7 @@ func TestUseProblems(t *testing.T) {
 		{
 			name: "two kinds of work",
 			step: "use: components/notify\n    http: {method: GET, url: \"http://x\"}",
-			want: []string{`3: step "a": a step can have only one of ai, decide, http, use`},
+			want: []string{`3: step "a": a step can have only one of ai, decide, http, browser, use`},
 		},
 		{
 			name: "with and no use",
@@ -366,7 +366,7 @@ func TestUseProblems(t *testing.T) {
 		{
 			name: "nothing to do",
 			step: "when: \"true\"",
-			want: []string{`3: step "a": needs one of ai, decide, http, use`},
+			want: []string{`3: step "a": needs one of ai, decide, http, browser, use`},
 		},
 	}
 	for _, tt := range tests {

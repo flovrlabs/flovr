@@ -34,6 +34,8 @@ go build -o /tmp/flovr ./cmd/flovr
 | `internal/server/ui` | The page: plain JavaScript and CSS, embedded in the binary |
 | `internal/yamledit` | Changing single values in a YAML file without writing the rest again |
 | `internal/fetch` | Taking components from git and pinning them in `flovr.lock` |
+| `internal/browser` | Driving Chrome for browser steps: opening a page, reading it as a list of what can be used, clicking |
+| `uitests` | Tests of flovr's own page, written as what a person would do, and the script that runs them |
 | `schema` | JSON Schemas of workflow and component files |
 | `examples` | Workflows with tests and recorded answers, run in CI |
 | `market/index.json` | The list of services the page offers |
@@ -55,4 +57,5 @@ go build -o /tmp/flovr ./cmd/flovr
 - `flovr test` without `--replay`, `flovr test --record` and `flovr run` call models and cost money. The checks above do not.
 - After a change to the prompt, input or schema of an example, record its answers again with `flovr test --record examples/<name>`, which needs `OPENROUTER_API_KEY`. Never edit `answers.jsonl` by hand.
 - Never commit `.env` or `.flovr/`: the runs kept there hold the bodies of requests, and those may hold secrets.
+- After a change to the page, run `sh uitests/run.sh`, which replays and calls no model. If the page changed where a test goes, it says a decision cannot be replayed: `sh uitests/run.sh --record` asks the decision model again, which needs `OPENROUTER_API_KEY` and costs a little.
 - After a change to the page, make the README's pictures again with `sh docs/media/record/record.sh`. It replays answers and calls no model.

@@ -16,6 +16,7 @@ Workflows as files
 - [x] The model's answer kept as it wrote it when it does not fit the schema, and shown with what was wrong; an empty answer is a failure
 - [x] The tokens of each step and run, and of each round of tests
 - [x] Tests run several times (`flovr test --repeat N`), saying how often each test passed and each expectation was missed, with `--min-pass` and a token budget
+- [x] A browser step, new and still changing: a web page used as a person would, with a decision model picking what to click and the file saying when it is done
 - [x] A version for the file format (`flovr: 1`), JSON Schemas of the files for editors and agents (`flovr schema`), and JSON from `validate` and `test`
 - [x] A skill that teaches coding agents to write and test workflows, and `llms.txt`
 - [x] Models that Ollama runs on your own machine, as `ollama/...`, with no key
@@ -55,6 +56,16 @@ Services
 - [x] The Homebrew tap, `flovrlabs/homebrew-tap`, that the cask is published to
 - [x] Tag 0.1.0, which builds the binaries
 - [x] Publish the market's list with the example services, pinned to the release
+
+## Now: testing web pages
+
+A test of a page written as what a person would do, that does not break when the page is laid out anew. The browser step is the start of it.
+
+- [ ] Type into a box, choose from a list, and scroll
+- [ ] Ask about the page as a decide step asks, with yes or no and how sure
+- [ ] Stop and say so when the model is not sure what to use
+- [ ] Say what changed on a page since the answers were recorded, and record again only that
+- [ ] Browser steps on the page: what was used, drawn on a picture of the page
 
 ## Next: 0.3, run and debug from the page
 
